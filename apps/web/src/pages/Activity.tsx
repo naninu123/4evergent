@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { ActivityRecord } from '../types';
 
-export default function Activity() {
+export default function Activity({ onActivityClick }: { onActivityClick?: (agentId: string, activityId: string) => void }) {
   const [activity, setActivity] = useState<ActivityRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +30,11 @@ export default function Activity() {
         </thead>
         <tbody>
           {activity.map((r) => (
-            <tr key={r.id}>
+            <tr
+              key={r.id}
+              onClick={() => onActivityClick?.(r.agentId, r.id)}
+              style={{ cursor: onActivityClick ? 'pointer' : undefined }}
+            >
               <td><code>{r.id.slice(0, 8)}</code></td>
               <td><code>{r.agentId}</code></td>
               <td>{r.intent.type}</td>
