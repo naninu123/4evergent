@@ -211,6 +211,76 @@ test("CLI: HTTP 401 → exit 401, prints error", () => {
   assert.match(r.stderr, /unauthorized/);
 });
 
+// ===== Execution retry / cancel CLI tests =====
+
+test("CLI: execution retry → correct POST route, exit 0", () => {
+  const r = run(["execution", "retry", "exec-1"], {
+    responses: [{ match: "/executions/exec-1/retry", status: 200, body: { execution: { id: "exec-1", status: "queued" }, message: "execution queued for retry" } }],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /exec-1/);
+  assert.match(r.stdout, /retry queued/);
+});
+
+test("CLI: execution retry → 404 → exit 1", () => {
+  const r = run(["execution", "retry", "nope"], {
+    responses: [{ match: "/executions/nope/retry", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+test("CLI: execution retry → 409 → exit 1", () => {
+  const r = run(["execution", "retry", "exec-1"], {
+    responses: [{ match: "/executions/exec-1/retry", status: 409, body: { error: "cannot retry execution in status 'confirmed'" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /409/);
+});
+
+test("CLI: execution cancel → correct POST route, exit 0", () => {
+  const r = run(["execution", "cancel", "exec-1"], {
+    responses: [{ match: "/executions/exec-1/cancel", status: 200, body: { execution: { id: "exec-1", status: "cancelled" }, message: "execution cancelled" } }],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /exec-1/);
+  assert.match(r.stdout, /cancelled/);
+});
+
+test("CLI: execution cancel → 404 → exit 1", () => {
+  const r = run(["execution", "cancel", "nope"], {
+    responses: [{ match: "/executions/nope/cancel", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+test("CLI: execution cancel → 409 → exit 1", () => {
+  const r = run(["execution", "cancel", "exec-1"], {
+    responses: [{ match: "/executions/exec-1/cancel", status: 409, body: { error: "cannot cancel execution in status 'failed'" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /409/);
+});
+
+test("CLI: execution retry/cancel API key never appears in output", () => {
+  const r = run(["execution", "retry", "exec-1"], {
+    env: { FOREGENT_API_KEY: "«redacted:sk-…»" },
+    responses: [{ match: "/executions/exec-1/retry", status: 200, body: { execution: { id: "exec-1" }, message: "ok" } }],
+  });
+  assert.equal(r.code, 0);
+  assert.ok(!r.stdout.includes("«redacted:sk-…»"));
+  assert.ok(!r.stderr.includes("«redacted:sk-…»"));
+});
+
+test("CLI: HTTP 409 conflict on execution retry → exit 1", () => {
+  const r = run(["execution", "retry", "exec-1"], {
+    responses: [{ match: "/executions/exec-1/retry", status: 409, body: { error: "max retry attempts reached" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /409/);
+});
+
 test("CLI: HTTP 404 → exit 404", () => {
   const r = run(["agent", "get", "nope"], {
     responses: [{ match: "/agents/nope", status: 404, body: { error: "not found" } }],

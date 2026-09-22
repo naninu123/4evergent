@@ -45,6 +45,8 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
   const [execution, setExecution] = useState<ExecutionRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getExecution(executionId)
@@ -53,11 +55,58 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
       .finally(() => setLoading(false));
   }, [executionId]);
 
-  if (loading) return <Skeleton label="Loading execution..." />;
-  if (error) return <EmptyState title="Failed to load execution" message={error} />;
-  if (!execution) return <EmptyState title="Execution not found" message="This execution does not exist or you do not have access." />;
+  if (loading) return <Skeleton label="Loading execution..."/>;
+  if (error) return <EmptyState title="Failed to load execution" message={error}/>;
+  if (!execution) return <EmptyState title="Execution not found" message="This execution does not exist or you do not have access."/>;
 
   const desc = statusDescription(execution.status);
+  const canRetry = execution.status === 'failed' || execution.status === 'dead_letter';
+  const canCancel = execution.status === 'queued' || execution.status === 'executing';
+  const isProcessing = actionLoading !== null;
+
+  const handleRetry = async () => {
+    setActionLoading('retry');
+    setActionError(null);
+    try {
+      const r = await api.retryExecution(executionId);
+      setExecution(r.execution);
+    } catch (e: any) {
+      if (e.status === 409) {
+        setActionError(e.message ?? 'Conflict: execution state changed');
+        // Refresh execution state after conflict
+        try {
+          const r = await api.getExecution(executionId);
+          setExecution(r.execution);
+        } catch { /* ignore refresh failure */ }
+      } else {
+        setActionError(e.message ?? 'Retry failed');
+      }
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleCancel = async () => {
+    setActionLoading('cancel');
+    setActionError(null);
+    try {
+      const r = await api.cancelExecution(executionId);
+      setExecution(r.execution);
+    } catch (e: any) {
+      if (e.status === 409) {
+        setActionError(e.message ?? 'Conflict: execution state changed');
+        // Refresh execution state after conflict
+        try {
+          const r = await api.getExecution(executionId);
+          setExecution(r.execution);
+        } catch { /* ignore refresh failure */ }
+      } else {
+        setActionError(e.message ?? 'Cancel failed');
+      }
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   return (
     <section>
@@ -97,6 +146,38 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
         <DetailCard title="Error">
           {execution.error ?? '-'}
         </DetailCard>
+      </div>
+
+      {/* Operator Recovery Actions */}
+      <div className="action-bar" style={{ marginTop: 24, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        {canRetry && (
+          <button
+            className="btn btn-primary"
+            disabled={isProcessing || actionLoading === 'retry'}
+            onClick={handleRetry}
+          >
+            {actionLoading === 'retry' ? 'Retrying...' : 'Retry Execution'}
+          </button>
+        )}
+        {canCancel && (
+          <button
+            className="btn btn-danger"
+            disabled={isProcessing || actionLoading === 'cancel'}
+            onClick={handleCancel}
+          >
+            {actionLoading === 'cancel' ? 'Cancelling...' : 'Cancel Execution'}
+          </button>
+        )}
+        {!canRetry && !canCancel && (
+          <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>
+            No recovery actions available for this status.
+          </span>
+        )}
+        {actionError && (
+          <span className="error-message" style={{ width: '100%', color: 'var(--color-error)', fontSize: 14 }}>
+            {actionError}
+          </span>
+        )}
       </div>
     </section>
   );
