@@ -22,6 +22,11 @@ export function ScheduleManagement({ agentId, onError }: ScheduleManagementProps
   const [schedules, setSchedules] = useState<ScheduleRecord[] | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Track which schedule is being edited and its draft expression
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editExpression, setEditExpression] = useState<string>('');
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
 
   const load = () => {
     api.listSchedules(agentId)
@@ -52,6 +57,45 @@ export function ScheduleManagement({ agentId, onError }: ScheduleManagementProps
       load();
     } catch (e: any) {
       onError?.(e.message);
+    }
+  };
+
+  const startEdit = (schedule: ScheduleRecord) => {
+    setEditingId(schedule.id);
+    setEditExpression(schedule.scheduleExpression ?? '');
+    setEditError(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditExpression('');
+    setEditError(null);
+  };
+
+  const saveEdit = async (scheduleId: string) => {
+    if (!editingId || editSaving) return;
+    const trimmed = editExpression.trim();
+    if (!trimmed) {
+      setEditError('Schedule expression is required.');
+      return;
+    }
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      const result = await api.updateSchedule(agentId, scheduleId, {
+        scheduleExpression: trimmed,
+      });
+      // Update the local schedule list with the server response
+      setSchedules((prev) =>
+        prev
+          ? prev.map((s) => (s.id === scheduleId ? result.schedule : s))
+          : prev
+      );
+      cancelEdit();
+    } catch (e: any) {
+      setEditError(e.message ?? 'Failed to update schedule expression.');
+    } finally {
+      setEditSaving(false);
     }
   };
 
@@ -102,13 +146,72 @@ export function ScheduleManagement({ agentId, onError }: ScheduleManagementProps
                   <div className="muted">{s.intent.amount} {s.intent.asset} → {s.intent.destination?.slice(0, 8)}...</div>
                 </td>
                 <td>
-                  <code>{s.scheduleExpression}</code>
-                  <div className="muted">{s.timezone}</div>
+                  {editingId === s.id ? (
+                    <form
+                      className="schedule-edit-form"
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        await saveEdit(s.id);
+                      }}
+                    >
+                      <label>
+                        <span>Cron expression</span>
+                        <input
+                          type="text"
+                          value={editExpression}
+                          onChange={(e) => setEditExpression(e.target.value)}
+                          placeholder="0 0 * * *"
+                          disabled={editSaving}
+                          aria-label="Edit schedule expression"
+                        />
+                      </label>
+                      <div className="cron-presets">
+                        <span className="muted">Presets:</span>
+                        {CRON_PRESETS.map((preset) => (
+                          <button
+                            key={preset.expression}
+                            type="button"
+                            className="preset-btn"
+                            onClick={() => setEditExpression(preset.expression)}
+                            disabled={editSaving}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                      {editError && <div className="error">{editError}</div>}
+                      <div className="form-actions">
+                        <button
+                          type="button"
+                          onClick={cancelEdit}
+                          disabled={editSaving}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={editSaving}
+                        >
+                          {editSaving ? 'Saving...' : 'Save'}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <code>{s.scheduleExpression}</code>
+                      <div className="muted">{s.timezone}</div>
+                    </>
+                  )}
                 </td>
                 <td>{new Date(s.nextRunAt).toLocaleString()}</td>
                 <td>{s.lastRunAt ? new Date(s.lastRunAt).toLocaleString() : '-'}</td>
                 <td><ScheduleStatusBadge status={s.status} /></td>
                 <td className="schedule-actions">
+                  {editingId === s.id ? (
+                    <span className="muted">editing</span>
+                  ) : (
+                    <button onClick={() => startEdit(s)}>Edit</button>
+                  )}
                   {s.status === 'active' && (
                     <>
                       <button onClick={() => handleAction(s.id, 'pause')}>Pause</button>

@@ -2,12 +2,13 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { test, expect, describe, vi, beforeEach } from 'vitest';
 import { ScheduleManagement } from '../../pages/ScheduleManagement';
 
-const { mockListSchedules, mockCreateSchedule, mockPauseSchedule, mockDisableSchedule, mockDeleteSchedule } = vi.hoisted(() => ({
+const { mockListSchedules, mockCreateSchedule, mockPauseSchedule, mockDisableSchedule, mockDeleteSchedule, mockUpdateSchedule } = vi.hoisted(() => ({
   mockListSchedules: vi.fn(),
   mockCreateSchedule: vi.fn(),
   mockPauseSchedule: vi.fn(),
   mockDisableSchedule: vi.fn(),
   mockDeleteSchedule: vi.fn(),
+  mockUpdateSchedule: vi.fn(),
 }));
 
 vi.mock('../../api', () => ({
@@ -18,6 +19,7 @@ vi.mock('../../api', () => ({
     resumeSchedule: vi.fn().mockResolvedValue({}),
     disableSchedule: mockDisableSchedule,
     deleteSchedule: mockDeleteSchedule,
+    updateSchedule: mockUpdateSchedule,
   },
 }));
 
@@ -227,7 +229,6 @@ describe('ScheduleManagement', () => {
 
   test('duplicate create prevented while saving', async () => {
     mockListSchedules.mockResolvedValue({ schedules: [] });
-
     let resolveCreate: ((value: any) => void) | null = null;
     const createPromise = new Promise((resolve) => {
       resolveCreate = resolve;
@@ -339,5 +340,186 @@ describe('ScheduleManagement', () => {
     // Check that the expression input was updated
     const exprInput = screen.getByPlaceholderText('0 0 * * * (minute hour day-of-month month day-of-week)') as HTMLInputElement;
     expect(exprInput.value).toBe('0 0 * * *');
+  });
+});
+
+describe('ScheduleManagement - Schedule Expression Editing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('Edit action appears for schedule', async () => {
+    mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
+
+    render(<ScheduleManagement agentId="agent-1" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('0 0 * * *')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Edit')).toBeInTheDocument();
+  });
+
+  test('Clicking Edit enters edit mode', async () => {
+    mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
+
+    render(<ScheduleManagement agentId="agent-1" />);
+
+    const editButton = await screen.findByText('Edit');
+    fireEvent.click(editButton);
+
+    expect(screen.getByLabelText('Edit schedule expression')).toBeInTheDocument();
+    expect(screen.getByText('Save')).toBeInTheDocument();
+    expect(screen.getByText('Cancel')).toBeInTheDocument();
+  });
+
+  test('Existing scheduleExpression appears in input', async () => {
+    mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
+
+    render(<ScheduleManagement agentId="agent-1" />);
+
+    const editButton = await screen.findByText('Edit');
+    fireEvent.click(editButton);
+
+    const exprInput = screen.getByLabelText('Edit schedule expression') as HTMLInputElement;
+    expect(exprInput.value).toBe('0 0 * * *');
+  });
+
+  test('Cancel exits edit mode without PATCH', async () => {
+    mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
+
+    render(<ScheduleManagement agentId="agent-1" />);
+
+    const editButton = await screen.findByText('Edit');
+    fireEvent.click(editButton);
+
+    const cancelButton = screen.getByText('Cancel');
+    fireEvent.click(cancelButton);
+
+    expect(mockUpdateSchedule).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Edit schedule expression')).not.toBeInTheDocument();
+    expect(screen.getByText('0 0 * * *')).toBeInTheDocument();
+  });
+
+  test('Save calls api.updateSchedule with correct arguments', async () => {
+    mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
+    const updatedSchedule = { ...defaultSchedule, scheduleExpression: '0 */6 * * *' };
+    mockUpdateSchedule.mockResolvedValue({ schedule: updatedSchedule });
+
+    render(<ScheduleManagement agentId="agent-1" />);
+
+    const editButton = await screen.findByText('Edit');
+    fireEvent.click(editButton);
+
+    const exprInput = screen.getByLabelText('Edit schedule expression') as HTMLInputElement;
+    fireEvent.change(exprInput, { target: { value: '0 */6 * * *' } });
+
+    const saveButton = screen.getByText('Save');
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(mockUpdateSchedule).toHaveBeenCalledWith('agent-1', 'sched-1', {
+        scheduleExpression: '0 */6 * * *',
+      });
+    });
+  });
+
+  test('Successful update exits edit mode and displays updated expression', async () => {
+    mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
+    const updatedSchedule = { ...defaultSchedule, scheduleExpression: '0 */6 * * *' };
+    mockUpdateSchedule.mockResolvedValue({ schedule: updatedSchedule });
+
+    render(<ScheduleManagement agentId="agent-1" />);
+
+    const editButton = await screen.findByText('Edit');
+    fireEvent.click(editButton);
+
+    const exprInput = screen.getByLabelText('Edit schedule expression') as HTMLInputElement;
+    fireEvent.change(exprInput, { target: { value: '0 */6 * * *' } });
+
+    const saveButton = screen.getByText('Save');
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Edit schedule expression')).not.toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('0 */6 * * *')).toBeInTheDocument();
+    });
+  });
+
+  test('API error keeps edit mode open and shows error', async () => {
+    mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
+    mockUpdateSchedule.mockRejectedValue(new Error('Invalid cron expression: must be 5 fields'));
+
+    render(<ScheduleManagement agentId="agent-1" />);
+
+    const editButton = await screen.findByText('Edit');
+    fireEvent.click(editButton);
+
+    const exprInput = screen.getByLabelText('Edit schedule expression') as HTMLInputElement;
+    fireEvent.change(exprInput, { target: { value: 'invalid expr' } });
+
+    const saveButton = screen.getByText('Save');
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Invalid cron expression/)).toBeInTheDocument();
+    });
+
+    // Edit form should still be open
+    expect(screen.getByLabelText('Edit schedule expression')).toBeInTheDocument();
+    // Input value should be preserved
+    expect(exprInput.value).toBe('invalid expr');
+  });
+
+  test('Save is disabled while request is pending', async () => {
+    mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
+    let resolveUpdate: ((value: any) => void) | null = null;
+    const updatePromise = new Promise((resolve) => {
+      resolveUpdate = resolve;
+    });
+    mockUpdateSchedule.mockReturnValue(updatePromise as any);
+
+    render(<ScheduleManagement agentId="agent-1" />);
+
+    const editButton = await screen.findByText('Edit');
+    fireEvent.click(editButton);
+
+    const exprInput = screen.getByLabelText('Edit schedule expression');
+    fireEvent.change(exprInput, { target: { value: '0 0 1 * *' } });
+
+    const saveButton = screen.getByText('Save');
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(screen.getByText('Saving...')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Saving...')).toBeDisabled();
+
+    resolveUpdate!({ schedule: { ...defaultSchedule, scheduleExpression: '0 0 1 * *' } });
+  });
+
+  test('Empty expression does not submit', async () => {
+    mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
+
+    render(<ScheduleManagement agentId="agent-1" />);
+
+    const editButton = await screen.findByText('Edit');
+    fireEvent.click(editButton);
+
+    const exprInput = screen.getByLabelText('Edit schedule expression') as HTMLInputElement;
+    fireEvent.change(exprInput, { target: { value: '' } });
+
+    const saveButton = screen.getByText('Save');
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Schedule expression is required/)).toBeInTheDocument();
+    });
+
+    expect(mockUpdateSchedule).not.toHaveBeenCalled();
   });
 });
