@@ -47,6 +47,7 @@ import {
   type ApprovalStatus,
   type ActivityRecord,
   type PolicyConfigStore,
+  createActivity,
 } from "@4evergent/database";
 import type { PolicyRules, Agent, RequestContext, AuthorizationService, AuthProvider, AuthenticatedPrincipal } from "@4evergent/shared";
 
@@ -264,18 +265,48 @@ export async function createApiServer(options: ServerOptions) {
       // two executions read the same sequence before either acquires the lock.
       const accountId = options.signer.getAccountId();
       return sequenceCoordinator.runExclusive(accountId, async () => {
-        const sourceAccount = await getSourceAccount();
-        const outcome = await pipeline.execute({ intent: record.intent, sourceAccount });
-        const txHash = (outcome as { txHash?: string }).txHash;
-        return {
-          record,
-          success: outcome.status === "submitted",
-          status: outcome.status,
-          error: outcome.message,
-          errorClass: outcome.status === "rejected" ? "permanent" as const : "transient" as const,
-          txHash,
-          submittedHash: txHash ?? null,
-        };
+        try {
+          const sourceAccount = await getSourceAccount();
+          const outcome = await pipeline.execute({
+            intent: record.intent,
+            sourceAccount,
+            activityId: record.activityId ?? undefined,
+          });
+          const txHash = (outcome as { txHash?: string }).txHash;
+          return {
+            record,
+            success: outcome.status === "submitted",
+            status: outcome.status,
+            error: outcome.message,
+            errorClass: outcome.status === "rejected" ? "permanent" as const : "transient" as const,
+            txHash,
+            submittedHash: txHash ?? null,
+            activityId: (outcome as { activityId?: string }).activityId ?? record.activityId ?? undefined,
+          };
+        } catch (err: unknown) {
+          // Pipeline failed before persisting activity (e.g., source account load failure).
+          // Update the pre-created ActivityRecord to reflect the failure so the
+          // activity record is not left in "pending" indefinitely.
+          if (record.activityId && options.activityStore) {
+            try {
+              await options.activityStore.update(record.activityId, {
+                status: "failed",
+                error: err instanceof Error ? err.message : String(err),
+                updatedAt: new Date().toISOString(),
+              });
+            } catch {
+              // ActivityStore update failure is non-critical — execution record still tracks the error.
+            }
+          }
+          return {
+            record,
+            success: false,
+            status: "failed",
+            error: err instanceof Error ? err.message : String(err),
+            errorClass: "transient" as const,
+            activityId: record.activityId ?? undefined,
+          };
+        }
       });
     };
 
@@ -343,12 +374,27 @@ export async function createApiServer(options: ServerOptions) {
           // direct ScheduleExecutionService invocation.
           if (executionQueue) {
             const now = new Date().toISOString();
+            // Pre-create ActivityRecord for audit trail; the pipeline will
+            // update this record (not create a duplicate) when activityId is passed.
+            const activityId = crypto.randomUUID();
+            if (store) {
+              const activityRecord = createActivity(
+                schedule.agentId,
+                schedule.ownerId,
+                schedule.intent,
+                { result: "allow", reason: "schedule enqueued", rule: "scheduler", intent: schedule.intent }
+              );
+              activityRecord.id = activityId;
+              activityRecord.status = "pending";
+              activityRecord.authorizationStatus = "not_required";
+              await store.record(activityRecord);
+            }
             const executionRecord: ExecutionRecord = {
               id: crypto.randomUUID(),
               ownerId: schedule.ownerId,
               agentId: schedule.agentId,
               approvalId: null,
-              activityId: null,
+              activityId: activityId,
               intent: schedule.intent,
               status: "queued",
               policyDecision: null,

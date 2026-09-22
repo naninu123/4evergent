@@ -29,6 +29,8 @@ export interface PipelineExecuteInput {
   intent: AgentIntent;
   sourceAccount: any;
   idempotencyKey?: string | null;
+  /** Pre-existing activity ID to update instead of creating a new ActivityRecord. */
+  activityId?: string;
 }
 
 export class TransactionPipeline {
@@ -58,7 +60,7 @@ export class TransactionPipeline {
   }
 
   async execute(input: PipelineExecuteInput): Promise<PipelineOutcome> {
-    const { intent, sourceAccount, idempotencyKey } = input;
+    const { intent, sourceAccount, idempotencyKey, activityId } = input;
 
     const validation = IntentValidator.validate(intent);
     if (!validation.valid) {
@@ -76,28 +78,28 @@ export class TransactionPipeline {
     const decision = await this.policy.evaluate(intent, agentId);
 
     if (decision.result === "deny") {
-      const denied = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
-      denied.status = "rejected";
-      denied.authorizationStatus = "denied_by_policy";
-      denied.error = decision.reason;
-      if (this.activityStore) await this.persistActivity(denied, idempotencyKey);
+      const activity = this.resolveActivity(activityId, agentId, ownerId, intent, decision, idempotencyKey);
+      activity.status = "rejected";
+      activity.authorizationStatus = "denied_by_policy";
+      activity.error = decision.reason;
+      await this.persistActivity(activity, idempotencyKey, activityId);
       return {
         status: "rejected",
         message: `Policy denied: ${decision.reason}`,
         policyDecision: decision,
         simulationResult: null,
-        activityId: denied.id,
+        activityId: activity.id,
       };
     }
 
     if (decision.result === "requires_approval") {
       if (this.activityStore && this.approvalStore) {
-        const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+        const activity = this.resolveActivity(activityId, agentId, ownerId, intent, decision, idempotencyKey);
         activity.status = "requires_approval";
         activity.authorizationStatus = "pending_approval";
         const expiresAt = new Date(Date.now() + this.approvalTtlSeconds * 1000).toISOString();
         const approval = createApproval(activity.id, agentId, ownerId, intent, decision, expiresAt);
-        await this.persistActivity(activity, idempotencyKey);
+        await this.persistActivity(activity, idempotencyKey, activityId);
         await this.approvalStore.record(approval);
         return {
           status: "requires_approval",
@@ -124,10 +126,10 @@ export class TransactionPipeline {
         tx = await this.builder.buildPayment(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
       }
     } catch (e: any) {
-      const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+      const activity = this.resolveActivity(activityId, agentId, ownerId, intent, decision, idempotencyKey);
       activity.status = "rejected";
       activity.error = e.message;
-      await this.persistActivity(activity, idempotencyKey);
+      await this.persistActivity(activity, idempotencyKey, activityId);
       return {
         status: "rejected",
         message: `Transaction construction failed: ${e.message}`,
@@ -139,11 +141,11 @@ export class TransactionPipeline {
 
     const simResult = await this.simulator.simulate(tx);
     if (!simResult.success) {
-      const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+      const activity = this.resolveActivity(activityId, agentId, ownerId, intent, decision, idempotencyKey);
       activity.status = "failed";
       activity.authorizationStatus = "denied_by_simulation";
       activity.error = simResult.error ?? "Simulation failed";
-      await this.persistActivity(activity, idempotencyKey);
+      await this.persistActivity(activity, idempotencyKey, activityId);
       return {
         status: "simulation_failed",
         message: simResult.error ?? "Simulation failed",
@@ -157,10 +159,10 @@ export class TransactionPipeline {
     try {
       signedTx = await this.signer.sign(tx);
     } catch (e: any) {
-      const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+      const activity = this.resolveActivity(activityId, agentId, ownerId, intent, decision, idempotencyKey);
       activity.status = "failed";
       activity.error = e.message;
-      await this.persistActivity(activity, idempotencyKey);
+      await this.persistActivity(activity, idempotencyKey, activityId);
       return {
         status: "rejected",
         message: `Signing failed: ${e.message}`,
@@ -177,12 +179,12 @@ export class TransactionPipeline {
 
     try {
       const result = await this.submitter.submit(signedTx, this.signer.getNetworkPassphrase());
-      const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+      const activity = this.resolveActivity(activityId, agentId, ownerId, intent, decision, idempotencyKey);
       activity.status = "submitted";
       activity.authorizationStatus = "approved";
       activity.txHash = result.hash;
       activity.simulationResult = simResult;
-      await this.persistActivity(activity, idempotencyKey);
+      await this.persistActivity(activity, idempotencyKey, activityId);
       return {
         status: "submitted",
         message: `Transaction submitted: ${result.hash}`,
@@ -194,12 +196,12 @@ export class TransactionPipeline {
       };
     } catch (e: any) {
       // Submit failed — record pre-submit hash + error for recovery/reconciliation
-      const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+      const activity = this.resolveActivity(activityId, agentId, ownerId, intent, decision, idempotencyKey);
       activity.status = "failed";
       activity.error = e.message;
       activity.txHash = preSubmitHash;
       activity.simulationResult = simResult;
-      await this.persistActivity(activity, idempotencyKey);
+      await this.persistActivity(activity, idempotencyKey, activityId);
       return {
         status: "rejected",
         message: `Submission failed: ${e.message}`,
@@ -382,8 +384,26 @@ export class TransactionPipeline {
     }
   }
 
-  private async persistActivity(record: ActivityRecord, idempotencyKey?: string | null): Promise<void> {
+  private async persistActivity(
+    record: ActivityRecord,
+    idempotencyKey?: string | null,
+    existingActivityId?: string
+  ): Promise<void> {
     if (!this.activityStore) return;
+
+    // Schedule-driven path: update the pre-existing activity record
+    // created by the scheduler callback instead of creating a duplicate.
+    if (existingActivityId) {
+      await this.activityStore.update(existingActivityId, {
+        status: record.status,
+        authorizationStatus: record.authorizationStatus,
+        error: record.error,
+        txHash: record.txHash,
+        simulationResult: record.simulationResult,
+      });
+      return;
+    }
+
     if (idempotencyKey) {
       const result = await this.activityStore.recordIdempotent(idempotencyKey, record);
       if (!result.created) {
@@ -399,6 +419,35 @@ export class TransactionPipeline {
     } else {
       await this.activityStore.record(record);
     }
+  }
+
+  /**
+   * Returns the ActivityRecord to use for persistence.
+   *
+   * When the scheduler pre-creates an ActivityRecord (activityId provided),
+   * we update that existing record instead of creating a new one — this
+   * prevents duplicate activity records for schedule-driven executions.
+   *
+   * For manual intent execution (no activityId), we create a new record as before.
+   */
+  private resolveActivity(
+    activityId: string | undefined,
+    agentId: string,
+    ownerId: string,
+    intent: AgentIntent,
+    decision: PolicyDecision,
+    idempotencyKey?: string | null
+  ): ActivityRecord {
+    if (activityId && this.activityStore) {
+      // Return a skeleton record carrying the existing id so callers can
+      // set status/error/txHash fields that persistActivity will write.
+      // We still call createActivity to get a well-formed skeleton, then
+      // override the id to point at the pre-existing record.
+      const skeleton = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+      skeleton.id = activityId;
+      return skeleton;
+    }
+    return createActivity(agentId, ownerId, intent, decision, idempotencyKey);
   }
 }
 

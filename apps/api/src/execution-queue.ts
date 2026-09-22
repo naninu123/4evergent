@@ -9,6 +9,8 @@ export interface ExecutionResult {
   errorClass?: string;
   txHash?: string;
   submittedHash?: string | null;
+  /** ActivityRecord id updated by the pipeline for schedule-driven executions. */
+  activityId?: string;
 }
 
 export type PreCheckResult = "found" | "not_found" | "network_error";
@@ -242,21 +244,30 @@ export class ExecutionQueue {
   }
 
   private async complete(record: ExecutionRecord, result: ExecutionResult): Promise<void> {
+    const update: Record<string, unknown> = {
+      status: result.status as ExecutionRecord["status"],
+      txHash: result.txHash ?? null,
+      submittedHash: result.submittedHash ?? record.submittedHash ?? null,
+      error: null,
+      completedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    if (result.activityId) {
+      update.activityId = result.activityId;
+    }
     if (result.success) {
-      await this.store.update(record.id, {
-        status: result.status as ExecutionRecord["status"],
-        txHash: result.txHash ?? null,
-        submittedHash: result.submittedHash ?? record.submittedHash ?? null,
-        error: null,
-        completedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+      await this.store.update(record.id, update as Partial<ExecutionRecord>);
     } else {
-      await this.fail(record, result.error ?? new Error("Unknown error"), result.errorClass as "transient" | "permanent" | undefined);
+      await this.fail(record, result.error ?? new Error("Unknown error"), result.errorClass as "transient" | "permanent" | undefined, update);
     }
   }
 
-  private async fail(record: ExecutionRecord, error: unknown, errorClass?: "transient" | "permanent"): Promise<void> {
+  private async fail(
+    record: ExecutionRecord,
+    error: unknown,
+    errorClass?: "transient" | "permanent",
+    extraUpdate?: Record<string, unknown>
+  ): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     const classification = errorClass ?? classifyUncaughtError(error);
     const attempt = record.attempt + 1;
@@ -267,7 +278,8 @@ export class ExecutionQueue {
       error: message,
       errorClass: classification,
       updatedAt: new Date().toISOString(),
-    });
+      ...(extraUpdate?.activityId ? { activityId: extraUpdate.activityId } : {}),
+    } as Partial<ExecutionRecord>);
 
     // Decide whether to retry or move to dead_letter
     // Use pre-check enhanced decision if preCheck is available and submittedHash exists
