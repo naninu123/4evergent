@@ -171,3 +171,74 @@ test("InMemory: listAll returns empty when no schedules", async () => {
   const due = await store.listDue(new Date().toISOString());
   assert.deepEqual(due, []);
 });
+
+// ===== SQLite update() regression test =====
+// Verifies that SQLiteScheduleStore.update() performs a proper partial
+// UPDATE — persisting only the patched fields (scheduleExpression, nextRunAt)
+// while preserving all others read back from disk via get().
+test("SQLite: update preserves all fields except scheduleExpression and nextRunAt", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "4evergent-sched-update-"));
+  const path = join(dir, "test.db");
+  try {
+    const store = new SQLiteScheduleStore(path);
+
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const updatedAt = "2026-01-01T00:00:00.000Z";
+    const oldExpression = "0 * * * *";
+    const oldNextRun = "2026-06-15T10:00:00.000Z";
+    const newExpression = "*/15 * * * *";
+    const newNextRun = "2026-06-15T10:15:00.000Z";
+
+    const schedule = makeSchedule({
+      id: "sched-update-test",
+      agentId: "agent-a",
+      ownerId: "owner-a",
+      status: "active",
+      intent: makeIntent("42"),
+      scheduleExpression: oldExpression,
+      timezone: "UTC",
+      nextRunAt: oldNextRun,
+      lastRunAt: null,
+      createdAt,
+      updatedAt,
+    });
+    await store.create(schedule);
+
+    // Patch only scheduleExpression and nextRunAt — exactly what the
+    // handleUpdateSchedule handler sends.
+    const result = await store.update(schedule.id, {
+      scheduleExpression: newExpression,
+      nextRunAt: newNextRun,
+    });
+    assert.ok(result);
+
+    // Read back from disk to verify the UPDATE statement wrote correctly.
+    const got = await store.get(schedule.id);
+    assert.ok(got, "schedule should still exist after update");
+
+    // Fields that MUST be preserved (unchanged by PATCH).
+    assert.equal(got!.id, "sched-update-test", "id preserved");
+    assert.equal(got!.agentId, "agent-a", "agentId preserved");
+    assert.equal(got!.ownerId, "owner-a", "ownerId preserved");
+    assert.equal(got!.status, "active", "status preserved");
+    assert.equal(got!.timezone, "UTC", "timezone preserved");
+    assert.equal(got!.intent.type, "payment", "intent.type preserved");
+    assert.equal(got!.intent.asset, "XLM", "intent.asset preserved");
+    assert.equal(got!.intent.amount, "42", "intent.amount preserved");
+    assert.equal(got!.intent.destination, "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "intent.destination preserved");
+    assert.equal(got!.intent.reason, "test schedule", "intent.reason preserved");
+    assert.equal(got!.createdAt, createdAt, "createdAt preserved");
+    assert.equal(got!.lastRunAt, null, "lastRunAt preserved");
+
+    // Fields that MUST be updated by PATCH.
+    assert.equal(got!.scheduleExpression, newExpression, "scheduleExpression updated");
+    assert.equal(got!.nextRunAt, newNextRun, "nextRunAt updated");
+
+    // updatedAt should have changed (SQLiteScheduleStore sets it in update()).
+    assert.notEqual(got!.updatedAt, updatedAt, "updatedAt changed");
+
+    store.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
