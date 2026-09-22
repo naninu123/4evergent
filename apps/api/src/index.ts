@@ -466,11 +466,17 @@ export async function createApiServer(options: ServerOptions) {
     if (method === "POST" && /^\/agents\/[^/]+\/schedules\/[^/]+\/(pause|resume|disable)$/.test(url)) {
       return handleScheduleAction(requestScopedCtx, req, res);
     }
+    if (method === "GET" && /^\/activity(\?.*)?$/.test(url)) {
+      return handleListActivity(requestScopedCtx, req, res);
+    }
     if (method === "GET" && /^\/approvals(\?.*)?$/.test(url)) {
       return handleListApprovals(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/agents\/[^/]+\/executions(\?.*)?$/.test(url)) {
       return handleAgentExecutions(requestScopedCtx, req, res);
+    }
+    if (method === "GET" && /^\/executions(\?.*)?$/.test(url)) {
+      return handleListExecutions(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/executions\/[^/]+$/.test(url)) {
       return handleExecutionDetail(requestScopedCtx, req, res);
@@ -889,6 +895,25 @@ export async function createApiServer(options: ServerOptions) {
       running: executionQueue.isRunning(),
       byStatus,
     });
+  }
+
+  // ===== Global owner-scoped listing endpoints (N+1 elimination) =====
+  // These exist so Web/CLI consumers can fetch all of an owner's executions
+  // or activity in ONE request instead of N+1 per-agent requests. Owner
+  // isolation is enforced by the store's listByOwner(ctx.ownerId, limit).
+
+  async function handleListExecutions(ctx: RequestContext, req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
+    const executions = await executionStore.listByOwner(ctx.ownerId!, limit);
+    return json(res, { executions });
+  }
+
+  async function handleListActivity(ctx: RequestContext, req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
+    const activity = await store.listByOwner(ctx.ownerId!, limit);
+    return json(res, { activity });
   }
 
   async function handleRetryExecution(ctx: RequestContext, req: any, res: any) {

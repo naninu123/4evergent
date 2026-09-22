@@ -211,21 +211,13 @@ async function cmdApprovalAction(approvalId: string, action: "approve" | "reject
 
 async function cmdExecutionList() {
   try {
-    // Gather across all agents (same approach as frontend api.listAllExecutions)
-    const { body: agentsBody } = await request("/agents");
-    const agents = agentsBody.agents ?? [];
-    const all: any[] = [];
-    for (const a of agents) {
-      const res = await request(`/agents/${encodeURIComponent(a.id)}/executions?limit=100`);
-      for (const e of res.body.executions ?? []) {
-        all.push(e);
-      }
-    }
+    const { body } = await request("/executions?limit=100");
+    const all: any[] = body.executions ?? [];
     if (all.length === 0) {
       console.log("No executions found.");
       return 0;
     }
-    all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    // Global endpoint already returns owner-scoped records sorted by the store
     console.log(`ID\t\tAgent\t\tStatus\t\tTxHash\t\t\tAttempt\tCreated`);
     for (const e of all) {
       const txh = e.txHash ? e.txHash.slice(0, 16) + "…" : "-";

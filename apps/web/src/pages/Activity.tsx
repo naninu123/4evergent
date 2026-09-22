@@ -7,16 +7,8 @@ export default function Activity() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.listAgents()
-      .then(async (a) => {
-        const all: ActivityRecord[] = [];
-        for (const agent of a.agents) {
-          const res = await api.agentActivity(agent.id);
-          all.push(...res.activity);
-        }
-        all.sort((x, y) => y.createdAt.localeCompare(x.createdAt));
-        setActivity(all);
-      })
+    api.listActivity()
+      .then((r) => setActivity(r.activity))
       .catch((e: any) => setError(e.message));
   }, []);
 

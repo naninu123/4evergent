@@ -1,21 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import '@testing-library/jest-dom';
+// Mock API — hoisted so vi.fn references are available in the mock factory
+const { mockListAllExecutions, mockGetQueueStatus, mockGetAgent, mockListAgentExecutions, mockListActivity, mockListAgents } = vi.hoisted(() => ({
+  mockListAllExecutions: vi.fn(),
+  mockGetQueueStatus: vi.fn(),
+  mockGetAgent: vi.fn(),
+  mockListAgentExecutions: vi.fn(),
+  mockListActivity: vi.fn(),
+  mockListAgents: vi.fn(),
+}));
 
-// Mock API
-const mockListAllExecutions = vi.fn();
-const mockGetQueueStatus = vi.fn();
-const mockGetAgent = vi.fn();
-const mockListAgentExecutions = vi.fn();
-
-vi.mock('../api', () => ({
+vi.mock('../../api', () => ({
   api: {
     listAllExecutions: mockListAllExecutions,
     getQueueStatus: mockGetQueueStatus,
     getAgent: mockGetAgent,
     listAgentExecutions: mockListAgentExecutions,
+    listActivity: mockListActivity,
+    listAgents: mockListAgents,
   },
 }));
+
+import Executions from '../Executions';
+import '@testing-library/jest-dom';
 
 describe('Executions page', () => {
   beforeEach(() => {
@@ -108,6 +115,17 @@ describe('Executions page', () => {
     await waitFor(() => {
       expect(screen.getByText('Dead Letter')).toBeInTheDocument();
     });
+  });
+
+  it('calls listAllExecutions and never listAgents (N+1 removed)', async () => {
+    mockListAllExecutions.mockResolvedValue({ executions: [] });
+    mockGetQueueStatus.mockResolvedValue({ running: false, byStatus: {} });
+    render(<Executions />);
+    await waitFor(() => {
+      expect(mockListAllExecutions).toHaveBeenCalledTimes(1);
+    });
+    expect(mockListAgents).not.toHaveBeenCalled();
+    expect(mockListAgentExecutions).not.toHaveBeenCalled();
   });
 });
 

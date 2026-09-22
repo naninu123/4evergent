@@ -178,16 +178,44 @@ test("CLI: approval reject → exit 0", () => {
   assert.match(r.stdout, /rejected/);
 });
 
-test("CLI: execution list → aggregates across agents", () => {
+test("CLI: execution list → calls GET /executions (N+1 removed)", () => {
   const r = run(["execution", "list"], {
     responses: [
-      { match: "/agents/agent-1/executions", status: 200, body: { agentId: "agent-1", executions: [{ id: "exec-1", agentId: "agent-1", status: "confirmed", txHash: "ab".repeat(32), attempt: 0, createdAt: "2026-01-01T00:00:00Z", intent: { type: "payment", asset: "XLM", amount: "10" } }] } },
-      { match: "/agents", status: 200, body: { agents: [{ id: "agent-1", displayName: "T", active: true }] } },
+      { match: "/executions", status: 200, body: { executions: [{ id: "exec-1", agentId: "agent-1", status: "confirmed", txHash: "ab".repeat(32), attempt: 0, createdAt: "2026-01-01T00:00:00Z", intent: { type: "payment", asset: "XLM", amount: "10" } }] } },
     ],
   });
   assert.equal(r.code, 0);
   assert.match(r.stdout, /exec-1/);
   assert.match(r.stdout, /confirmed/);
+  // Must NOT have called /agents or per-agent execution endpoints
+  assert.ok(!r.stdout.includes('aggregates'));
+});
+
+test("CLI: execution list → empty result", () => {
+  const r = run(["execution", "list"], {
+    responses: [
+      { match: "/executions", status: 200, body: { executions: [] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /No executions found/);
+});
+
+test("CLI: execution list → limit passed as query param", () => {
+  const r = run(["execution", "list"], {
+    responses: [
+      { match: "/executions?limit=100", status: 200, body: { executions: [] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+});
+
+test("CLI: execution list → API error → exit 1", () => {
+  const r = run(["execution", "list"], {
+    responses: [{ match: "/executions", status: 500, body: { error: "server error" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /500|server error/);
 });
 
 test("CLI: execution get → prints full detail", () => {

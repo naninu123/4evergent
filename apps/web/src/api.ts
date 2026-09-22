@@ -160,19 +160,15 @@ export const api = {
 
   // ===== Executions =====
 
-  listAllExecutions: async (limit = 50): Promise<{ executions: ExecutionRecord[] }> => {
-    const agents = await request<{ agents: AgentRecord[] }>('/agents');
-    const results = await Promise.all(
-      agents.agents.map((a) =>
-        request<{ agentId: string; executions: ExecutionRecord[] }>(
-          `/agents/${encodeURIComponent(a.id)}/executions?limit=${limit}`
-        )
-      )
-    );
-    const executions = results.flatMap((r) => r.executions);
-    executions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return { executions };
-  },
+  listAllExecutions: (limit = 50) =>
+    request<{ executions: ExecutionRecord[] }>(
+      `/executions?limit=${limit}`
+    ),
+
+  listActivity: (limit = 50) =>
+    request<{ activity: ActivityRecord[] }>(
+      `/activity?limit=${limit}`
+    ),
 
   listAgentExecutions: (agentId: string, limit = 50) =>
     request<{ agentId: string; executions: ExecutionRecord[] }>(
