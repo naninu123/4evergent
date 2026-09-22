@@ -1,6 +1,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createApiServer, clearAgents } from "../src/index.js";
+import { AgentScheduler } from "../src/scheduler.js";
 import { DevAuthProvider } from "@4evergent/shared";
 import { InMemoryScheduleStore } from "@4evergent/database";
 import type { ScheduleStore, ScheduleRecord } from "@4evergent/database";
@@ -362,6 +363,85 @@ test("PATCH /agents/:id/schedules/:id — response does not contain secret field
     const res = await patchSchedule(baseUrl, "test-agent", schedule.id, { scheduleExpression: "*/5 * * * *" });
     const json = JSON.stringify(res.body);
     assert.ok(!/secret|seed|private_key|mnemonic|keypair/i.test(json));
+  } finally {
+    await close();
+  }
+});
+
+// ===== TEST 11: PATCH → SCHEDULER INTEGRATION =====
+// End-to-end proof that editing a schedule expression changes WHEN the
+// scheduler runs it. The PATCH handler recalculates nextRunAt from the NEW
+// expression; the scheduler then reads that persisted nextRunAt from the
+// store to decide due/not-due. No manual nextRunAt injection.
+test("PATCH scheduleExpression → scheduler runs at NEW time, not old", async () => {
+  const store = new InMemoryScheduleStore();
+  // Initial expression: every hour at minute 0. nextRunAt far in the past so
+  // it would be due immediately under the OLD expression.
+  const oldNextRun = "2020-01-01T00:00:00.000Z";
+  const schedule = makeSchedule({
+    scheduleExpression: "0 * * * *",
+    nextRunAt: oldNextRun,
+  });
+  await store.create(schedule);
+
+  const { baseUrl, close } = await startServer(store);
+
+  const executed: string[] = [];
+  const scheduler = new AgentScheduler(
+    store,
+    { get: async (id: string) => (id === "test-agent" ? { id, status: "active", ownerId: "test" } : null) },
+    async (s) => {
+      executed.push(s.id);
+      return { status: "submitted" } as any;
+    }
+  );
+
+  try {
+    // --- Step 1: BEFORE PATCH — schedule is due under OLD expression ---
+    // old nextRunAt (2020) <= now, so scheduler WOULD execute it.
+    const beforePatch = await scheduler.runDue(new Date().toISOString());
+    assert.equal(beforePatch, 1, "schedule should be due under old expression");
+    assert.equal(executed.length, 1, "schedule should have executed once before PATCH");
+
+    // After a run, scheduler sets lastRunAt and recalculates nextRunAt from
+    // the OLD expression ("0 * * * *" → next hour boundary, in the future).
+    const afterFirstRun = await store.get(schedule.id);
+    assert.ok(afterFirstRun, "schedule should exist after first run");
+    assert.ok(new Date(afterFirstRun!.nextRunAt) > new Date(), "nextRunAt should now be in the future (old expression, already ran)");
+    assert.ok(afterFirstRun!.lastRunAt, "lastRunAt should be set after first run");
+
+    // --- Step 2: PATCH via the production handler ---
+    // New expression: every minute ("* * * * *") — will be due within a minute.
+    const res = await patchSchedule(baseUrl, "test-agent", schedule.id, { scheduleExpression: "* * * * *" });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.schedule.scheduleExpression, "* * * * *");
+
+    // --- Step 3: Verify production logic recalculated nextRunAt ---
+    // The PATCH handler computed this from the NEW expression — no manual injection.
+    const patched = await store.get(schedule.id);
+    assert.ok(patched, "schedule should exist after PATCH");
+    assert.equal(patched!.scheduleExpression, "* * * * *");
+    assert.notEqual(patched!.nextRunAt, afterFirstRun!.nextRunAt, "nextRunAt must differ after PATCH (recalculated from new expression)");
+    // New expression fires every minute → nextRunAt within ~60s of now.
+    const drift = new Date(patched!.nextRunAt).getTime() - Date.now();
+    assert.ok(drift > 0 && drift <= 60_000, `nextRunAt should be within 60s in the future (got ${drift}ms)`);
+
+    // --- Step 4: Scheduler uses the NEW persisted nextRunAt ---
+    // Time just BEFORE the new nextRunAt → schedule must NOT be due.
+    const justBefore = new Date(new Date(patched!.nextRunAt).getTime() - 1000);
+    const beforeDue = await scheduler.runDue(justBefore.toISOString());
+    assert.equal(beforeDue, 0, "schedule must NOT execute before new nextRunAt");
+    assert.equal(executed.length, 1, "still only the pre-PATCH execution");
+
+    // Time AT/AFTER the new nextRunAt → schedule MUST be due.
+    const atDue = new Date(patched!.nextRunAt);
+    const afterDue = await scheduler.runDue(atDue.toISOString());
+    assert.equal(afterDue, 1, "schedule MUST execute once new nextRunAt is reached");
+    assert.equal(executed.length, 2, "schedule executed a second time at new time");
+
+    // --- Step 5: execution is for the right schedule/agent ---
+    assert.equal(executed[0], schedule.id);
+    assert.equal(executed[1], schedule.id);
   } finally {
     await close();
   }
