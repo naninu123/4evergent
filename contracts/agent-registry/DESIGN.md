@@ -8,8 +8,8 @@ Scope: intent + API mapping for `src/lib.rs` as currently written. No implementa
 |---|---|---|
 | `register(id, display_name, stellar_address, capabilities) -> AgentInfo` | Caller becomes owner; store new `AgentInfo` keyed by `id`; reject duplicate id ("agent already registered"); `active=true`, `created_at=updated_at=ledger timestamp` | yes |
 | `update_metadata(id, new_display_name, new_capabilities) -> AgentInfo` | Overwrite display_name + capabilities, bump `updated_at`. Doc: "Only ***" — caller must equal stored `info.owner`, else "not authorized" | yes |
-| `deactivate(id) -> bool` | Soft-delete: `active=false`, bump `updated_at`. Auth: owner only (same "not authorized" rule) | yes |
-| `query(id) -> Option<AgentInfo>` | Read-only lookup, public ("Anyone can query") | no |
+| `deactivate(id) -> bool` | PERMANENT tombstone: `active=false`, bump `updated_at`. Auth: owner only (same "not authorized" rule). The id cannot be re-registered afterwards — by anyone, including the original owner — and there is no reactivation entrypoint | yes |
+| `query(id) -> Option<AgentInfo>` | Read-only lookup, public ("Anyone can query"). Pure read: mutates no storage and extends no TTL | no |
 
 Module doc also lists `register_agent(...)`/`deactivate_agent(...)` — actual fn names are `register`/`deactivate`; doc drift, note only.
 
@@ -43,8 +43,8 @@ All verified against `soroban-sdk 22.0.7` source (`~/.cargo/registry/.../soroban
 1. **`id` type**: registry keys are agent names like `"agent_1"`. Are ids opaque `String` (any bytes) or should they be constrained (max len, charset)? Storage key design (`contracttype` enum with `String` variant) works either way, but validation rule is a product decision.
 2. **`stellar_address: String` field**: doc says agents have a Stellar address, but it's stored as an unvalidated `String` (`"GADDR"` in tests). Should it be `Address` type (validated strkey) instead? Changes the register signature.
 3. **Duplicate register**: currently panics. Alternative: return existing `AgentInfo` (idempotent) or `Error::AlreadyRegistered`. Which?
-4. **Re-activation**: `deactivate` is one-way; no `activate` entrypoint. Intentional (permanent tombstone) or missing MVP feature?
-5. **`capabilities: Vec<String>` bounds**: unbounded Vec in storage key/value → grief/gas risk. Max cap per agent?
+4. **Re-activation**: `deactivate` is a PERMANENT tombstone — the id cannot be re-registered and there is no `activate` entrypoint. **RESOLVED (security review):** this is intentional. `update_metadata` additionally rejects a deactivated agent (`Error::Deactivated`). A reactivate/ownership-transfer primitive is deliberately out of scope; see draft issue (c).
+5. **`capabilities: Vec<String>` bounds**: **RESOLVED (security review):** bounded. `MAX_CAPABILITIES=32` entries, each `MAX_CAPABILITY_LEN=32` bytes; `MAX_DISPLAY_NAME_LEN=128` bytes. Excess is rejected with a typed `Error` variant, enforced on both `register` and `update_metadata`.
 6. **`instance` vs `persistent`**: current code writes per-agent records into *instance* storage (per-contract, size-limited, expiry-prone). Assume that was incidental (author meant persistent), correct?
 7. **Auth of `register` when called via another contract**: `require_auth(caller)` semantics differ for contracts-as-callers. Should cross-contract registration be allowed in MVP or force EOA owners?
 8. **`deactivate -> bool` always `true`**: return value meaningless. Keep (API compat) or return `Result`-style error on unknown id (currently `.unwrap()` panics on missing id — vs `update_metadata` same)? Should unknown-id in update/deactivate panic, or return error?
