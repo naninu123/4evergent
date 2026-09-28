@@ -113,7 +113,7 @@ Key guarantees:
 
 ```bash
 # clone
-git clone https://github.com/SaboLabs/4evergent
+git clone https://github.com/naninu123/4evergent
 cd 4evergent
 
 # install (Node 22+, pnpm 10+, frozen lockfile for reproducible builds)
