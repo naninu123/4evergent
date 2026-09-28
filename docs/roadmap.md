@@ -6,8 +6,8 @@
 | 2 | Full transaction pipeline (construct → simulate → authorize → sign → submit) with Signer abstraction | **Shipped** |
 | 3 | Persistent SQLite stores, approval/reject HTTP endpoints, daily limit enforcement from activity state | **Shipped** |
 | 4 | React web dashboard (Overview / Agents / Activity / Approvals / Submit Intent) + read-only API endpoints | **Shipped** |
-| 5 | Soroban AgentRegistry contract (register/update/deactivate/query) | Scaffolded, not compiled |
-| 6 | Soroban Permissions contract (delegation + revocation) | Scaffolded, not compiled |
+| 5 | Soroban AgentRegistry contract (register/update/deactivate/query) | **Deployed on Testnet** |
+| 6 | Soroban Permissions contract (delegation + revocation) | Intentionally **not** deployed (not compiled; needs its own DESIGN pass) |
 | 7 | Multi-agent capability discovery & agent-to-agent economy | Future |
 | 8 | Agent scheduling & automation | **Shipped** |
 | 9 | Persistent execution queue with retry & dead-letter | **Shipped** |
@@ -96,7 +96,7 @@
 - **Simulation**: For classic (non-Soroban) transactions, Horizon has no dry-run API. Simulation checks sequence, fee, balance, and envelope validity — but signature correctness is only checked at submission time. For Soroban contract calls, the Soroban-RPC `simulateTransaction` endpoint should be used (not yet implemented).
 - **Transaction types**: Only XLM payments are supported. Trustline, contract_call, and account_settings intents pass validation but return 400 from the API ("not yet supported by the transaction pipeline").
 - **Mainnet**: Not tested. The pipeline asserts the network passphrase of the signer matches the signer passphrase, and `TestnetLocalSigner` is wired to the testnet passphrase in the pipeline constructor.
-- **Soroban contracts**: Not compiled or tested. `contracts/` directory has scaffolded Cargo files.
+- **Soroban contracts**: `agent-registry` is compiled, tested (15 unit tests) and deployed to Stellar Testnet — see `docs/testnet.md`. `permissions` is intentionally **not** deployed: it is excluded from the contracts workspace, is not compiled or tested, lacks authorization checks, and needs its own DESIGN pass before any work resumes (`contracts/permissions/README.md`).
 - **No KMS/HSM or user-custodied signer**: Production wallet implementations are deferred.
 - **Live testnet submission**: No live Stellar testnet calls were executed. All tests use deterministic mocks and in-process HTTP servers.
 

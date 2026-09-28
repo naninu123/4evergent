@@ -71,9 +71,9 @@ Stellar is purpose-built for asset issuance and payments with native low-fee, fa
 │   ├── stellar/          # Transaction construction + simulation + submission + reconciliation + network guard
 │   ├── database/         # In-memory + SQLite stores (activity, approvals, agents, executions)
 │   └── shared/           # Shared types & schemas
-├── contracts/
-│   ├── agent-registry/   # Soroban contract (agent identity on-chain)
-│   └── permissions/      # Soroban authorization primitives
+├── contracts/            # Rust workspace (own Cargo.lock, pinned toolchain)
+│   ├── agent-registry/   # Soroban contract (agent identity on-chain) — deployed on Testnet
+│   └── permissions/      # Soroban authorization primitives (experimental, not in workspace)
 ├── docs/
 │   ├── architecture.md
 │   ├── security-model.md
@@ -250,7 +250,8 @@ See [docs/cli.md](docs/cli.md) for full command reference.
 | 2 | Full transaction pipeline (construct → simulate → authorize → sign → submit) with Signer abstraction | ✅ Shipped |
 | 3 | Persistent SQLite stores, approval/reject HTTP endpoints, daily limit enforcement | ✅ Shipped |
 | 4 | React web dashboard + read-only API | ✅ Shipped |
-| 5-6 | Soroban AgentRegistry & Permissions contracts | Scaffolded, not compiled |
+| 5 | Soroban AgentRegistry contract | ✅ Compiled, tested, deployed on Stellar Testnet |
+| 6 | Soroban Permissions contract | Intentionally not deployed (needs its own DESIGN pass) |
 | 7 | Multi-agent capability discovery & economy | Future |
 | 8 | Agent scheduling & automation | ✅ Shipped |
 | 9 | Persistent execution queue with retry & dead-letter | ✅ Shipped |
