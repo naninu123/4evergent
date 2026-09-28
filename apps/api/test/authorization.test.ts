@@ -339,7 +339,7 @@ test("AUTHZ: client cannot spoof ownerId via request body", async () => {
       }),
     });
     assert.equal(res.status, 202);
-    const body = await res.json();
+    const _body = await res.json();
     // The activity should be owned by owner-a, not attacker
     const activity = await get(baseUrl, "/agents/agent-a/activity");
     assert.equal(activity.body.activity[0].ownerId, "owner-a");

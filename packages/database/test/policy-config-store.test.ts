@@ -6,7 +6,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import {
   SQLitePolicyConfigStore,
   InMemoryPolicyConfigStore,
-  type PolicyConfigStore,
 } from "../src/index.js";
 import type { PolicyRules } from "@4evergent/shared";
 

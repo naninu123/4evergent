@@ -6,8 +6,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import {
   SQLiteScheduleStore,
   InMemoryScheduleStore,
-  createActivity,
-  createApproval,
 } from "../src/index.js";
 import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
 
@@ -21,7 +19,7 @@ function makeIntent(amount = "10"): AgentIntent {
   };
 }
 
-function makeDecision(): PolicyDecision {
+function _makeDecision(): PolicyDecision {
   return { result: "allow", reason: "test", rule: "test", intent: makeIntent() };
 }
 

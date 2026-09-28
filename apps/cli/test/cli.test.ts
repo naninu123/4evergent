@@ -117,7 +117,7 @@ test("CLI: agent get → prints details", () => {
 });
 
 test("CLI: agent pause → PATCH status=paused", () => {
-  let requestBody: any = null;
+  const _requestBody: any = null;
   const r = run(["agent", "pause", "agent-1"], {
     responses: [
       { match: "/agents/agent-1/status", status: 200, body: { id: "agent-1", status: "paused" } },

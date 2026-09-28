@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import Activity from '../Activity';
-import * as api from '../../api';
 
 const mockListActivity = vi.fn();
 const mockListAgents = vi.fn();

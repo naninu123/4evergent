@@ -10,7 +10,7 @@ const baseIntent = (overrides: Record<string, unknown>): AgentIntent =>
 // PolicyEngine.evaluate is async; existing tests call it synchronously.
 // We keep the sync signature by unwrapping the promise in tests.
 
-function evalSync(engine: PolicyEngine, intent: AgentIntent, agent: string): AgentIntent & { result: string; reason: string; rule: string } {
+function _evalSync(engine: PolicyEngine, intent: AgentIntent, agent: string): AgentIntent & { result: string; reason: string; rule: string } {
   // Evaluate synchronously by using a pre-computed decision
   return engine.evaluate(intent, agent) as unknown as AgentIntent & { result: string; reason: string; rule: string };
 }

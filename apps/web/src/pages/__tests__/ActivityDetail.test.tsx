@@ -3,7 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import ActivityDetail from '../ActivityDetail';
 
-const mockActivityDetail = vi.fn();
+const _mockActivityDetail = vi.fn();
 
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {

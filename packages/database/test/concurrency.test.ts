@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { InMemoryActivityStore, createActivity } from "../src/index.js";
+import { InMemoryActivityStore } from "../src/index.js";
 import type { ActivityRecord } from "@4evergent/shared";
 
 function makeRecord(overrides: Partial<ActivityRecord> = {}): ActivityRecord {

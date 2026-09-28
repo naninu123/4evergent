@@ -1,14 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { TransactionPipeline } from "../src/pipeline.js";
-import { TestnetLocalSigner } from "../src/testnet-local-signer.js";
 import type { Signer } from "../src/signer.js";
 import {
   InMemoryActivityStore,
   InMemoryApprovalStore,
   createApproval,
   createActivity,
-  type ApprovalRecord,
 } from "@4evergent/database";
 import type { PolicyRules, AgentIntent, PolicyDecision } from "@4evergent/shared";
 import { Keypair } from "@stellar/stellar-sdk";

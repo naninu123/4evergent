@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import ExecutionDetail from '../ExecutionDetail';
-import * as api from '../../api';
 
 const mockGetExecution = vi.fn();
 const mockRetryExecution = vi.fn();

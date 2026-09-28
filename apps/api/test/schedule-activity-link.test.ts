@@ -128,7 +128,7 @@ function findExecution(records: ExecutionRecord[], status?: string): ExecutionRe
 }
 
 test("SCHEDULE ACTIVITY TEST 1: scheduler enqueues execution with linked ActivityRecord", async () => {
-  const { close, activityStore, executionStore, scheduleStore } = await startServer(50);
+  const { close, _activityStore, executionStore, scheduleStore } = await startServer(50);
 
   try {
     const schedule = makeSchedule();

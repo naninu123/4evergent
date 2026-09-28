@@ -58,7 +58,6 @@ import type {
   SubmitPaymentIntent,
   SubmitTrustlineIntent,
   ScheduleRecord,
-  ScheduleStatus,
   ExecutionRecord,
   QueueSummary,
   PolicyRules,

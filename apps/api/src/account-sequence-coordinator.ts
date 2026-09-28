@@ -21,7 +21,7 @@
  * distributed locking or cross-process guarantees.
  */
 
-type ReleaseFn = () => void;
+type _ReleaseFn = () => void;
 
 interface AccountQueue {
   tail: Promise<unknown>;

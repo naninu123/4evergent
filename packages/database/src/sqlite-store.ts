@@ -245,7 +245,7 @@ export class SQLiteActivityStore implements ActivityStore {
         .run(agentId, asset, day, amountNum);
       // INSERT succeeded — verify amount doesn't exceed limit
       return amountNum <= limitNum;
-    } catch (e: any) {
+    } catch (_e: any) {
       // PRIMARY KEY conflict — row was created by concurrent caller between our UPDATE and INSERT
       // Retry the UPDATE once (the concurrent caller's INSERT committed first)
       const retryResult = this.db

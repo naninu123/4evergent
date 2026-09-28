@@ -90,7 +90,7 @@ test("COORDINATOR: different accounts run concurrently", async () => {
     await new Promise((r) => setTimeout(r, 20));
   };
 
-  const start = Date.now();
+  const _start = Date.now();
   await Promise.all([
     coordinator.runExclusive("G_ACC_1", makeTask("G_ACC_1")),
     coordinator.runExclusive("G_ACC_2", makeTask("G_ACC_2")),
