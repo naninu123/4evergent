@@ -16,11 +16,10 @@
 //! - `query` is a pure read: it mutates no storage and extends no TTL. Records
 //!   are kept alive by owner writes, or by anyone submitting an
 //!   `ExtendFootprintTTL` operation on the record's entry.
-//! - A record with no write for longer than `max_ttl` is archived and must be
-//!   restored (`restoreFootprint`) before it is addressable again; the entry's
-//!   archived state can also make the id re-registerable by whoever gets there
-//!   first. Owners who need a permanent id must keep using it (writes) or have
-//!   someone extend its footprint.
+//! - A record with no write for longer than the network TTL ceiling is archived,
+//!   not deleted. It must be restored (automatic when the transaction is
+//!   simulated via RPC) before it can be read or written, and `register` on
+//!   that id still fails with AlreadyRegistered after restore.
 //!
 //! Future: delegation, multi-sig registration, capability discovery events.
 
