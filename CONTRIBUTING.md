@@ -6,7 +6,7 @@ Thank you for contributing. This document covers development setup, repository s
 
 ```bash
 # clone
-git clone https://github.com/SaboLabs/4evergent
+git clone https://github.com/naninu123/4evergent
 cd 4evergent
 
 # install (Node 22+, pnpm 10+)
@@ -18,6 +18,14 @@ cp .env.example .env
 # build all packages
 pnpm build
 ```
+
+> **On a fresh checkout, run `pnpm build` before `pnpm typecheck`.**
+> Workspace packages resolve each other through their build output: e.g.
+> `packages/shared/package.json` points `types`/`main` at `./dist/index.*`, and
+> `packages/agent-core` imports `@4evergent/shared`. Before the first build that
+> `dist/` does not exist, so `pnpm typecheck` fails with
+> `TS2307: Cannot find module '@4evergent/shared'`. The same ordering is used in
+> CI (`Build` runs before `Typecheck`).
 
 ## Repository structure
 
@@ -32,9 +40,9 @@ pnpm build
 │   ├── stellar/          # Transaction pipeline (build → simulate → sign → submit)
 │   ├── database/         # In-memory + SQLite stores (activity, approvals)
 │   └── shared/           # Shared types & schemas
-├── contracts/
-│   ├── agent-registry/   # Soroban agent-registry contract (scaffolded, not compiled)
-│   └── permissions/      # Soroban permissions contract (scaffolded, not compiled)
+├── contracts/            # Rust workspace (own Cargo.lock, pinned toolchain)
+│   ├── agent-registry/   # Soroban agent-registry contract (compiles, tested, builds wasm)
+│   └── permissions/      # Soroban permissions contract (not in the workspace yet)
 ├── docs/
 ├── scripts/
 └── README.md
@@ -86,14 +94,15 @@ Run cargo from inside `contracts/` (`cd contracts && cargo test`) so `contracts/
 - All relative imports use explicit `.ts` extensions (Node ESM).
 - Use `Exact Optional Property Types` — no implicit `undefined`.
 - Prefer pure functions for policy/engine logic.
-- No linter/formatter is configured yet; rely on `pnpm typecheck` (strict mode)
-  and the style rules above. A linter may be introduced later — do not add
-  lint tooling in unrelated PRs.
+- Run `pnpm lint` (ESLint flat config at the repo root). `@typescript-eslint/no-unused-vars`
+  is an error and ignores names prefixed with `_`; `@typescript-eslint/no-explicit-any` is
+  off on purpose. Keep lint fixes mechanical and in-scope for the PR.
 
 ## PR expectations
 
 - All tests must pass (`pnpm test`).
-- Typecheck must pass (`pnpm typecheck`).
+- Lint must pass (`pnpm lint`).
+- Typecheck must pass (`pnpm typecheck`) — run `pnpm build` first on a fresh checkout.
 - Include tests for any new intent type, policy rule, or capability.
 - Add entries to `docs/architecture.md` if you make an architecture decision.
 - Link the PR to a GitHub issue where applicable.
@@ -121,7 +130,7 @@ If you find a security vulnerability:
 
 1. Do NOT open a public issue.
 2. Report it through GitHub's private vulnerability reporting on the
-   [SaboLabs/4evergent repository](https://github.com/SaboLabs/4evergent/security/advisories/new)
+   [naninu123/4evergent repository](https://github.com/naninu123/4evergent/security/advisories/new)
    (Security tab → "Report a vulnerability"). If that mechanism is
    unavailable, open a GitHub security advisory draft or contact the
    repository maintainers via the SaboLabs organization on GitHub.
