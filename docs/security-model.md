@@ -225,7 +225,7 @@ See `packages/shared/src/production-auth.ts` and
 
 - The policy engine reads rules from a config that can be hot-swapped.
 - An emergency "kill switch" key (held by the deployment operator) can push an all-deny policy to all agents instantly.
-- On-chain agent registry supports `deactivate_agent` to freeze an agent's wallet permissions.
+- On-chain agent registry supports `deactivate_agent` to permanently tombstone an agent's identity (the id cannot be re-registered, even by the original owner; there is no reactivation entrypoint). `stellar_address` is bound with that address's consent on first registration.
 
 ## Frontend / Backend Trust Boundary
 

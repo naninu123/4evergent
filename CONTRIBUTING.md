@@ -76,6 +76,10 @@ Every capability must include:
 - Missing human approval for threshold amount
 - Invalid agent owner
 
+## Working on contracts/
+
+Run cargo from inside `contracts/` (`cd contracts && cargo test`) so `contracts/rust-toolchain.toml` (pinned 1.81.0) applies. The wasm target is `wasm32-unknown-unknown`. `contracts/Cargo.lock` is committed on purpose — builds are reproducible via `--locked`; use `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo generate-lockfile` when dependencies change so the MSRV-aware resolver keeps versions 1.81-compatible.
+
 ## Code style
 
 - TypeScript with strict mode enabled.

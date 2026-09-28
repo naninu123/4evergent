@@ -1,0 +1,41 @@
+name: Contracts CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "contracts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Build and Test (wasm32)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain and wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.81.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Build (wasm32-unknown-unknown)
+        run: cargo build --workspace --locked --manifest-path contracts/Cargo.toml --target wasm32-unknown-unknown
+
+      - name: Test
+        run: cargo test --workspace --locked --manifest-path contracts/Cargo.toml
