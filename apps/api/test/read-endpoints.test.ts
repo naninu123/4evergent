@@ -405,3 +405,126 @@ test("GET /executions/:id — owner isolation on lifecycle reads (cross-owner 40
     await close();
   }
 });
+
+// ===== GET /executions (global owner-scoped listing) =====
+
+test("GET /executions returns owner's executions in single request", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    await executionStore.record(makeExecution({ id: "exec-a", status: "confirmed", txHash: "a".repeat(64) }));
+    await executionStore.record(makeExecution({ id: "exec-b", status: "failed", error: "timeout", attempt: 1 }));
+
+    const res = await get(baseUrl, "/executions");
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.body.executions));
+    assert.equal(res.body.executions.length, 2);
+    const ids = new Set(res.body.executions.map((e: any) => e.id));
+    assert.ok(ids.has("exec-a"));
+    assert.ok(ids.has("exec-b"));
+
+    // No secret material
+    const json = JSON.stringify(res.body);
+    assert.ok(!/secret|seed|private_key|mnemonic|keypair/i.test(json));
+  } finally {
+    await close();
+  }
+});
+
+test("GET /executions does not return another owner's executions", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    // Owner "test" has no executions; "owner-b" has one
+    await executionStore.record(makeExecution({ ownerId: "owner-b", id: "exec-other" }));
+    const res = await get(baseUrl, "/executions");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.executions.length, 0);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /executions respects limit", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    for (let i = 0; i < 5; i++) {
+      await executionStore.record(makeExecution({ id: `exec-${i}` }));
+    }
+    const res = await get(baseUrl, "/executions?limit=2");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.executions.length, 2);
+  } finally {
+    await close();
+  }
+});
+
+// ===== GET /activity (global owner-scoped listing) =====
+
+test("GET /activity returns owner's activity in single request", async () => {
+  const { baseUrl, close } = await startServer({
+    policyRules: { maxTxAmount: { XLM: "1000" }, requireHumanApprovalForAmountAbove: "10" },
+  });
+  try {
+    // Generate activity by submitting intents
+    for (let i = 0; i < 2; i++) {
+      const intentRes = await apiFetch(`${baseUrl}/agents/test-agent/intents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "payment",
+          asset: "XLM",
+          destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          amount: "50",
+          reason: `activity test ${i}`,
+        }),
+      });
+      assert.equal(intentRes.status, 202);
+    }
+    const res = await get(baseUrl, "/activity");
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.body.activity));
+    assert.equal(res.body.activity.length, 2);
+    assert.ok(res.body.activity[0].id);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /activity does not return another owner's activity", async () => {
+  const { baseUrl, close } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+    registerAgent: false,
+  });
+  try {
+    const res = await get(baseUrl, "/activity");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.activity.length, 0);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /activity respects limit", async () => {
+  const { baseUrl, close } = await startServer({
+    policyRules: { maxTxAmount: { XLM: "1000" }, requireHumanApprovalForAmountAbove: "10" },
+  });
+  try {
+    for (let i = 0; i < 3; i++) {
+      await apiFetch(`${baseUrl}/agents/test-agent/intents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "payment",
+          asset: "XLM",
+          destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          amount: "50",
+          reason: `limit test ${i}`,
+        }),
+      });
+    }
+    const res = await get(baseUrl, "/activity?limit=2");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.activity.length, 2);
+  } finally {
+    await close();
+  }
+});

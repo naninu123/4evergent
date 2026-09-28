@@ -211,21 +211,13 @@ async function cmdApprovalAction(approvalId: string, action: "approve" | "reject
 
 async function cmdExecutionList() {
   try {
-    // Gather across all agents (same approach as frontend api.listAllExecutions)
-    const { body: agentsBody } = await request("/agents");
-    const agents = agentsBody.agents ?? [];
-    const all: any[] = [];
-    for (const a of agents) {
-      const res = await request(`/agents/${encodeURIComponent(a.id)}/executions?limit=100`);
-      for (const e of res.body.executions ?? []) {
-        all.push(e);
-      }
-    }
+    const { body } = await request("/executions?limit=100");
+    const all: any[] = body.executions ?? [];
     if (all.length === 0) {
       console.log("No executions found.");
       return 0;
     }
-    all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    // Global endpoint already returns owner-scoped records sorted by the store
     console.log(`ID\t\tAgent\t\tStatus\t\tTxHash\t\t\tAttempt\tCreated`);
     for (const e of all) {
       const txh = e.txHash ? e.txHash.slice(0, 16) + "…" : "-";
@@ -246,6 +238,44 @@ async function cmdExecutionGet(executionId: string) {
   try {
     const { body } = await request(`/executions/${encodeURIComponent(executionId)}`);
     console.log(formatExecution(body.execution));
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdExecutionRetry(executionId: string) {
+  if (!executionId) {
+    console.error("Usage: 4evergent execution retry <id>");
+    return 1;
+  }
+  try {
+    const { body } = await request(`/executions/${encodeURIComponent(executionId)}/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    console.log(`Execution ${body.execution?.id ?? executionId} retry queued: ${body.message ?? "ok"}`);
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdExecutionCancel(executionId: string) {
+  if (!executionId) {
+    console.error("Usage: 4evergent execution cancel <id>");
+    return 1;
+  }
+  try {
+    const { body } = await request(`/executions/${encodeURIComponent(executionId)}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    console.log(`Execution ${body.execution?.id ?? executionId} cancelled: ${body.message ?? "ok"}`);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -524,7 +554,7 @@ async function main(): Promise<number> {
   const sub = argv[1];
 
   if (!cmd) {
-    console.error("Usage: 4evergent <command> [args...]\n\nCommands:\n  health\n  agent list | get <id> | pause <id> | resume <id> | disable <id>\n  approval list | approve <id> | reject <id>\n  execution list | get <id>");
+    console.error("Usage: 4evergent <command> [args...]\n\nCommands:\n  health\n  agent list | get <id> | pause <id> | resume <id> | disable <id>\n  approval list | approve <id> | reject <id>\n  execution list | get <id> | retry <id> | cancel <id>");
     return 1;
   }
 
@@ -557,9 +587,11 @@ async function main(): Promise<number> {
       switch (sub) {
         case "list": return cmdExecutionList();
         case "get": return cmdExecutionGet(argv[2] ?? "");
+        case "retry": return cmdExecutionRetry(argv[2] ?? "");
+        case "cancel": return cmdExecutionCancel(argv[2] ?? "");
         default:
           console.error(`Unknown execution subcommand: ${sub}`);
-          console.error("Usage: 4evergent execution <list|get> [id]");
+          console.error("Usage: 4evergent execution <list|get|retry|cancel> [id]");
           return 1;
       }
     case "policy":
@@ -595,7 +627,7 @@ async function main(): Promise<number> {
     case "--help":
     case "-h":
     case "help":
-      console.log("4evergent Operator CLI\n\nCommands:\n  health\n  agent list | get <id> | pause <id> | resume <id> | disable <id>\n  approval list | approve <id> | reject <id>\n  execution list | get <id>\n  policy get <agent-id>\n  activity list <agent-id> [limit]\n  schedule list <agent-id> [limit] | get <agent-id> <schedule-id>\n  intent submit <agent-id> <type> [args...] [--idempotency-key <key>]");
+      console.log("4evergent Operator CLI\n\nCommands:\n  health\n  agent list | get <id> | pause <id> | resume <id> | disable <id>\n  approval list | approve <id> | reject <id>\n  execution list | get <id> | retry <id> | cancel <id>\n  policy get <agent-id>\n  activity list <agent-id> [limit]\n  schedule list <agent-id> [limit] | get <agent-id> <schedule-id>\n  intent submit <agent-id> <type> [args...] [--idempotency-key <key>]");
       return 0;
     default:
       console.error(`Unknown command: ${cmd}`);

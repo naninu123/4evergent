@@ -41,6 +41,8 @@ export FOREGENT_API_KEY=your-api-key-here
 4evergent approval reject <id>              Reject an intent
 4evergent execution list                    List executions across all agents
 4evergent execution get <id>                Show execution detail
+4evergent execution retry <id>              Retry a failed or dead-letter execution
+4evergent execution cancel <id>             Cancel a queued or executing execution
 4evergent policy get <agent-id>             Show effective policy rules
 4evergent activity list <agent-id> [limit]  List agent activity (limit 1-100, default 50)
 4evergent schedule list <agent-id> [limit]  List agent schedules (limit 1-100, default 50)
@@ -88,6 +90,8 @@ submits twice silently.
 4evergent approval approve ap-123
 4evergent execution list
 4evergent execution get exec-123
+4evergent execution retry exec-123
+4evergent execution cancel exec-123
 4evergent policy get agent-123
 4evergent activity list agent-123
 4evergent activity list agent-123 10

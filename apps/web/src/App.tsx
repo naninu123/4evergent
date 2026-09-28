@@ -3,12 +3,13 @@ import Overview from './pages/Overview';
 import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
 import Activity from './pages/Activity';
+import ActivityDetail from './pages/ActivityDetail';
 import Approvals from './pages/Approvals';
 import Submit from './pages/Submit';
 import Executions from './pages/Executions';
 import ExecutionDetail from './pages/ExecutionDetail';
 
-type Tab = 'overview' | 'agents' | 'agent-detail' | 'activity' | 'approvals' | 'submit' | 'executions' | 'execution-detail';
+type Tab = 'overview' | 'agents' | 'agent-detail' | 'activity' | 'activity-detail' | 'approvals' | 'submit' | 'executions' | 'execution-detail';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -23,6 +24,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('overview');
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
+  const [selectedActivity, setSelectedActivity] = useState<{ agentId: string; activityId: string } | null>(null);
 
   const handleAgentClick = (agentId: string) => {
     setSelectedAgentId(agentId);
@@ -34,9 +36,16 @@ export default function App() {
     setTab('execution-detail');
   };
 
+  const handleActivityClick = (agentId: string, activityId: string) => {
+    setSelectedActivity({ agentId, activityId });
+    setTab('activity-detail');
+  };
+
   const handleBack = () => {
     if (tab === 'execution-detail') {
       setTab('executions');
+    } else if (tab === 'activity-detail') {
+      setTab('activity');
     } else if (tab === 'agent-detail') {
       setTab('agents');
     }
@@ -67,7 +76,14 @@ export default function App() {
           {tab === 'overview' && <Overview />}
           {tab === 'agents' && <Agents onAgentClick={handleAgentClick} />}
           {tab === 'agent-detail' && selectedAgentId && <AgentDetail agentId={selectedAgentId} />}
-          {tab === 'activity' && <Activity />}
+          {tab === 'activity' && <Activity onActivityClick={handleActivityClick} />}
+          {tab === 'activity-detail' && selectedActivity && (
+            <ActivityDetail
+              agentId={selectedActivity.agentId}
+              activityId={selectedActivity.activityId}
+              onBack={handleBack}
+            />
+          )}
           {tab === 'executions' && <Executions onExecutionClick={handleExecutionClick} />}
           {tab === 'execution-detail' && selectedExecutionId && (
             <ExecutionDetail executionId={selectedExecutionId} onBack={handleBack} />

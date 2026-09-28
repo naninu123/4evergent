@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { ActivityRecord } from '../types';
 
-export default function ActivityDetail({ agentId, activityId }: { agentId: string; activityId: string }) {
+export default function ActivityDetail({ agentId, activityId, onBack }: { agentId: string; activityId: string; onBack?: () => void }) {
   const [activity, setActivity] = useState<ActivityRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -23,6 +23,7 @@ export default function ActivityDetail({ agentId, activityId }: { agentId: strin
 
   return (
     <section>
+      {onBack && <button onClick={onBack} style={{ marginBottom: 12 }}>←</button>}
       <h1>Activity Detail</h1>
       <div className="cards">
         <Card title="ID" value={activity.id} />
