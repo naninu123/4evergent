@@ -40,7 +40,15 @@ function runStoreTests(name: string, makeStores: () => { activity: ActivityStore
       const rec = createActivity("agent-a", "owner-a", makeIntent("5"), makeDecision());
       await activity.record(rec);
       const got = await activity.get(rec.id);
-      assert.deepEqual(got, rec);
+      // idempotencyKey is `string | null | undefined`. Stores may normalize an
+      // omitted key to null (SQLite SQL NULL) or preserve undefined (InMemory
+      // object reference). Both are valid representations of "no key" per the
+      // ActivityRecord contract — normalize both sides before comparing so the
+      // round-trip assertion covers every other field exactly.
+      assert.deepEqual(
+        { ...got, idempotencyKey: got?.idempotencyKey ?? null },
+        { ...rec, idempotencyKey: rec.idempotencyKey ?? null }
+      );
     } finally {
       cleanup?.();
     }

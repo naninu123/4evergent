@@ -261,10 +261,12 @@ test("SEC: second executeApproved on submitted record does not re-sign", async (
 
 test("SEC: daily limit denies when cumulative spending exceeded", async () => {
   const activity = new InMemoryActivityStore();
-  // Seed a submitted transaction that consumed 90 XLM today, using a valid Stellar address
-  const prior = createActivity("agent-a", "owner-a", paymentIntent("90"), { result: "allow", reason: "t", rule: "t", intent: paymentIntent("90") });
-  prior.status = "submitted";
-  await activity.record(prior);
+  // Reserve 90 XLM against the agent's daily limit directly through the same
+  // atomic reservation API the PolicyEngine uses in production. (Seeding a
+  // "submitted" activity record no longer affects the limit — Phase 23 moved
+  // enforcement to reserveDailySpending, which tracks its own per-day totals.)
+  const reserved = await activity.reserveDailySpending("agent-a", "XLM", "90", "100");
+  assert.ok(reserved, "seed reservation must succeed");
 
   const { pipeline, signer } = makePipeline({
     rules: { dailySpendingLimit: { XLM: "100" }, maxTxAmount: { XLM: "1000" }, requireHumanApprovalForAmountAbove: "1000" },

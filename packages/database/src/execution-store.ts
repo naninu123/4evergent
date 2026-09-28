@@ -64,6 +64,22 @@ export class InMemoryExecutionStore implements ExecutionStore {
       .slice(0, Math.max(1, Math.min(limit, MAX_LIMIT)));
   }
 
+  async countByOwner(ownerId: string): Promise<Record<ExecutionStatus, number>> {
+    const counts: Record<string, number> = {};
+    for (const r of this.records.values()) {
+      if (r.ownerId !== ownerId) continue;
+      counts[r.status] = (counts[r.status] ?? 0) + 1;
+    }
+    const result: Record<ExecutionStatus, number> = {
+      queued: 0, executing: 0, submitted: 0,
+      confirmed: 0, failed: 0, dead_letter: 0,
+    };
+    for (const [status, count] of Object.entries(counts)) {
+      result[status as ExecutionStatus] = count;
+    }
+    return result;
+  }
+
   async update(id: string, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null> {
     const existing = this.records.get(id);
     if (!existing) return null;
@@ -251,6 +267,23 @@ export class SQLiteExecutionStore implements ExecutionStore {
       .prepare("SELECT * FROM executions WHERE status = 'submitted' ORDER BY created_at ASC LIMIT ?")
       .all(safeLimit) as unknown as ExecutionRow[];
     return rows.map(rowToExecutionRecord);
+  }
+
+  async countByOwner(ownerId: string): Promise<Record<ExecutionStatus, number>> {
+    const rows = this.db
+      .prepare(
+        "SELECT status, COUNT(*) as count FROM executions WHERE owner_id = ? GROUP BY status"
+      )
+      .all(ownerId) as unknown as Array<{ status: string; count: number }>;
+    const result: Record<ExecutionStatus, number> = {
+      queued: 0, executing: 0, submitted: 0,
+      confirmed: 0, failed: 0, dead_letter: 0,
+    };
+    for (const row of rows) {
+      const s = row.status as ExecutionStatus;
+      if (s in result) result[s] = row.count;
+    }
+    return result;
   }
 
   async update(id: string, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null> {
