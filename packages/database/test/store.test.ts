@@ -14,11 +14,10 @@ import {
   validateApprovalTransition,
   type ActivityStore,
   type ApprovalStore,
-  type ApprovalRecord,
 } from "../src/index.js";
 import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
 
-function makeIntent(amount: string, agentId = "agent-a"): AgentIntent {
+function makeIntent(amount: string, _agentId = "agent-a"): AgentIntent {
   return {
     type: "payment",
     asset: "XLM",

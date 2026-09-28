@@ -94,7 +94,7 @@ function formatExecution(e: any) {
 `;
 }
 
-function formatApproval(a: any) {
+function _formatApproval(a: any) {
   return `Approval:
   ID:           ${a.id}
   Agent:        ${a.agentId}
@@ -302,7 +302,7 @@ function formatPolicy(p: any) {
 `;
 }
 
-function formatActivity(a: any) {
+function _formatActivity(a: any) {
   return `Activity:
   ID:           ${a.id}
   Agent:        ${a.agentId}

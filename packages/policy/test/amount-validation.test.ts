@@ -48,7 +48,7 @@ test("POLICY: daily spending atomic reservation enforced", async () => {
     requireHumanApprovalForAmountAbove: "500",
   }, {
     listByAgent: async () => [],
-    reserveDailySpending: async (agentId, asset, amount, limit) => {
+    reserveDailySpending: async (agentId, asset, amount, _limit) => {
       // Simulate: first call succeeds, second fails (limit reached)
       if (amount === "60") {
         return false; // Simulate limit would be exceeded

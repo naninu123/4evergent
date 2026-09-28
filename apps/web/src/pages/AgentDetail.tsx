@@ -4,7 +4,7 @@ import type { AgentRecord, ActivityRecord, PolicyRules } from '../types';
 import { ScheduleManagement } from './ScheduleManagement';
 import { ExecutionList } from './ExecutionList';
 
-const DEFAULT_POLICY: PolicyRules = {
+const _DEFAULT_POLICY: PolicyRules = {
   maxTxAmount: { XLM: '100' },
   dailySpendingLimit: { XLM: '500' },
   allowedAssets: ['XLM'],

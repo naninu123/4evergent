@@ -1,4 +1,4 @@
-import type { ExecutionStore, ExecutionRecord } from "@4evergent/database";
+import type { ExecutionStore } from "@4evergent/database";
 
 export interface RecoveryOptions {
   /** Override clock for deterministic testing. */

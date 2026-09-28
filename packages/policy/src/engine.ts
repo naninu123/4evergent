@@ -1,5 +1,5 @@
 import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
-import { DEFAULT_RULES, type PolicyRules } from "./types.js";
+import { type PolicyRules } from "./types.js";
 import { normalizePolicyRules } from "./validation.js";
 
 /**

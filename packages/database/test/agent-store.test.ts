@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { InMemoryAgentStore, SQLiteAgentStore } from "../src/agent-store.js";
-import type { Agent, CreateAgentInput } from "../src/agent-types.js";
+import type { CreateAgentInput } from "../src/agent-types.js";
 
 function testStores(name: string, makeStore: () => InMemoryAgentStore | SQLiteAgentStore) {
   test(`${name}: create and get`, async () => {

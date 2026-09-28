@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   AgentIntent,
-  ActivityStatus,
   AuthorizationStatus,
   PolicyDecision,
   SimulationResult,
@@ -43,7 +42,6 @@ import {
   type ScheduleStore,
   type ExecutionStore,
   type AgentStore,
-  type ApprovalRecord,
   type ApprovalStatus,
   type ActivityRecord,
   type PolicyConfigStore,

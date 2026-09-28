@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApiServer } from "../src/index.js";
 import { DevAuthProvider } from "@4evergent/shared";
-import type { Agent } from "@4evergent/shared";
 
 async function post(url: string, body: unknown): Promise<{ status: number; body: any }> {
   const res = await fetch(url, {

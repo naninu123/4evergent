@@ -1,4 +1,4 @@
-import type { ExecutionStore, ExecutionRecord, ExecutionStatus } from "@4evergent/database";
+import type { ExecutionStore } from "@4evergent/database";
 
 /**
  * TransactionStatus — typed result of a Stellar transaction lookup.
@@ -90,7 +90,7 @@ export class TransactionStatusReconciler {
         let status: TransactionStatus;
         try {
           status = await this.statusProvider.getStatus(execution.txHash);
-        } catch (err) {
+        } catch (_err) {
           result.errors++;
           continue;
         }
@@ -112,7 +112,7 @@ export class TransactionStatusReconciler {
         }
         // not_found or network_error: leave as submitted, will retry next tick
       }
-    } catch (err) {
+    } catch (_err) {
       result.errors++;
     }
 

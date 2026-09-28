@@ -84,7 +84,6 @@ export interface ApprovalRecord {
   updatedAt: string;
 }
 
-import type { ScheduleStore, ScheduleRecord } from "./schedule-types.js";
 
 /**
  * InMemoryActivityStore — process-local activity log.

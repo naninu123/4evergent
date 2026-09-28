@@ -44,12 +44,12 @@ export function AuthGate({ children }: AuthProps) {
     storeAuth(token.trim(), 'pending');
 
     try {
-      const health = await api.health();
+      const _health = await api.health();
       // If we get here, token is valid
       const subject = getStoredSubject() ?? 'authenticated-user';
       storeAuth(token.trim(), subject);
       setAuthenticated(true);
-    } catch (err) {
+    } catch (_err) {
       clearAuth();
       setLoginError('Invalid token or authentication failed. Please check your credentials.');
     } finally {

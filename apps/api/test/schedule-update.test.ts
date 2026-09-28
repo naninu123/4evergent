@@ -42,7 +42,7 @@ const TEST_AGENT = {
   metadata: {},
 };
 
-const TEST_AGENT_B = {
+const _TEST_AGENT_B = {
   id: "agent-b",
   displayName: "Agent B",
   description: "test agent b",
@@ -111,7 +111,7 @@ async function startServer(scheduleStore?: ScheduleStore, registerAgent = true) 
   });
 }
 
-async function startServerForOwner(ownerId: string, agentOwner: any) {
+async function _startServerForOwner(ownerId: string, agentOwner: any) {
   const scheduleStore = new InMemoryScheduleStore();
   const server = await createApiServer({
     port: 0,
@@ -149,7 +149,7 @@ async function patchSchedule(baseUrl: string, agentId: string, scheduleId: strin
   return { status: res.status, body: res.status === 204 ? null : await res.json() };
 }
 
-async function getSchedule(baseUrl: string, scheduleId: string) {
+async function _getSchedule(baseUrl: string, scheduleId: string) {
   const res = await apiFetch(`${baseUrl}/agents/test-agent/schedules/${encodeURIComponent(scheduleId)}`);
   return { status: res.status, body: await res.json() };
 }
@@ -164,7 +164,7 @@ test("PATCH /agents/:id/schedules/:id — valid update returns 200 and updated s
   const schedule = makeSchedule({ scheduleExpression: "0 * * * *" });
   await store.create(schedule);
 
-  const { baseUrl, close, scheduleStore } = await startServer(store);
+  const { baseUrl, close, _scheduleStore } = await startServer(store);
 
   try {
     const res = await patchSchedule(baseUrl, "test-agent", schedule.id, { scheduleExpression: "*/5 * * * *" });

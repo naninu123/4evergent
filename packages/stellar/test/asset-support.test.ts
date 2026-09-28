@@ -1,15 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { TransactionPipeline } from "../src/pipeline.js";
-import { TestnetLocalSigner } from "../src/testnet-local-signer.js";
 import type { Signer } from "../src/signer.js";
 import {
   InMemoryActivityStore,
   InMemoryApprovalStore,
-  createActivity,
-  createApproval,
 } from "@4evergent/database";
-import type { AgentIntent, PolicyDecision, PolicyRules } from "@4evergent/shared";
+import type { AgentIntent, PolicyRules } from "@4evergent/shared";
 import { Keypair } from "@stellar/stellar-sdk";
 
 const TESTNET = "https://horizon-testnet.stellar.org";
@@ -76,7 +73,7 @@ test("ASSET: issued-asset payment is denied by asset allowlist (default [])", as
 });
 
 test("ASSET: issued-asset payment allowed when in allowlist still hits simulation gate", async () => {
-  const { pipeline, signer } = makePipeline({
+  const { pipeline, _signer } = makePipeline({
     rules: { allowedAssets: ["USDC:GDUWFOAXXMRMVR4A5P2FVUKWJOHMLB7CI7T6U4CUVDGAMWYKRJWHBH7H"], approvalThreshold: "1000000" },
   });
   const kp = Keypair.random();
@@ -95,7 +92,7 @@ test("ASSET: issued-asset payment allowed when in allowlist still hits simulatio
 });
 
 test("ASSET: XLM payment regression still works with allowlist containing XLM", async () => {
-  const { pipeline, signer } = makePipeline({
+  const { pipeline, _signer } = makePipeline({
     rules: { allowedAssets: ["XLM"] },
     requireHumanApprovalForAmountAbove: "1000000",
   });

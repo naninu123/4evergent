@@ -1,4 +1,4 @@
-import { Keypair, nativeToScVal } from "@stellar/stellar-sdk";
+import { Keypair } from "@stellar/stellar-sdk";
 import type { Transaction } from "@stellar/stellar-sdk";
 import type { Signer } from "./signer.js";
 
