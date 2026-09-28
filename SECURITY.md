@@ -14,7 +14,7 @@ Instead, use one of these channels:
 
 2. **GitHub Security Advisory draft** — if private reporting is not available,
    open a draft security advisory on the repository, or contact the maintainers
-   through the naninu123 organization on GitHub
+   through the maintainer, @naninu123, on GitHub
 
 ### What to include
 

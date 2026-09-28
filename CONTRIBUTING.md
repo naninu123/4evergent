@@ -133,7 +133,7 @@ If you find a security vulnerability:
    [naninu123/4evergent repository](https://github.com/naninu123/4evergent/security/advisories/new)
    (Security tab → "Report a vulnerability"). If that mechanism is
    unavailable, open a GitHub security advisory draft or contact the
-   repository maintainers via the naninu123 organization on GitHub.
+   repository maintainers via the maintainer, @naninu123, on GitHub.
 3. Include: description, reproduction steps, potential impact.
 4. You will receive a response within 48 hours.
 
