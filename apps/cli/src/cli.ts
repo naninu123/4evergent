@@ -545,6 +545,208 @@ async function cmdIntentSubmit(agentId: string, args: string[], idempotencyKey: 
   }
 }
 
+// --- Batch 3: Lifecycle Commands ---
+
+async function cmdAgentCreate(args: string[]) {
+  if (args.length === 0) {
+    console.error("Usage: 4evergent agent create <name> [--description <desc>] [--capabilities a,b] [--stellar-address G...]");
+    return 1;
+  }
+  const displayName = args[0];
+  let description = "";
+  let capabilities: string[] = [];
+  let stellarAddress: string | undefined;
+
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === "--description" && args[i + 1]) {
+      const val = args[i + 1];
+      if (val !== undefined) description = val;
+      i++;
+    } else if (args[i] === "--capabilities" && args[i + 1]) {
+      capabilities = (args[i + 1] ?? "").split(",").map((s: string) => s.trim()).filter(Boolean);
+      i++;
+    } else if (args[i] === "--stellar-address" && args[i + 1]) {
+      stellarAddress = args[i + 1];
+      i++;
+    }
+  }
+
+  try {
+    const { body } = await request("/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName, description, capabilities, stellarAddress }),
+    });
+    console.log(`Agent created:\n  ID: ${body.agent.id}\n  Name: ${body.agent.displayName}\n  Status: ${body.agent.status}`);
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdPolicyUpdate(agentId: string, args: string[]) {
+  if (!agentId) {
+    console.error("Usage: 4evergent policy update <agent-id> --rules '<json>'");
+    return 1;
+  }
+  const idx = args.indexOf("--rules");
+  if (idx === -1 || !args[idx + 1]) {
+    console.error("Error: --rules '<json>' is required");
+    return 1;
+  }
+  let policy: any;
+  try {
+    policy = JSON.parse(args[idx + 1]!);
+  } catch {
+    console.error("Error: --rules must be valid JSON");
+    return 1;
+  }
+
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}/policy`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(policy),
+    });
+    console.log(`Policy updated:\n  Agent: ${body.agentId}\n  Version: ${body.version}`);
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdScheduleCreate(agentId: string, args: string[]) {
+  if (!agentId || args.length < 2) {
+    console.error("Usage: 4evergent schedule create <agent-id> <cron-expression> <intent-type> [intent-args...] [--timezone UTC]");
+    return 1;
+  }
+  const expression = args[0];
+  let timezone = "UTC";
+
+  const tzIdx = args.indexOf("--timezone");
+  if (tzIdx !== -1) {
+    timezone = args[tzIdx + 1] ?? "UTC";
+    args = [...args.slice(0, tzIdx), ...args.slice(tzIdx + 2)];
+  }
+
+  const { intent, error } = buildIntentArgs(args.slice(1));
+  if (error) {
+    console.error(`Error: ${error}`);
+    return 1;
+  }
+
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}/schedules`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ intent, scheduleExpression: expression, timezone }),
+    });
+    console.log(`Schedule created:\n  ID: ${body.schedule.id}\n  Expression: ${body.schedule.scheduleExpression}\n  Timezone: ${body.schedule.timezone}\n  Next Run: ${body.schedule.nextRunAt}`);
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdScheduleUpdate(agentId: string, args: string[]) {
+  if (!agentId || args.length < 2) {
+    console.error("Usage: 4evergent schedule update <agent-id> <schedule-id> <expression>");
+    return 1;
+  }
+  const scheduleId = args[0]!;
+  const expression = args[1]!;
+
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scheduleExpression: expression }),
+    });
+    console.log(`Schedule updated:\n  ID: ${body.schedule.id}\n  Expression: ${body.schedule.scheduleExpression}\n  Next Run: ${body.schedule.nextRunAt}`);
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdSchedulePause(agentId: string, scheduleId: string) {
+  if (!agentId || !scheduleId) {
+    console.error("Usage: 4evergent schedule pause <agent-id> <schedule-id>");
+    return 1;
+  }
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}/pause`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    console.log(`Schedule paused:\n  ID: ${body.schedule.id}\n  Status: ${body.schedule.status}`);
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdScheduleResume(agentId: string, scheduleId: string) {
+  if (!agentId || !scheduleId) {
+    console.error("Usage: 4evergent schedule resume <agent-id> <schedule-id>");
+    return 1;
+  }
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}/resume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    console.log(`Schedule resumed:\n  ID: ${body.schedule.id}\n  Status: ${body.schedule.status}`);
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdScheduleDisable(agentId: string, scheduleId: string) {
+  if (!agentId || !scheduleId) {
+    console.error("Usage: 4evergent schedule disable <agent-id> <schedule-id>");
+    return 1;
+  }
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}/disable`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    console.log(`Schedule disabled:\n  ID: ${body.schedule.id}\n  Status: ${body.schedule.status}`);
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdScheduleDelete(agentId: string, scheduleId: string) {
+  if (!agentId || !scheduleId) {
+    console.error("Usage: 4evergent schedule delete <agent-id> <schedule-id>");
+    return 1;
+  }
+  try {
+    await request(`/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}`, {
+      method: "DELETE",
+    });
+    console.log(`Schedule deleted: ${scheduleId}`);
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
 // --- CLI dispatch ---
 
 const argv = process.argv.slice(2);
@@ -565,12 +767,13 @@ async function main(): Promise<number> {
       switch (sub) {
         case "list": return cmdAgentList();
         case "get": return cmdAgentGet(argv[2] ?? "");
+        case "create": return cmdAgentCreate(argv.slice(2));
         case "pause": return cmdAgentStatus(argv[2] ?? "", "paused");
         case "resume": return cmdAgentStatus(argv[2] ?? "", "active");
         case "disable": return cmdAgentStatus(argv[2] ?? "", "disabled");
         default:
           console.error(`Unknown agent subcommand: ${sub}`);
-          console.error("Usage: 4evergent agent <list|get|pause|resume|disable> [id]");
+          console.error("Usage: 4evergent agent <list|get|create|pause|resume|disable> [id]");
           return 1;
       }
     case "approval":
@@ -597,8 +800,9 @@ async function main(): Promise<number> {
     case "policy":
       switch (sub) {
         case "get": return cmdPolicyGet(argv[2] ?? "");
+        case "update": return cmdPolicyUpdate(argv[2] ?? "", argv.slice(3));
         default:
-          console.error("Usage: 4evergent policy get <agent-id>");
+          console.error("Usage: 4evergent policy <get|update> <agent-id>");
           return 1;
       }
     case "activity":
@@ -612,8 +816,14 @@ async function main(): Promise<number> {
       switch (sub) {
         case "list": return cmdScheduleList(argv[2] ?? "", argv[3] ?? "");
         case "get": return cmdScheduleGet(argv[2] ?? "", argv[3] ?? "");
+        case "create": return cmdScheduleCreate(argv[2] ?? "", argv.slice(3));
+        case "update": return cmdScheduleUpdate(argv[2] ?? "", argv.slice(3));
+        case "pause": return cmdSchedulePause(argv[2] ?? "", argv[3] ?? "");
+        case "resume": return cmdScheduleResume(argv[2] ?? "", argv[3] ?? "");
+        case "disable": return cmdScheduleDisable(argv[2] ?? "", argv[3] ?? "");
+        case "delete": return cmdScheduleDelete(argv[2] ?? "", argv[3] ?? "");
         default:
-          console.error("Usage: 4evergent schedule <list|get> [args...]");
+          console.error("Usage: 4evergent schedule <list|get|create|update|pause|resume|disable|delete> [args...]");
           return 1;
       }
     case "intent":
@@ -627,7 +837,7 @@ async function main(): Promise<number> {
     case "--help":
     case "-h":
     case "help":
-      console.log("4evergent Operator CLI\n\nCommands:\n  health\n  agent list | get <id> | pause <id> | resume <id> | disable <id>\n  approval list | approve <id> | reject <id>\n  execution list | get <id> | retry <id> | cancel <id>\n  policy get <agent-id>\n  activity list <agent-id> [limit]\n  schedule list <agent-id> [limit] | get <agent-id> <schedule-id>\n  intent submit <agent-id> <type> [args...] [--idempotency-key <key>]");
+      console.log("4evergent Operator CLI\n\nCommands:\n  health\n  agent list | get <id> | create <name> | pause <id> | resume <id> | disable <id>\n  approval list | approve <id> | reject <id>\n  execution list | get <id> | retry <id> | cancel <id>\n  policy get <agent-id> | update <agent-id>\n  activity list <agent-id> [limit]\n  schedule list <agent-id> [limit] | get <agent-id> <schedule-id> | create <agent-id> <cron> <intent> | update <agent-id> <schedule-id> <cron> | pause <agent-id> <schedule-id> | resume <agent-id> <schedule-id> | disable <agent-id> <schedule-id> | delete <agent-id> <schedule-id>\n  intent submit <agent-id> <type> [args...] [--idempotency-key <key>]");
       return 0;
     default:
       console.error(`Unknown command: ${cmd}`);
