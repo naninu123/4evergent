@@ -586,3 +586,208 @@ test("CLI v2: intent submit network failure without key warns duplicate risk", (
   assert.match(r.stderr, /UNKNOWN/);
   assert.match(r.stderr, /No Idempotency-Key/);
 });
+
+// ===== Batch 3: Agent Create =====
+
+test("CLI v3: agent create → POST /agents, exit 0", () => {
+  const r = run(["agent", "create", "My Agent", "--description", "test agent"], {
+    responses: [
+      { match: "/agents", status: 201, body: { agent: { id: "agent-new", displayName: "My Agent", status: "active" } } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /agent-new/);
+  assert.match(r.stdout, /My Agent/);
+});
+
+test("CLI v3: agent create → no name → exit 1", () => {
+  const r = run(["agent", "create"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /Usage/);
+});
+
+test("CLI v3: agent create → 400 validation error → exit 1", () => {
+  const r = run(["agent", "create", ""], {
+    responses: [{ match: "/agents", status: 400, body: { error: "displayName is required" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /400/);
+});
+
+test("CLI v3: agent create → 401 → exit 1", () => {
+  const r = run(["agent", "create", "My Agent"], {
+    responses: [{ match: "/agents", status: 401, body: { error: "unauthorized" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /401/);
+});
+
+// ===== Batch 3: Policy Update =====
+
+test("CLI v3: policy update → PUT /agents/:id/policy, exit 0", () => {
+  const r = run(["policy", "update", "agent-1", "--rules", '{"maxTxAmount":{"XLM":"1000"}}'], {
+    responses: [
+      { match: "/agents/agent-1/policy", status: 200, body: { agentId: "agent-1", policy: { maxTxAmount: { XLM: "1000" } }, version: 2 } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /agent-1/);
+  assert.match(r.stdout, /Version:\s+2/);
+});
+
+test("CLI v3: policy update → missing --rules → exit 1", () => {
+  const r = run(["policy", "update", "agent-1"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /--rules/);
+});
+
+test("CLI v3: policy update → invalid JSON → exit 1", () => {
+  const r = run(["policy", "update", "agent-1", "--rules", "not-json"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /valid JSON/);
+});
+
+test("CLI v3: policy update → 404 → exit 1", () => {
+  const r = run(["policy", "update", "nope", "--rules", '{"maxTxAmount":{"XLM":"1000"}}'], {
+    responses: [{ match: "/agents/nope/policy", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+// ===== Batch 3: Schedule Create =====
+
+test("CLI v3: schedule create → POST /agents/:id/schedules, exit 0", () => {
+  const r = run(["schedule", "create", "agent-1", "0 * * * *", "payment", "XLM", "10", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "daily"], {
+    responses: [
+      { match: "/agents/agent-1/schedules", status: 201, body: { schedule: { id: "sch-new", agentId: "agent-1", scheduleExpression: "0 * * * *", timezone: "UTC", nextRunAt: "2026-01-01T01:00:00Z" } } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /sch-new/);
+  assert.match(r.stdout, /0 \* \* \* \*/);
+});
+
+test("CLI v3: schedule create → no args → exit 1", () => {
+  const r = run(["schedule", "create", "agent-1"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /Usage/);
+});
+
+test("CLI v3: schedule create → 400 invalid expression → exit 1", () => {
+  const r = run(["schedule", "create", "agent-1", "invalid", "payment", "XLM", "10", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "daily"], {
+    responses: [{ match: "/agents/agent-1/schedules", status: 400, body: { error: "schedule expression must have 5 fields" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /400/);
+});
+
+test("CLI v3: schedule create → 404 agent → exit 1", () => {
+  const r = run(["schedule", "create", "nope", "0 * * * *", "payment", "XLM", "10", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "daily"], {
+    responses: [{ match: "/agents/nope/schedules", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+// ===== Batch 3: Schedule Update =====
+
+test("CLI v3: schedule update → PATCH /agents/:id/schedules/:id, exit 0", () => {
+  const r = run(["schedule", "update", "agent-1", "sch-1", "0 12 * * *"], {
+    responses: [
+      { match: "/agents/agent-1/schedules/sch-1", status: 200, body: { schedule: { id: "sch-1", scheduleExpression: "0 12 * * *", nextRunAt: "2026-01-01T12:00:00Z" } } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /0 12 \* \* \*/);
+  assert.match(r.stdout, /Next Run/);
+});
+
+test("CLI v3: schedule update → missing args → exit 1", () => {
+  const r = run(["schedule", "update", "agent-1"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /Usage/);
+});
+
+test("CLI v3: schedule update → 404 → exit 1", () => {
+  const r = run(["schedule", "update", "agent-1", "nope", "0 12 * * *"], {
+    responses: [{ match: "/agents/agent-1/schedules/nope", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+// ===== Batch 3: Schedule Pause/Resume/Disable/Delete =====
+
+test("CLI v3: schedule pause → POST /agents/:id/schedules/:id/pause, exit 0", () => {
+  const r = run(["schedule", "pause", "agent-1", "sch-1"], {
+    responses: [{ match: "/agents/agent-1/schedules/sch-1/pause", status: 200, body: { schedule: { id: "sch-1", status: "paused" } } }],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /paused/);
+});
+
+test("CLI v3: schedule pause → 404 → exit 1", () => {
+  const r = run(["schedule", "pause", "agent-1", "nope"], {
+    responses: [{ match: "/agents/agent-1/schedules/nope/pause", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+test("CLI v3: schedule resume → POST /agents/:id/schedules/:id/resume, exit 0", () => {
+  const r = run(["schedule", "resume", "agent-1", "sch-1"], {
+    responses: [{ match: "/agents/agent-1/schedules/sch-1/resume", status: 200, body: { schedule: { id: "sch-1", status: "active" } } }],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /active/);
+});
+
+test("CLI v3: schedule resume → 404 → exit 1", () => {
+  const r = run(["schedule", "resume", "agent-1", "nope"], {
+    responses: [{ match: "/agents/agent-1/schedules/nope/resume", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+test("CLI v3: schedule disable → POST /agents/:id/schedules/:id/disable, exit 0", () => {
+  const r = run(["schedule", "disable", "agent-1", "sch-1"], {
+    responses: [{ match: "/agents/agent-1/schedules/sch-1/disable", status: 200, body: { schedule: { id: "sch-1", status: "disabled" } } }],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /disabled/);
+});
+
+test("CLI v3: schedule disable → 404 → exit 1", () => {
+  const r = run(["schedule", "disable", "agent-1", "nope"], {
+    responses: [{ match: "/agents/agent-1/schedules/nope/disable", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+test("CLI v3: schedule delete → DELETE /agents/:id/schedules/:id, exit 0", () => {
+  const r = run(["schedule", "delete", "agent-1", "sch-1"], {
+    responses: [{ match: "/agents/agent-1/schedules/sch-1", status: 200, body: { deleted: true } }],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /deleted/);
+});
+
+test("CLI v3: schedule delete → 404 → exit 1", () => {
+  const r = run(["schedule", "delete", "agent-1", "nope"], {
+    responses: [{ match: "/agents/agent-1/schedules/nope", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+test("CLI v3: agent create → API key never appears in output", () => {
+  const r = run(["agent", "create", "Test"], {
+    env: { FOREGENT_API_KEY: "«redacted:sk-…»" },
+    responses: [{ match: "/agents", status: 201, body: { agent: { id: "a", displayName: "Test" } } }],
+  });
+  assert.equal(r.code, 0);
+  assert.ok(!r.stdout.includes("«redacted:sk-…»"));
+});

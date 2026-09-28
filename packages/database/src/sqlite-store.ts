@@ -258,6 +258,16 @@ export class SQLiteActivityStore implements ActivityStore {
     }
   }
 
+  async getDailySpending(agentId: string, asset: string): Promise<number | null> {
+    const now = new Date();
+    const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+      .toISOString().slice(0, 10);
+    const row = this.db
+      .prepare(`SELECT total FROM daily_spending WHERE agent_id = ? AND asset = ? AND day = ?`)
+      .get(agentId, asset, day) as { total: number } | undefined;
+    return row ? row.total : null;
+  }
+
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
     const existing = await this.get(id);
     if (!existing) return null;

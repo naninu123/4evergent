@@ -18,7 +18,7 @@ import { ExecutionQueue } from "./execution-queue.js";
 import { ExecutionRecoveryService } from "./execution-recovery.js";
 import { TransactionStatusReconciler } from "@4evergent/stellar";
 import { AccountSequenceCoordinator } from "./account-sequence-coordinator.js";
-import type { ExecutionRecord } from "@4evergent/database";
+import type { ExecutionRecord, ExecutionStatus } from "@4evergent/database";
 import type { ScheduleExecutionResult } from "./schedule-execution.js";
 import {
   InMemoryActivityStore,
@@ -191,6 +191,20 @@ export async function createApiServer(options: ServerOptions) {
   // Phase 28J: PolicyEngine in API uses the SAME resolver
   const policy = new PolicyEngine(options.policyRules, store as any, getRules);
   const adapter = new StellarAdapter(options.horizonUrl);
+
+  // Phase 28I: Agent existence check with persistent fallback.
+  // Mirrors ResourceAuthorizationService.resolveAgent so handlers can find
+  // agents that survive a server restart (present in agentStore but not in
+  // the session-scoped in-memory `agents` Map).
+  async function agentExists(agentId: string): Promise<boolean> {
+    if (agents.has(agentId)) return true;
+    const dbAgent = await agentStore.get(agentId);
+    if (dbAgent) {
+      agents.set(agentId, dbAgent);
+      return true;
+    }
+    return false;
+  }
 
   // --- Account sequence coordinator (Phase 25) ---
   // Serializes sequence-sensitive execution for the SAME Stellar source account.
@@ -435,9 +449,58 @@ export async function createApiServer(options: ServerOptions) {
     console.log("[scheduler] started, interval:", options.scheduler.intervalMs ?? 60_000, "ms");
   }
 
+  // CORS configuration — configurable via CORS_ORIGIN environment variable.
+  // Supports multiple origins: CORS_ORIGIN=https://app.example.com,https://preview.vercel.app
+  const corsOrigins: string[] = (() => {
+    const raw = process.env.CORS_ORIGIN;
+    if (!raw) return [];
+    return raw.split(',').map((o) => o.trim()).filter(Boolean);
+  })();
+
+  function getCorsOrigin(req: any): string | null {
+    if (corsOrigins.length === 0) return null;
+    const origin = req.headers?.origin;
+    if (!origin || typeof origin !== 'string') return null;
+    if (corsOrigins.includes(origin)) return origin;
+    return null;
+  }
+
   const server = createServer(async (req, res) => {
     const url = req.url ?? "";
     const method = req.method ?? "GET";
+
+    // Handle CORS preflight (OPTIONS) — does NOT bypass authentication for
+    // actual API requests. Preflight is unauthenticated but returns no data.
+    if (method === "OPTIONS") {
+      const origin = getCorsOrigin(req);
+      if (origin) {
+        res.writeHead(204, {
+          "Access-Control-Allow-Origin": origin,
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, Idempotency-Key",
+          "Vary": "Origin",
+        });
+      } else {
+        res.writeHead(204);
+      }
+      res.end();
+      return;
+    }
+
+    // Phase 28W: CORS — echo allowed origin on actual responses.
+    // Intercepts writeHead so CORS headers are added without modifying every handler.
+    const corsOrigin = getCorsOrigin(req);
+    if (corsOrigin) {
+      const originalWriteHead = res.writeHead.bind(res);
+      res.writeHead = function(status: number, headers?: any) {
+        if (typeof status === 'object') {
+          headers = status;
+          status = 200;
+        }
+        const merged = { ...(headers ?? {}), 'Access-Control-Allow-Origin': corsOrigin, 'Vary': 'Origin' };
+        return originalWriteHead(status, merged);
+      };
+    }
 
     // Phase 28K-1: Authenticate and create request-scoped context
     const principal = await authenticateRequest(req);
@@ -513,11 +576,17 @@ export async function createApiServer(options: ServerOptions) {
     if (method === "GET" && /^\/activity(\?.*)?$/.test(url)) {
       return handleListActivity(requestScopedCtx, req, res);
     }
+    if (method === "GET" && /^\/approvals\/[^/]+$/.test(url)) {
+      return handleGetApproval(requestScopedCtx, req, res);
+    }
     if (method === "GET" && /^\/approvals(\?.*)?$/.test(url)) {
       return handleListApprovals(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/agents\/[^/]+\/executions(\?.*)?$/.test(url)) {
       return handleAgentExecutions(requestScopedCtx, req, res);
+    }
+    if (method === "GET" && /^\/agents\/[^/]+\/spending(\?.*)?$/.test(url)) {
+      return handleGetAgentSpending(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/executions(\?.*)?$/.test(url)) {
       return handleListExecutions(requestScopedCtx, req, res);
@@ -527,6 +596,9 @@ export async function createApiServer(options: ServerOptions) {
     }
     if (method === "GET" && /^\/agent-queue(\?.*)?$/.test(url)) {
       return handleQueueStatus(requestScopedCtx, req, res);
+    }
+    if (method === "GET" && /^\/overview\/attention$/.test(url)) {
+      return handleGetOverviewAttention(requestScopedCtx, req, res);
     }
     if (method === "POST" && /^\/executions\/[^/]+\/retry$/.test(url)) {
       return handleRetryExecution(requestScopedCtx, req, res);
@@ -625,12 +697,24 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { approvals: filtered });
   }
 
+  async function handleGetApproval(ctx: RequestContext, req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/approvals\/([^/]+)$/);
+    const approvalId = match?.[1];
+    if (!approvalId) return json(res, { error: "invalid approval id in path" }, 400);
+    const canAccess = await authorizationService.canAccessApproval(ctx, approvalId);
+    if (!canAccess) return json(res, { error: "not found" }, 404);
+    const approval = await approvals.get(approvalId);
+    if (!approval) return json(res, { error: "not found" }, 404);
+    return json(res, { approval });
+  }
+
 
   async function handleGetPolicy(ctx: RequestContext, req: any, res: any) {
     const agentId = extractAgentIdFromPolicyUrl(req.url);
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
 
-    if (!agents.has(agentId)) return json(res, { error: "agent not found" }, 404);
+    if (!(await agentExists(agentId))) return json(res, { error: "agent not found" }, 404);
     const canAccess = await authorizationService.canAccessAgent(ctx, agentId);
     if (!canAccess) return json(res, { error: "not found" }, 404);
 
@@ -651,7 +735,7 @@ export async function createApiServer(options: ServerOptions) {
     const agentId = extractAgentIdFromPolicyUrl(req.url);
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
 
-    if (!agents.has(agentId)) return json(res, { error: "agent not found" }, 404);
+    if (!(await agentExists(agentId))) return json(res, { error: "agent not found" }, 404);
     const canAccess = await authorizationService.canAccessAgent(ctx, agentId);
     if (!canAccess) return json(res, { error: "not found" }, 404);
 
@@ -704,6 +788,29 @@ export async function createApiServer(options: ServerOptions) {
       createdAt: agent.createdAt,
       updatedAt: agent.updatedAt,
     });
+  }
+
+  async function handleGetAgentSpending(ctx: RequestContext, req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/spending$/);
+    const agentId = match?.[1];
+    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
+    if (!allowed) return json(res, { error: "not found" }, 404);
+    const rules = await getRules(agentId);
+    const spending: Record<string, { used: number; limit: string; remaining: number }> = {};
+    for (const asset of Object.keys(rules.dailySpendingLimit)) {
+      const limitStr = rules.dailySpendingLimit[asset] ?? "0";
+      const limitNum = parseFloat(limitStr);
+      if (isNaN(limitNum)) continue;
+      const used = (await store.getDailySpending(agentId, asset)) ?? 0;
+      spending[asset] = {
+        used,
+        limit: limitStr,
+        remaining: Math.max(limitNum - used, 0),
+      };
+    }
+    return json(res, { agentId, spending });
   }
 
   async function handleActivityDetail(ctx: RequestContext, req: any, res: any) {
@@ -941,6 +1048,22 @@ export async function createApiServer(options: ServerOptions) {
     });
   }
 
+
+  async function handleGetOverviewAttention(ctx: RequestContext, _req: any, res: any) {
+    const ownerId = ctx.ownerId!;
+    const pendingApprovals = (await approvals.listByOwner(ownerId, 200))
+      .filter((a) => a.status === "pending_approval").length;
+    const execCounts: Record<ExecutionStatus, number> =
+      await executionStore.countByOwner(ownerId);
+    return json(res, {
+      pendingApprovals,
+      failedExecutions: execCounts.failed ?? 0,
+      deadLetterExecutions: execCounts.dead_letter ?? 0,
+      retryingExecutions: execCounts.queued ?? 0,
+      stuckExecutions: execCounts.executing ?? 0,
+    });
+  }
+
   // ===== Global owner-scoped listing endpoints (N+1 elimination) =====
   // These exist so Web/CLI consumers can fetch all of an owner's executions
   // or activity in ONE request instead of N+1 per-agent requests. Owner
@@ -1044,7 +1167,7 @@ export async function createApiServer(options: ServerOptions) {
       return json(res, { error: `Intent validation failed: ${validation.error}` }, 400);
     }
 
-    if (!agents.has(agentId)) return json(res, { error: "agent not found" }, 404);
+    if (!(await agentExists(agentId))) return json(res, { error: "agent not found" }, 404);
     const canSubmit = await authorizationService.canSubmitIntent(ctx, agentId);
     if (!canSubmit) return json(res, { error: "not found" }, 404);
 
@@ -1125,7 +1248,7 @@ export async function createApiServer(options: ServerOptions) {
         throw new Error(`Unable to load source account: ${(e as Error).message}`);
       }
 
-      return pipeline.execute({ intent, sourceAccount });
+      return pipeline.execute({ intent, sourceAccount, idempotencyKey });
     }).catch((e: any) => {
       return { status: "failed", message: e?.message ?? "Unknown error" } as any;
     });
@@ -1133,6 +1256,7 @@ export async function createApiServer(options: ServerOptions) {
     // Handle the failure case from getSourceAccount() inside the lock
     if (outcome.status === "failed") {
       const failed = makeActivity(intent, agentId, ctx.ownerId!, decision, "failed", null, outcome.message ?? "Unknown error");
+      failed.idempotencyKey = idempotencyKey;
       await store.record(failed);
       return json(res, toIntentResponse(failed), 502);
     }

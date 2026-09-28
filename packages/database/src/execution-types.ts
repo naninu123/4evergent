@@ -62,6 +62,8 @@ export interface ExecutionStore {
   listByAgent(agentId: string, limit?: number): Promise<ExecutionRecord[]>;
   listStuckExecuting(limit?: number): Promise<ExecutionRecord[]>;
   listSubmitted(limit?: number): Promise<ExecutionRecord[]>;
+  /** Count executions grouped by status for an owner. */
+  countByOwner(ownerId: string): Promise<Record<ExecutionStatus, number>>;
   update(id: string, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null>;
   updateIfStatus(id: string, expectedStatus: ExecutionStatus, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null>;
   delete(id: string): Promise<boolean>;

@@ -1,105 +1,147 @@
 import { useEffect, useState } from 'react';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import type { ActivityRecord } from '../types';
+import type { ActivityRecord, ExecutionRecord } from '../types';
+import { Skeleton, EmptyState, IntentAmount, DetailCard, Section, StatusBadge, Address } from '../components';
 
-export default function ActivityDetail({ agentId, activityId, onBack }: { agentId: string; activityId: string; onBack?: () => void }) {
+export default function ActivityDetail() {
+  const { agentId, activityId } = useParams<{ agentId: string; activityId: string }>();
+  const navigate = useNavigate();
   const [activity, setActivity] = useState<ActivityRecord | null>(null);
+  const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!agentId || !activityId) return;
+    let cancelled = false;
     api.activityDetail(agentId, activityId)
-      .then((res) => setActivity(res.activity))
-      .catch((e: any) => setError(e.message))
-      .finally(() => setLoading(false));
+      .then((r) => {
+        if (cancelled) return;
+        setActivity(r.activity);
+        if (r.activity) {
+          api.listAgentExecutions(agentId)
+            .then((r2) => setExecutions(r2.executions.filter((e: ExecutionRecord) => e.activityId === activityId)))
+            .catch(() => {});
+        }
+      })
+      .catch((e: any) => {
+        if (!cancelled) setError(e.message ?? 'Failed to load activity');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [agentId, activityId]);
 
   if (loading) return <Skeleton label="Loading activity..." />;
-  if (error) return <EmptyState title="Failed to load activity" message={error} />;
-  if (!activity) return <NotFound />;
+  if (error) return <div className="error-banner">{error}</div>;
+  if (!activity) return (
+    <EmptyState title="Activity not found" message="This activity does not exist or you do not have access." />
+  );
 
-  const amount = activity.intent.amount || '-';
-  const asset = activity.intent.asset || '';
+  const policyDecision = activity.policyDecision;
 
   return (
     <section>
-      {onBack && <button onClick={onBack} style={{ marginBottom: 12 }}>←</button>}
-      <h1>Activity Detail</h1>
-      <div className="cards">
-        <Card title="ID" value={activity.id} />
-        <Card title="Type" value={activity.intent.type} />
-        <Card title="Amount" value={amount + ' ' + asset} />
-        <Card title="Status" value={activity.status} />
-        <Card title="Transaction Hash" value={activity.txHash ?? '-'} />
-        <Card title="Created" value={new Date(activity.createdAt).toLocaleString()} />
+      <div className="page-header">
+        <div>
+          <h1>Activity Detail</h1>
+          <p className="muted">Agent: {agentId?.slice(0, 8)} · Activity: {activityId?.slice(0, 8)}</p>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={() => navigate(-1)}>← Back</button>
       </div>
+
+      <div className="detail-grid">
+        <DetailCard title="Activity ID"><code>{activity.id}</code></DetailCard>
+        <DetailCard title="Status">
+          <StatusBadge status={activity.status} />
+        </DetailCard>
+        <DetailCard title="Intent Type">{activity.intent.type}</DetailCard>
+        <DetailCard title="Amount"><IntentAmount intent={activity.intent} /></DetailCard>
+        <DetailCard title="Destination">
+          {activity.intent.destination
+            ? <Address address={activity.intent.destination} />
+            : '-'}
+        </DetailCard>
+        <DetailCard title="Created">{new Date(activity.createdAt).toLocaleString()}</DetailCard>
+        <DetailCard title="Updated">{new Date(activity.updatedAt).toLocaleString()}</DetailCard>
+      </div>
+
+      {policyDecision && (
+        <Section title="Policy Decision">
+          <DetailCard title="Result">
+            <span className="muted">{policyDecision.result}</span>
+          </DetailCard>
+          {policyDecision.reason && (
+            <DetailCard title="Reason">{policyDecision.reason}</DetailCard>
+          )}
+          {policyDecision.rule && (
+            <DetailCard title="Rule">{policyDecision.rule}</DetailCard>
+          )}
+        </Section>
+      )}
+
       {activity.authorizationStatus && (
-        <div className="block">
-          <h2>Authorization</h2>
-          <div>{activity.authorizationStatus}</div>
-        </div>
+        <Section title="Authorization">
+          <DetailCard title="Status">
+            <span className="muted">{activity.authorizationStatus}</span>
+          </DetailCard>
+        </Section>
       )}
+
       {activity.simulationResult && (
-        <div className="block">
-          <h2>Simulation</h2>
-          <table>
-            <tbody>
-              <tr><td>Result</td><td>{activity.simulationResult.success ? 'ok' : 'failed'}</td></tr>
-              <tr><td>Fee</td><td>{activity.simulationResult.fee}</td></tr>
-              {activity.simulationResult.error && <tr><td>Error</td><td>{activity.simulationResult.error}</td></tr>}
-            </tbody>
-          </table>
-        </div>
+        <Section title="Simulation">
+          <DetailCard title="Success">{activity.simulationResult.success ? 'Yes' : 'No'}</DetailCard>
+          {activity.simulationResult.fee && (
+            <DetailCard title="Fee">{activity.simulationResult.fee} stroops</DetailCard>
+          )}
+          {activity.simulationResult.operations && (
+            <DetailCard title="Operations">{activity.simulationResult.operations}</DetailCard>
+          )}
+        </Section>
       )}
+
       {activity.error && (
-        <div className="block">
-          <h2>Error</h2>
-          <div className="error">{activity.error}</div>
-        </div>
+        <Section title="Error">
+          <DetailCard title="Details">{activity.error}</DetailCard>
+        </Section>
       )}
-      {activity.policyDecision && (
-        <div className="block">
-          <h2>Policy Decision</h2>
-          <table>
+
+      {activity.txHash && (
+        <Section title="Transaction">
+          <DetailCard title="Transaction Hash">
+            <Address address={activity.txHash} />
+          </DetailCard>
+        </Section>
+      )}
+
+      {executions.length > 0 && (
+        <Section title={`Related Executions (${executions.length})`}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Action</th>
+              </tr>
+            </thead>
             <tbody>
-              <tr><td>Result</td><td>{activity.policyDecision.result}</td></tr>
-              <tr><td>Reason</td><td>{activity.policyDecision.reason}</td></tr>
-              <tr><td>Rule</td><td>{activity.policyDecision.rule}</td></tr>
+              {executions.map((e) => (
+                <tr key={e.id}>
+                  <td><code>{e.id.slice(0, 8)}</code></td>
+                  <td><StatusBadge status={e.status} /></td>
+                  <td className="muted">{new Date(e.createdAt).toLocaleString()}</td>
+                  <td>
+                    <Link to={`/executions/${e.id}`} className="btn btn-ghost btn-sm">View</Link>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
-        </div>
+        </Section>
       )}
     </section>
-  );
-}
-
-function NotFound() {
-  return (
-    <div className="empty-state">
-      <h2>Activity not found</h2>
-      <p>This activity does not exist or you do not have access.</p>
-    </div>
-  );
-}
-
-function Card({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="card">
-      <div className="card-title">{title}</div>
-      <div className="card-value">{value}</div>
-    </div>
-  );
-}
-
-function Skeleton({ label }: { label: string }) {
-  return <div className="skeleton">{label}</div>;
-}
-
-function EmptyState({ title, message }: { title: string; message: string }) {
-  return (
-    <div className="empty-state">
-      <h2>{title}</h2>
-      <p>{message}</p>
-    </div>
   );
 }

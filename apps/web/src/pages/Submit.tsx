@@ -74,85 +74,91 @@ export default function Submit() {
 
   return (
     <section>
-      <h1>Submit Intent</h1>
-      {error && <ErrorMessage msg={error} />}
-      {result && <div className="success">{result}</div>}
-      <form onSubmit={handleSubmit}>
-        <label>
-          Intent Type
-          <select value={intentType} onChange={(e) => setIntentType(e.target.value as any)}>
+      <div className="page-header">
+        <div>
+          <h1>Submit Intent</h1>
+          <p className="muted">Create a new intent for an agent to execute.</p>
+        </div>
+      </div>
+
+      {error && <div className="error-banner">{error}</div>}
+      {result && <div className="success-banner">{result}</div>}
+
+      <form onSubmit={handleSubmit} className="surface" style={{ maxWidth: '500px' }}>
+        <div className="field">
+          <label htmlFor="intent-type">Intent Type</label>
+          <select id="intent-type" value={intentType} onChange={(e) => setIntentType(e.target.value as any)} className="select">
             <option value="payment">Payment</option>
             <option value="trustline">Trustline</option>
           </select>
-        </label>
+        </div>
 
-        <label>
-          Agent
-          <select value={selectedAgent} onChange={(e) => setSelectedAgent(e.target.value)}>
+        <div className="field">
+          <label htmlFor="agent-select">Agent</label>
+          <select id="agent-select" value={selectedAgent} onChange={(e) => setSelectedAgent(e.target.value)} className="select">
             {agents.map((a) => <option key={a.id} value={a.id}>{a.displayName || a.id}</option>)}
           </select>
-        </label>
+        </div>
 
         {intentType === 'payment' ? (
           <>
-            <label>
-              Asset
-              <select value={assetCode} onChange={(e) => setAssetCode(e.target.value)}>
+            <div className="field">
+              <label htmlFor="asset">Asset</label>
+              <select id="asset" value={assetCode} onChange={(e) => setAssetCode(e.target.value)} className="select">
                 <option value="XLM">XLM (native)</option>
                 <option value="USDC">USDC</option>
                 <option value="BTC">BTC</option>
                 <option value="other">Other (specify)</option>
               </select>
-            </label>
+            </div>
             {assetCode === 'other' && (
-              <label>
-                Asset Code
-                <input type="text" value={assetCode === 'other' ? '' : assetCode} onChange={(e) => setAssetCode(e.target.value)} placeholder="e.g. USDC" />
-              </label>
+              <div className="field">
+                <label htmlFor="asset-code">Asset Code</label>
+                <input id="asset-code" type="text" value={assetCode === 'other' ? '' : assetCode} onChange={(e) => setAssetCode(e.target.value)} placeholder="e.g. USDC" className="input" />
+              </div>
             )}
             {assetCode !== 'XLM' && (
-              <label>
-                Issuer (Stellar G...)
-                <input type="text" value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="G..." />
-              </label>
+              <div className="field">
+                <label htmlFor="issuer">Issuer (Stellar G...)</label>
+                <input id="issuer" type="text" value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="G..." className="input" />
+              </div>
             )}
-            <label>
-              Amount
-              <input type="number" step="0.0000001" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} />
-            </label>
-            <label>
-              Destination (Stellar G...)
-              <input type="text" value={destination} onChange={(e) => setDestination(e.target.value)} />
-            </label>
+            <div className="field">
+              <label htmlFor="amount">Amount</label>
+              <input id="amount" type="number" step="0.0000001" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} className="input" />
+            </div>
+            <div className="field">
+              <label htmlFor="destination">Destination (Stellar G...)</label>
+              <input id="destination" type="text" value={destination} onChange={(e) => setDestination(e.target.value)} className="input" />
+            </div>
           </>
         ) : (
           <>
-            <label>
-              Asset Code
-              <input type="text" value={trustlineAssetCode} onChange={(e) => setTrustlineAssetCode(e.target.value)} placeholder="e.g. USDC" />
-            </label>
-            <label>
-              Issuer (Stellar G...)
-              <input type="text" value={trustlineIssuer} onChange={(e) => setTrustlineIssuer(e.target.value)} placeholder="G..." />
-            </label>
-            <label>
-              Trustline Limit (optional)
-              <input type="number" step="0.0000001" min="0" value={trustlineLimit} onChange={(e) => setTrustlineLimit(e.target.value)} placeholder="No limit" />
-            </label>
+            <div className="field">
+              <label htmlFor="tl-asset-code">Asset Code</label>
+              <input id="tl-asset-code" type="text" value={trustlineAssetCode} onChange={(e) => setTrustlineAssetCode(e.target.value)} placeholder="e.g. USDC" className="input" />
+            </div>
+            <div className="field">
+              <label htmlFor="tl-issuer">Issuer (Stellar G...)</label>
+              <input id="tl-issuer" type="text" value={trustlineIssuer} onChange={(e) => setTrustlineIssuer(e.target.value)} placeholder="G..." className="input" />
+            </div>
+            <div className="field">
+              <label htmlFor="tl-limit">Trustline Limit (optional)</label>
+              <input id="tl-limit" type="number" step="0.0000001" min="0" value={trustlineLimit} onChange={(e) => setTrustlineLimit(e.target.value)} placeholder="No limit" className="input" />
+            </div>
           </>
         )}
 
-        <label>
-          Reason
-          <input type="text" value={reason} onChange={(e) => setReason(e.target.value)} />
-        </label>
+        <div className="field">
+          <label htmlFor="reason">Reason</label>
+          <input id="reason" type="text" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Monthly payment" className="input" />
+          <div className="field-hint">Minimum 3 characters. Describes the purpose of this intent.</div>
+        </div>
 
-        <button type="submit" disabled={loading}>{loading ? 'Submitting...' : 'Submit'}</button>
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Submitting...' : 'Submit Intent'}</button>
+        </div>
       </form>
     </section>
   );
-}
-
-function ErrorMessage({ msg }: { msg: string }) {
-  return <div className="error">{msg}</div>;
 }

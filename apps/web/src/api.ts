@@ -113,6 +113,11 @@ export const api = {
       `/agents/${encodeURIComponent(agentId)}/policy`
     ),
 
+  getAgentSpending: (agentId: string) =>
+    request<{ agentId: string; spending: Record<string, { used: number; limit: string; remaining: number }> }>(
+      `/agents/${encodeURIComponent(agentId)}/spending`
+    ),
+
   updatePolicy: (agentId: string, policy: Partial<PolicyRules>) =>
     request<{ agentId: string; policy: PolicyRules; version: number }>(
       `/agents/${encodeURIComponent(agentId)}/policy`,
@@ -126,6 +131,9 @@ export const api = {
     const qs = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : '';
     return request<{ approvals: ApprovalRecord[] }>(`/approvals${qs}`);
   },
+
+  approvalDetail: (approvalId: string) =>
+    request<{ approval: ApprovalRecord }>(`/approvals/${encodeURIComponent(approvalId)}`),
 
   approve: (approvalId: string) =>
     request<{ approvalId: string; activityId: string; status: string; message: string }>(
@@ -179,6 +187,15 @@ export const api = {
 
   getQueueStatus: () =>
     request<QueueSummary>('/agent-queue'),
+
+  getOverviewAttention: () =>
+    request<{
+      pendingApprovals: number;
+      failedExecutions: number;
+      deadLetterExecutions: number;
+      retryingExecutions: number;
+      stuckExecutions: number;
+    }>('/overview/attention'),
 
   retryExecution: (executionId: string) =>
     request<{ execution: ExecutionRecord; message: string }>(

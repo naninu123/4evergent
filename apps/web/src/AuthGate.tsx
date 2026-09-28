@@ -6,16 +6,25 @@ interface AuthProps {
   children: React.ReactNode;
 }
 
+interface AuthState {
+  authenticated: boolean | null;
+  loginError: string | null;
+  loading: boolean;
+}
+
+/**
+ * AuthGate — validates session against a PROTECTED endpoint.
+ * Does NOT treat public /health as an auth check.
+ */
 export function AuthGate({ children }: AuthProps) {
-  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [authenticated, setAuthenticated] = useState<AuthState['authenticated']>(null);
+  const [loginError, setLoginError] = useState<AuthState['loginError']>(null);
+  const [loading, setLoading] = useState<AuthState['loading']>(false);
 
   useEffect(() => {
     const token = getStoredToken();
     if (token) {
-      // Verify token is still valid by hitting health endpoint
-      api.health()
+      api.listAgents()
         .then(() => setAuthenticated(true))
         .catch(() => {
           clearAuth();
@@ -40,18 +49,18 @@ export function AuthGate({ children }: AuthProps) {
       return;
     }
 
-    // Store token temporarily and test it
     storeAuth(token.trim(), 'pending');
 
     try {
-      const _health = await api.health();
-      // If we get here, token is valid
+      // Validate against a PROTECTED endpoint: public /health does not
+      // exercise the token, so it cannot prove the session is valid.
+      await api.listAgents();
       const subject = getStoredSubject() ?? 'authenticated-user';
       storeAuth(token.trim(), subject);
       setAuthenticated(true);
     } catch (_err) {
       clearAuth();
-      setLoginError('Invalid token or authentication failed. Please check your credentials.');
+      setLoginError('Invalid token or authentication failed.');
     } finally {
       setLoading(false);
     }
@@ -80,7 +89,7 @@ export function AuthGate({ children }: AuthProps) {
         <form className="auth-box" onSubmit={handleLogin}>
           <div className="auth-logo">▲</div>
           <h1>4evergent</h1>
-          <p className="muted">Enter your access token to continue</p>
+          <p className="muted">Enter your access token to continue.</p>
 
           <div className="auth-field">
             <label htmlFor="token">Access Token</label>
@@ -94,7 +103,7 @@ export function AuthGate({ children }: AuthProps) {
             />
           </div>
 
-          {loginError && <div className="error">{loginError}</div>}
+          {loginError && <div className="error-banner">{loginError}</div>}
 
           <button type="submit" disabled={loading} className="auth-submit">
             {loading ? 'Authenticating...' : 'Sign In'}

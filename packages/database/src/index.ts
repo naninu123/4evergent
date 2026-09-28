@@ -28,6 +28,8 @@ export interface ActivityStore {
   recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }>;
   /** Atomically reserve daily spending. Returns true if reservation succeeded, false if limit would be exceeded. */
   reserveDailySpending(agentId: string, asset: string, amount: string, limit: string): Promise<boolean>;
+  /** Get current day's total spent for an agent. */
+  getDailySpending(agentId: string, asset: string): Promise<number | null>;
 }
 
 /**
@@ -193,6 +195,14 @@ export class InMemoryActivityStore implements ActivityStore {
     });
     this.dailySpendingLock = result.catch(() => undefined);
     return result;
+  }
+
+  async getDailySpending(agentId: string, asset: string): Promise<number | null> {
+    const now = new Date();
+    const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+      .toISOString().slice(0, 10);
+    const mapKey = `${agentId}:${asset}:${day}`;
+    return this.dailySpending.get(mapKey) ?? null;
   }
 
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
