@@ -37,5 +37,5 @@ All notable changes to this project are recorded in this file.
 - Web dashboard (React + TypeScript + Vite)
 - GitHub Actions CI (build/typecheck/test)
 
-[Unreleased]: https://github.com/SaboLabs/4evergent/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/SaboLabs/4evergent/releases/tag/v0.1.0
+[Unreleased]: https://github.com/naninu123/4evergent/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/naninu123/4evergent/releases/tag/v0.1.0
