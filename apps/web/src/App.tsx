@@ -1,121 +1,260 @@
-import { useState } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { useState, useEffect, useCallback } from 'react';
+import { getStoredToken, storeAuth, clearAuth, getStoredSubject } from './auth';
+import { api } from './api';
+import Landing from './pages/Landing';
 import Overview from './pages/Overview';
 import Agents from './pages/Agents';
 import AgentDetail from './pages/AgentDetail';
 import Activity from './pages/Activity';
 import ActivityDetail from './pages/ActivityDetail';
 import Approvals from './pages/Approvals';
-import Submit from './pages/Submit';
+import ApprovalDetail from './pages/ApprovalDetail';
 import Executions from './pages/Executions';
 import ExecutionDetail from './pages/ExecutionDetail';
+import Submit from './pages/Submit';
 
-type Tab = 'overview' | 'agents' | 'agent-detail' | 'activity' | 'activity-detail' | 'approvals' | 'submit' | 'executions' | 'execution-detail';
+/* ==========================================================================
+   Auth inline form (login screen shown when unauthenticated)
+   ========================================================================== */
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'agents', label: 'Agents' },
-  { id: 'activity', label: 'Activity' },
-  { id: 'executions', label: 'Executions' },
-  { id: 'approvals', label: 'Approvals' },
-  { id: 'submit', label: 'Submit Intent' },
-];
+function AuthInline() {
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
 
-export default function App() {
-  const [tab, setTab] = useState<Tab>('overview');
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
-  const [selectedActivity, setSelectedActivity] = useState<{ agentId: string; activityId: string } | null>(null);
+  const handleLogin = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setLoading(true);
+    setLoginError(null);
 
-  const handleAgentClick = (agentId: string) => {
-    setSelectedAgentId(agentId);
-    setTab('agent-detail');
-  };
+    const formData = new FormData(e.currentTarget);
+    const token = formData.get('token') as string;
 
-  const handleExecutionClick = (executionId: string) => {
-    setSelectedExecutionId(executionId);
-    setTab('execution-detail');
-  };
-
-  const handleActivityClick = (agentId: string, activityId: string) => {
-    setSelectedActivity({ agentId, activityId });
-    setTab('activity-detail');
-  };
-
-  const handleBack = () => {
-    if (tab === 'execution-detail') {
-      setTab('executions');
-    } else if (tab === 'activity-detail') {
-      setTab('activity');
-    } else if (tab === 'agent-detail') {
-      setTab('agents');
+    if (!token || token.trim().length === 0) {
+      setLoginError('Please enter a token');
+      setLoading(false);
+      return;
     }
-  };
+
+    storeAuth(token.trim(), 'pending');
+
+    try {
+      // Validate against a PROTECTED endpoint (not public /health).
+      await api.listAgents();
+      const subject = getStoredSubject() ?? 'authenticated-user';
+      storeAuth(token.trim(), subject);
+      navigate('/overview');
+    } catch (_err) {
+      clearAuth();
+      setLoginError('Invalid token or authentication failed.');
+    } finally {
+      setLoading(false);
+    }
+  }, [navigate]);
 
   return (
-    <div className="layout">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark">▲</span>
-          <span className="brand-name">4evergent</span>
+    <div className="auth-screen">
+      <form className="auth-box" onSubmit={handleLogin}>
+        <div className="auth-logo">▲</div>
+        <h1>4evergent</h1>
+        <p className="muted">Autonomous financial agents, with policy-controlled execution.</p>
+
+        <div className="auth-field">
+          <label htmlFor="token">Access Token</label>
+          <input
+            id="token"
+            name="token"
+            type="password"
+            placeholder="Enter your Bearer token"
+            autoComplete="off"
+            autoFocus
+          />
         </div>
-        <span className="badge badge-info">Testnet MVP</span>
+
+        {loginError && <div className="error-banner">{loginError}</div>}
+
+        <button type="submit" disabled={loading} className="auth-submit">
+          {loading ? 'Authenticating...' : 'Sign In'}
+        </button>
+
+        <div className="auth-help">
+          <p className="muted">Development: Any non-empty token works with DevAuthProvider.</p>
+          <p className="muted">Production: Use a valid API key or JWT.</p>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ==========================================================================
+   Require Auth — validates session against a protected endpoint
+   ========================================================================== */
+
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    const token = getStoredToken();
+    if (!token) {
+      setAuthenticated(false);
+      return;
+    }
+    // Validate against a PROTECTED endpoint (not public /health).
+    api.listAgents()
+      .then(() => setAuthenticated(true))
+      .catch(() => {
+        clearAuth();
+        setAuthenticated(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (authenticated === false) {
+      navigate('/', { state: { from: location.pathname } });
+    }
+  }, [authenticated, navigate, location.pathname]);
+
+  if (authenticated === null) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-box">
+          <div className="auth-logo">▲</div>
+          <h1>4evergent</h1>
+          <p className="muted">Verifying session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (authenticated === false) {
+    return <AuthInline />;
+  }
+
+  return <>{children}</>;
+}
+
+/* ==========================================================================
+   Layout
+   ========================================================================== */
+
+function Layout({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+  const currentPath = location.pathname;
+
+  const navItems = [
+    { path: '/overview', label: 'Overview', section: 'OPERATE' },
+    { path: '/approvals', label: 'Approvals', section: 'OPERATE' },
+    { path: '/executions', label: 'Executions', section: 'OPERATE' },
+    { path: '/activity', label: 'Activity', section: 'OPERATE' },
+    { path: '/submit', label: 'Submit Intent', section: 'OPERATE' },
+    { path: '/agents', label: 'Agents', section: 'CONFIGURE' },
+  ];
+
+  const sections = [
+    { label: 'OPERATE', items: navItems.filter(i => i.section === 'OPERATE') },
+    { label: 'CONFIGURE', items: navItems.filter(i => i.section === 'CONFIGURE') },
+  ];
+
+  return (
+    <div className="shell">
+      <header className="topbar">
+        <div className="topbar-left">
+          <div className="brand">
+            <span className="brand-mark">▲</span>
+            <span className="brand-name">4evergent</span>
+          </div>
+          <span className="env-badge">Testnet</span>
+        </div>
+        <OperatorBadge />
       </header>
-      <div className="body">
-        <nav className="sidebar">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              className={`nav-item ${tab === t.id ? 'active' : ''}`}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
+      <div className="shell-body">
+        <nav className="sidebar" aria-label="Main navigation">
+          {sections.map((section) => (
+            <div key={section.label}>
+              <div className="nav-section-title">{section.label}</div>
+              {section.items.map((item) => (
+                <a
+                  key={item.path}
+                  href={item.path}
+                  className={`nav-item ${currentPath.startsWith(item.path) ? 'active' : ''}`}
+                  aria-current={currentPath.startsWith(item.path) ? 'page' : undefined}
+                >
+                  <span className="nav-text">{item.label}</span>
+                </a>
+              ))}
+            </div>
           ))}
         </nav>
-        <main className="content">
-          {tab === 'overview' && <Overview />}
-          {tab === 'agents' && <Agents onAgentClick={handleAgentClick} />}
-          {tab === 'agent-detail' && selectedAgentId && <AgentDetail agentId={selectedAgentId} />}
-          {tab === 'activity' && <Activity onActivityClick={handleActivityClick} />}
-          {tab === 'activity-detail' && selectedActivity && (
-            <ActivityDetail
-              agentId={selectedActivity.agentId}
-              activityId={selectedActivity.activityId}
-              onBack={handleBack}
-            />
-          )}
-          {tab === 'executions' && <Executions onExecutionClick={handleExecutionClick} />}
-          {tab === 'execution-detail' && selectedExecutionId && (
-            <ExecutionDetail executionId={selectedExecutionId} onBack={handleBack} />
-          )}
-          {tab === 'approvals' && <Approvals />}
-          {tab === 'submit' && <Submit />}
+        <main className="main">
+          {children}
         </main>
       </div>
     </div>
   );
 }
 
-export function ErrorDisplay({ status, message }: { status?: number; message: string }) {
-  if (status === 401 || status === 403) {
-    return (
-      <div className="error">
-        <strong>Access Denied</strong>
-        <p>{message}</p>
-      </div>
-    );
-  }
-  if (status === 404) {
-    return (
-      <div className="empty-state">
-        <h2>Not Found</h2>
-        <p>{message}</p>
-      </div>
-    );
-  }
+function OperatorBadge() {
+  const [subject, setSubject] = useState<string | null>(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    setSubject(getStoredSubject());
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    clearAuth();
+    navigate('/');
+  }, [navigate]);
+
   return (
-    <div className="error">
-      <p>{message}</p>
+    <div className="topbar-right">
+      {subject && <span className="operator-badge" title={`Operator: ${subject}`}>{subject}</span>}
+      <button className="logout-btn" onClick={handleLogout} title="Sign out">
+        Sign Out
+      </button>
     </div>
+  );
+}
+
+/* ==========================================================================
+   Main App Router
+   ========================================================================== */
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* Public landing page */}
+        <Route path="/" element={<Landing />} />
+
+        {/* Protected application */}
+        <Route
+          path="/*"
+          element={
+            <RequireAuth>
+              <Layout>
+                <Routes>
+                  <Route path="/overview" element={<Overview />} />
+                  <Route path="/approvals" element={<Approvals />} />
+                  <Route path="/approvals/:approvalId" element={<ApprovalDetail />} />
+                  <Route path="/executions" element={<Executions />} />
+                  <Route path="/executions/:executionId" element={<ExecutionDetail />} />
+                  <Route path="/activity" element={<Activity />} />
+                  <Route path="/agents/:agentId/activity/:activityId" element={<ActivityDetail />} />
+                  <Route path="/agents" element={<Agents />} />
+                  <Route path="/agents/:agentId" element={<AgentDetail />} />
+                  <Route path="/submit" element={<Submit />} />
+                  <Route path="/login" element={<Navigate to="/overview" replace />} />
+                  <Route path="*" element={<Navigate to="/overview" replace />} />
+                </Routes>
+              </Layout>
+            </RequireAuth>
+          }
+        />
+      </Routes>
+    </BrowserRouter>
   );
 }

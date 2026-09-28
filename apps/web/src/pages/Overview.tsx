@@ -1,24 +1,47 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { Card, Skeleton, EmptyState, StatusBadge, Section } from '../components';
+import type { AgentRecord, ActivityRecord, ApprovalRecord } from '../types';
+
+interface AttentionCounts {
+  pendingApprovals: number;
+  failedExecutions: number;
+  deadLetterExecutions: number;
+  retryingExecutions: number;
+  stuckExecutions: number;
+}
 
 export default function Overview() {
   const [health, setHealth] = useState<string | null>(null);
-  const [agents, setAgents] = useState<any[] | null>(null);
-  const [approvals, setApprovals] = useState<any[] | null>(null);
+  const [agents, setAgents] = useState<AgentRecord[]>([]);
+  const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
+  const [activity, setActivity] = useState<ActivityRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [attention, setAttention] = useState<AttentionCounts | null>(null);
+  const [attentionError, setAttentionError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const [h, a, ap] = await Promise.all([
+        const [h, a, ap, act] = await Promise.all([
           api.health(),
           api.listAgents(),
           api.listApprovals('pending_approval'),
+          api.listActivity(),
         ]);
         setHealth(h.signerAccountId);
         setAgents(a.agents);
         setApprovals(ap.approvals);
+        setActivity(act.activity);
+
+        try {
+          const att = await api.getOverviewAttention();
+          setAttention(att);
+        } catch (e: any) {
+          setAttentionError(e.message ?? 'Failed to load operational status');
+        }
       } catch (e: any) {
         setError(e.message ?? 'Failed to fetch');
       } finally {
@@ -30,43 +53,114 @@ export default function Overview() {
   if (loading) return <Skeleton label="Connecting to API..." />;
   if (error) return <EmptyState title="API Unavailable" message={error} />;
 
-  const activeAgents = agents?.filter((a) => a.status === 'active').length ?? 0;
-  const pausedAgents = agents?.filter((a) => a.status === 'paused').length ?? 0;
-  const disabledAgents = agents?.filter((a) => a.status === 'disabled').length ?? 0;
-  const pendingApprovals = approvals?.length ?? 0;
+  const activeAgents = agents.filter((a) => a.status === 'active').length;
+  const pausedAgents = agents.filter((a) => a.status === 'paused').length;
+  const disabledAgents = agents.filter((a) => a.status === 'disabled').length;
+  const pendingApprovals = approvals.length;
+
+  const hasAttention = attention && (
+    attention.pendingApprovals > 0 ||
+    attention.failedExecutions > 0 ||
+    attention.deadLetterExecutions > 0 ||
+    attention.retryingExecutions > 0 ||
+    attention.stuckExecutions > 0
+  );
+
+  const recentActivity = activity.slice(0, 10);
+  const hasRecentActivity = recentActivity.length > 0;
 
   return (
     <section>
-      <h1>Overview</h1>
-      <div className="cards">
+      <div className="page-header">
+        <div>
+          <h1>Overview</h1>
+          <p className="muted">What needs your attention right now.</p>
+        </div>
+      </div>
+
+      <div className="card-grid">
         <Card title="Signer Account" value={health ? health.slice(0, 12) + '...' : 'unknown'} />
         <Card title="Active Agents" value={String(activeAgents)} />
         <Card title="Paused Agents" value={String(pausedAgents)} />
         <Card title="Disabled Agents" value={String(disabledAgents)} />
         <Card title="Pending Approvals" value={String(pendingApprovals)} />
       </div>
+
+      <Section title="Needs Attention">
+        {attention === null && !attentionError ? (
+          <Skeleton label="Loading operational status..." />
+        ) : attentionError ? (
+          <div className="error-banner">{attentionError}</div>
+        ) : hasAttention ? (
+          <table className="table">
+            <thead>
+              <tr><th>Issue</th><th>Count</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              {attention!.pendingApprovals > 0 && (
+                <tr>
+                  <td>Pending approvals</td>
+                  <td>{attention!.pendingApprovals}</td>
+                  <td><Link to="/approvals" className="btn btn-ghost btn-sm">Review</Link></td>
+                </tr>
+              )}
+              {attention!.failedExecutions > 0 && (
+                <tr>
+                  <td>Failed executions</td>
+                  <td>{attention!.failedExecutions}</td>
+                  <td><Link to="/executions" className="btn btn-ghost btn-sm">Review</Link></td>
+                </tr>
+              )}
+              {attention!.retryingExecutions > 0 && (
+                <tr>
+                  <td>Retrying executions</td>
+                  <td>{attention!.retryingExecutions}</td>
+                  <td><Link to="/executions" className="btn btn-ghost btn-sm">Review</Link></td>
+                </tr>
+              )}
+              {attention!.deadLetterExecutions > 0 && (
+                <tr>
+                  <td>Dead-letter executions</td>
+                  <td>{attention!.deadLetterExecutions}</td>
+                  <td><Link to="/executions" className="btn btn-ghost btn-sm">Review</Link></td>
+                </tr>
+              )}
+              {attention!.stuckExecutions > 0 && (
+                <tr>
+                  <td>Stuck executions</td>
+                  <td>{attention!.stuckExecutions}</td>
+                  <td><Link to="/executions" className="btn btn-ghost btn-sm">Review</Link></td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty-state">
+            <h3>All systems operational</h3>
+            <p>No pending approvals or failed executions.</p>
+          </div>
+        )}
+      </Section>
+
+      {hasRecentActivity && (
+        <Section title="Recent Activity">
+          <table className="table">
+            <thead>
+              <tr><th>Activity</th><th>Agent</th><th>Status</th><th>Time</th></tr>
+            </thead>
+            <tbody>
+              {recentActivity.map((a) => (
+                <tr key={a.id}>
+                  <td><code>{a.id.slice(0, 8)}</code></td>
+                  <td><code>{a.agentId.slice(0, 8)}</code></td>
+                  <td><StatusBadge status={a.status} /></td>
+                  <td className="muted">{new Date(a.createdAt).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      )}
     </section>
-  );
-}
-
-export function Card({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="card">
-      <div className="card-title">{title}</div>
-      <div className="card-value">{value}</div>
-    </div>
-  );
-}
-
-export function Skeleton({ label }: { label: string }) {
-  return <div className="skeleton">{label}</div>;
-}
-
-export function EmptyState({ title, message }: { title: string; message: string }) {
-  return (
-    <div className="empty-state">
-      <h2>{title}</h2>
-      <p>{message}</p>
-    </div>
   );
 }

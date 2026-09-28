@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
 import type { ExecutionRecord, ExecutionStatus } from '../types';
+import { Skeleton, EmptyState, DetailCard, IntentAmount } from '../components';
 
 function statusLabel(status: ExecutionStatus): string {
   switch (status) {
@@ -26,22 +28,17 @@ function statusClass(status: ExecutionStatus): string {
 
 function statusDescription(status: ExecutionStatus): string | null {
   switch (status) {
-    case 'queued':
-      return 'Execution is waiting in the queue.';
-    case 'executing':
-      return 'Execution is being processed by the worker.';
-    case 'submitted':
-      return 'Transaction submitted to Stellar. Waiting for on-chain confirmation.';
-    case 'confirmed':
-      return 'Transaction confirmed on-chain.';
-    case 'failed':
-      return 'Transaction failed on-chain.';
-    case 'dead_letter':
-      return 'Execution failed and will not be retried automatically.';
+    case 'queued': return 'Execution is waiting in the queue.';
+    case 'executing': return 'Execution is being processed by the worker.';
+    case 'submitted': return 'Transaction submitted to Stellar. Waiting for on-chain confirmation.';
+    case 'confirmed': return 'Transaction confirmed on-chain.';
+    case 'failed': return 'Transaction failed on-chain.';
+    case 'dead_letter': return 'Execution failed and will not be retried automatically.';
   }
 }
 
-export default function ExecutionDetail({ executionId, onBack }: { executionId: string; onBack?: () => void }) {
+export default function ExecutionDetail() {
+  const { executionId } = useParams<{ executionId: string }>();
   const [execution, setExecution] = useState<ExecutionRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,15 +46,18 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!executionId) return;
     api.getExecution(executionId)
       .then((r) => setExecution(r.execution))
       .catch((e: any) => setError(e.message ?? 'Failed to load execution'))
       .finally(() => setLoading(false));
   }, [executionId]);
 
-  if (loading) return <Skeleton label="Loading execution..."/>;
-  if (error) return <EmptyState title="Failed to load execution" message={error}/>;
-  if (!execution) return <EmptyState title="Execution not found" message="This execution does not exist or you do not have access."/>;
+  if (loading) return <Skeleton label="Loading execution..." />;
+  if (error) return <EmptyState title="Failed to load execution" message={error} />;
+  if (!execution) return (
+    <EmptyState title="Execution not found" message="This execution does not exist or you do not have access." />
+  );
 
   const desc = statusDescription(execution.status);
   const canRetry = execution.status === 'failed' || execution.status === 'dead_letter';
@@ -65,6 +65,7 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
   const isProcessing = actionLoading !== null;
 
   const handleRetry = async () => {
+    if (!executionId || actionLoading !== null) return;
     setActionLoading('retry');
     setActionError(null);
     try {
@@ -73,7 +74,6 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
     } catch (e: any) {
       if (e.status === 409) {
         setActionError(e.message ?? 'Conflict: execution state changed');
-        // Refresh execution state after conflict
         try {
           const r = await api.getExecution(executionId);
           setExecution(r.execution);
@@ -87,6 +87,7 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
   };
 
   const handleCancel = async () => {
+    if (!executionId || actionLoading !== null) return;
     setActionLoading('cancel');
     setActionError(null);
     try {
@@ -95,7 +96,6 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
     } catch (e: any) {
       if (e.status === 409) {
         setActionError(e.message ?? 'Conflict: execution state changed');
-        // Refresh execution state after conflict
         try {
           const r = await api.getExecution(executionId);
           setExecution(r.execution);
@@ -110,97 +110,75 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
 
   return (
     <section>
-      <h1>
-        {onBack && <button onClick={onBack} style={{ marginRight: 8 }}>←</button>}
-        Execution <code>{execution.id.slice(0, 8)}</code>
-      </h1>
+      <div className="page-header">
+        <div>
+          <h1>Execution <code>{execution.id.slice(0, 8)}</code></h1>
+          <p className="muted">
+            Agent: {execution.agentId.slice(0, 8)} · {execution.intent.type}
+          </p>
+        </div>
+        <Link to="/executions" className="btn btn-ghost btn-sm">← Executions</Link>
+      </div>
 
       <div className="detail-grid">
         <DetailCard title="Status">
-          <span className={`badge ${statusClass(execution.status)}`}>
-            {statusLabel(execution.status)}
-          </span>
-          {desc && <p className="status-desc">{desc}</p>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-xs)' }}>
+            <span className={`badge ${statusClass(execution.status)}`}>{statusLabel(execution.status)}</span>
+            {desc && <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>{desc}</span>}
+          </div>
         </DetailCard>
-        <DetailCard title="Agent"><code>{execution.agentId}</code></DetailCard>
+        <DetailCard title="Agent"><code>{execution.agentId.slice(0, 8)}</code></DetailCard>
         <DetailCard title="Intent">{execution.intent.type}</DetailCard>
-        <DetailCard title="Amount">
-          {execution.intent.type === 'payment'
-            ? `${execution.intent.amount} ${(execution.intent.assetDetails as { code?: string } | undefined)?.code ?? execution.intent.asset}`
-            : '-'}
-        </DetailCard>
+        <DetailCard title="Amount"><IntentAmount intent={execution.intent} /></DetailCard>
         <DetailCard title="Transaction Hash">
-          {execution.txHash ? <code className="copyable" title="Click to copy" onClick={() => navigator.clipboard?.writeText(execution.txHash as string)}>{(execution.txHash as string).slice(0, 12)}…{(execution.txHash as string).slice(-8)}</code> : '-'}
+          {execution.txHash ? <code className="address">{execution.txHash.slice(0, 12)}…{execution.txHash.slice(-8)}</code> : '-'}
         </DetailCard>
-        <DetailCard title="Attempt">
-          {execution.attempt > 0 ? String(execution.attempt) : '-'}
-        </DetailCard>
+        <DetailCard title="Attempt">{execution.attempt > 0 ? String(execution.attempt) : '-'}</DetailCard>
         <DetailCard title="Created">{new Date(execution.createdAt).toLocaleString()}</DetailCard>
         <DetailCard title="Updated">{new Date(execution.updatedAt).toLocaleString()}</DetailCard>
-        <DetailCard title="Started">
-          {execution.startedAt ? new Date(execution.startedAt).toLocaleString() : '-'}
-        </DetailCard>
-        <DetailCard title="Completed">
-          {execution.completedAt ? new Date(execution.completedAt).toLocaleString() : '-'}
-        </DetailCard>
-        <DetailCard title="Error">
-          {execution.error ?? '-'}
-        </DetailCard>
+        {execution.startedAt && (
+          <DetailCard title="Started">{new Date(execution.startedAt).toLocaleString()}</DetailCard>
+        )}
+        {execution.completedAt && (
+          <DetailCard title="Completed">{new Date(execution.completedAt).toLocaleString()}</DetailCard>
+        )}
+        {execution.error && (
+          <DetailCard title="Error">{execution.error}</DetailCard>
+        )}
       </div>
 
+      {/* Cross-link to originating activity */}
+      {execution.activityId && (
+        <div style={{ marginTop: 'var(--space-md)', padding: 'var(--space-sm)', background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
+          <span className="muted" style={{ fontSize: 'var(--text-sm)' }}>
+            Activity: <code>{execution.activityId.slice(0, 8)}</code>
+          </span>
+          {' '}
+          <Link to={`/agents/${execution.agentId}/activity/${execution.activityId}`} className="btn btn-ghost btn-sm">
+            View Activity
+          </Link>
+        </div>
+      )}
+
       {/* Operator Recovery Actions */}
-      <div className="action-bar" style={{ marginTop: 24, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+      <div style={{ marginTop: 'var(--space-lg)', display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap', alignItems: 'center' }}>
         {canRetry && (
-          <button
-            className="btn btn-primary"
-            disabled={isProcessing || actionLoading === 'retry'}
-            onClick={handleRetry}
-          >
+          <button className="btn btn-primary" disabled={isProcessing || actionLoading === 'retry'} onClick={handleRetry}>
             {actionLoading === 'retry' ? 'Retrying...' : 'Retry Execution'}
           </button>
         )}
         {canCancel && (
-          <button
-            className="btn btn-danger"
-            disabled={isProcessing || actionLoading === 'cancel'}
-            onClick={handleCancel}
-          >
+          <button className="btn btn-danger" disabled={isProcessing || actionLoading === 'cancel'} onClick={handleCancel}>
             {actionLoading === 'cancel' ? 'Cancelling...' : 'Cancel Execution'}
           </button>
         )}
         {!canRetry && !canCancel && (
-          <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>
-            No recovery actions available for this status.
-          </span>
+          <span className="muted">No recovery actions available for this status.</span>
         )}
         {actionError && (
-          <span className="error-message" style={{ width: '100%', color: 'var(--color-error)', fontSize: 14 }}>
-            {actionError}
-          </span>
+          <div className="error-banner" style={{ width: '100%' }}>{actionError}</div>
         )}
       </div>
     </section>
-  );
-}
-
-function DetailCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="detail-card">
-      <div className="detail-card-title">{title}</div>
-      <div className="detail-card-value">{children}</div>
-    </div>
-  );
-}
-
-function Skeleton({ label }: { label: string }) {
-  return <div className="skeleton">{label}</div>;
-}
-
-function EmptyState({ title, message }: { title: string; message: string }) {
-  return (
-    <div className="empty-state">
-      <h2>{title}</h2>
-      <p>{message}</p>
-    </div>
   );
 }

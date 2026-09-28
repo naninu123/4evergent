@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import type { AgentRecord } from '../types';
+import { StatusBadge, Skeleton, EmptyState } from '../components';
 
-export default function Agents({ onAgentClick }: { onAgentClick?: (agentId: string) => void }) {
+export default function Agents() {
   const [agents, setAgents] = useState<AgentRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -11,6 +13,7 @@ export default function Agents({ onAgentClick }: { onAgentClick?: (agentId: stri
   const [capabilities, setCapabilities] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   const load = () => {
     api.listAgents()
@@ -33,7 +36,7 @@ export default function Agents({ onAgentClick }: { onAgentClick?: (agentId: stri
       setCapabilities('');
       setShowCreate(false);
       setAgents((prev) => [...(prev ?? []), res.agent]);
-      onAgentClick?.(res.agent.id);
+      navigate(`/agents/${res.agent.id}`);
     } catch (e: any) {
       setCreateError(e.message);
     } finally {
@@ -46,34 +49,46 @@ export default function Agents({ onAgentClick }: { onAgentClick?: (agentId: stri
 
   return (
     <section>
-      <h1>Agents</h1>
-      {agents.length === 0 && !showCreate ? (
-        <div className="empty-state">
-          <h2>No agents yet</h2>
-          <p>Create your first agent to start submitting intents and schedules.</p>
-          <button onClick={() => setShowCreate(true)}>Create Agent</button>
+      <div className="page-header">
+        <div>
+          <h1>Agents</h1>
+          <p className="muted">Configure and manage your financial agents.</p>
         </div>
-      ) : (
-        <table>
-          <thead>
-            <tr><th>ID</th><th>Name</th><th>Address</th><th>Capabilities</th><th>Status</th></tr>
-          </thead>
-          <tbody>
-            {agents.map((a) => (
-              <tr key={a.id} onClick={() => onAgentClick?.(a.id)} style={{ cursor: onAgentClick ? 'pointer' : undefined }}>
-                <td><code>{a.id}</code></td>
-                <td>{a.displayName}</td>
-                <td><code>{a.stellarAddress}</code></td>
-                <td>{a.capabilities.join(', ')}</td>
-                <td><StatusBadge status={a.status} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
+          Create Agent
+        </button>
+      </div>
 
-      {agents.length > 0 && !showCreate && (
-        <button onClick={() => setShowCreate(true)}>Create Agent</button>
+      {agents.length === 0 && !showCreate ? (
+        <EmptyState
+          title="No agents yet"
+          message="Create your first agent to start submitting intents and schedules."
+        />
+      ) : (
+        <div className="table-wrapper">
+          <table className="table">
+            <thead>
+              <tr><th>Name</th><th>Address</th><th>Capabilities</th><th>Status</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {agents.map((a) => (
+                <tr key={a.id}>
+                  <td>
+                    <Link to={`/agents/${a.id}`} className="table-row-link">
+                      {a.displayName}
+                    </Link>
+                  </td>
+                  <td><code>{a.stellarAddress}</code></td>
+                  <td>{a.capabilities.join(', ')}</td>
+                  <td><StatusBadge status={a.status} /></td>
+                  <td>
+                    <Link to={`/agents/${a.id}`} className="btn btn-ghost btn-sm">View</Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {showCreate && (
@@ -81,63 +96,54 @@ export default function Agents({ onAgentClick }: { onAgentClick?: (agentId: stri
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>Create Agent</h2>
             <form onSubmit={handleCreate}>
-              <label>
-                Name
+              <div className="field">
+                <label htmlFor="agent-name">Name</label>
                 <input
+                  id="agent-name"
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="My Agent"
                   required
+                  className="input"
                 />
-              </label>
-              <label>
-                Description
+              </div>
+
+              <div className="field">
+                <label htmlFor="agent-description">Description (optional)</label>
                 <input
+                  id="agent-description"
                   type="text"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Optional description"
+                  placeholder="What this agent manages..."
+                  className="input"
                 />
-              </label>
-              <label>
-                Capabilities (comma-separated)
+              </div>
+
+              <div className="field">
+                <label htmlFor="agent-capabilities">Capabilities (comma-separated)</label>
                 <input
+                  id="agent-capabilities"
                   type="text"
                   value={capabilities}
                   onChange={(e) => setCapabilities(e.target.value)}
-                  placeholder="payment"
+                  placeholder="payment, trustline"
+                  className="input"
                 />
-              </label>
-              {createError && <div className="error">{createError}</div>}
+                <div className="field-hint">Capabilities this agent can execute.</div>
+              </div>
+
+              {createError && <div className="error-banner">{createError}</div>}
+
               <div className="form-actions">
-                <button type="button" onClick={() => setShowCreate(false)} disabled={creating}>Cancel</button>
-                <button type="submit" disabled={creating}>{creating ? 'Creating...' : 'Create'}</button>
+                <button type="button" className="btn btn-ghost" onClick={() => setShowCreate(false)} disabled={creating}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={creating}>{creating ? 'Creating...' : 'Create'}</button>
               </div>
             </form>
           </div>
         </div>
       )}
     </section>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const cls = status === 'active' ? 'badge-ok'
-    : status === 'paused' ? 'badge-warn'
-    : 'badge-err';
-  return <span className={'badge ' + cls}>{status}</span>;
-}
-
-function Skeleton({ label }: { label: string }) {
-  return <div className="skeleton">{label}</div>;
-}
-
-function EmptyState({ title, message }: { title: string; message: string }) {
-  return (
-    <div className="empty-state">
-      <h2>{title}</h2>
-      <p>{message}</p>
-    </div>
   );
 }

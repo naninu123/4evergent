@@ -1,8 +1,114 @@
 import { useEffect, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { api } from '../api';
 import type { AgentRecord, ActivityRecord, PolicyRules } from '../types';
 import { ScheduleManagement } from './ScheduleManagement';
 import { ExecutionList } from './ExecutionList';
+import { StatusBadge, Skeleton, EmptyState } from '../components';
+
+type SpendingData = Record<string, { used: number; limit: string; remaining: number }>;
+
+function SpendingCard({ asset, data }: { asset: string; data: SpendingData[string] }) {
+  const limitNum = parseFloat(data.limit) || 0;
+  const pct = limitNum > 0 ? Math.min(100, Math.round((data.used / limitNum) * 100)) : 0;
+  return (
+    <div className="spending-asset">
+      <div className="spending-header">
+        <span className="spending-asset-name">{asset}</span>
+        <span className="spending-values">{data.used} / {data.limit}</span>
+      </div>
+      <div className="progress-bar"><div className="progress-fill" style={{ width: `${pct}%` }} /></div>
+      <div className="spending-remaining">Remaining: {data.remaining}</div>
+    </div>
+  );
+}
+
+function StatusControls({
+  agentId,
+  currentStatus,
+  onStatusChange,
+}: {
+  agentId: string;
+  currentStatus: string;
+  onStatusChange: (newStatus: string) => void;
+}) {
+  const [mutating, setMutating] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleChange = async (newStatus: string) => {
+    if (mutating) return;
+    setMutating(newStatus);
+    setError(null);
+    try {
+      const res = await api.updateAgentStatus(agentId, newStatus);
+      onStatusChange(res.status);
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to update status');
+    } finally {
+      setMutating(null);
+    }
+  };
+
+  if (currentStatus === 'disabled') {
+    return (
+      <div className="status-controls">
+        <span className="muted">Disabled agents cannot be re-enabled.</span>
+        {error && <div className="error">{error}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="status-controls">
+      {currentStatus === 'active' && (
+        <>
+          <button disabled={mutating !== null} onClick={() => handleChange('paused')}>
+            {mutating === 'paused' ? 'Pausing...' : 'Pause'}
+          </button>
+          <button disabled={mutating !== null} onClick={() => handleChange('disabled')}>
+            {mutating === 'disabled' ? 'Disabling...' : 'Disable'}
+          </button>
+        </>
+      )}
+      {currentStatus === 'paused' && (
+        <>
+          <button disabled={mutating !== null} onClick={() => handleChange('active')}>
+            {mutating === 'active' ? 'Resuming...' : 'Resume'}
+          </button>
+          <button disabled={mutating !== null} onClick={() => handleChange('disabled')}>
+            {mutating === 'disabled' ? 'Disabling...' : 'Disable'}
+          </button>
+        </>
+      )}
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
+function AgentHeader({
+  agent,
+  onStatusChange,
+}: {
+  agent: AgentRecord;
+  onStatusChange: (newStatus: string) => void;
+}) {
+  const statusClass = agent.status === 'active' ? 'badge-ok'
+    : agent.status === 'paused' ? 'badge-warn'
+    : 'badge-err';
+  return (
+    <div className="agent-header">
+      <div className="agent-header-main">
+        <h1>{agent.displayName}</h1>
+        <div className="agent-header-meta">
+          <span className={`badge ${statusClass}`}>{agent.status}</span>
+          <code className="agent-address">{agent.stellarAddress.slice(0, 12)}...</code>
+          <span className="muted">ID: {agent.id.slice(0, 8)}</span>
+        </div>
+      </div>
+      <StatusControls agentId={agent.id} currentStatus={agent.status} onStatusChange={onStatusChange} />
+    </div>
+  );
+}
 
 const _DEFAULT_POLICY: PolicyRules = {
   maxTxAmount: { XLM: '100' },
@@ -31,6 +137,63 @@ function deepClonePolicy(policy: PolicyRules): PolicyRules {
     approvalThreshold: policy.approvalThreshold,
     requireHumanApprovalForAmountAbove: policy.requireHumanApprovalForAmountAbove,
   };
+}
+
+function PolicySummary({ agentId }: { agentId: string }) {
+  const [policy, setPolicy] = useState<PolicyRules | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.getPolicy(agentId);
+        if (!cancelled) setPolicy(res.policy);
+      } catch (e: any) {
+        if (!cancelled) setError(e.message ?? 'Failed to load policy summary');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [agentId]);
+
+  if (error) return null;
+  if (!policy) return null;
+
+  const limits = Object.entries(policy.maxTxAmount);
+  const assets = Object.entries(policy.dailySpendingLimit);
+
+  return (
+    <div className="policy-summary">
+      <div className="policy-summary-grid">
+        {limits.map(([asset, amount]) => (
+          <div key={`tx-${asset}`} className="policy-summary-item">
+            <span className="policy-summary-label">Max Tx ({asset})</span>
+            <span className="policy-summary-value">{amount}</span>
+          </div>
+        ))}
+        <div className="policy-summary-item">
+          <span className="policy-summary-label">Approval Threshold</span>
+          <span className="policy-summary-value">{policy.approvalThreshold}</span>
+        </div>
+        {assets.map(([asset, limit]) => (
+          <div key={`daily-${asset}`} className="policy-summary-item">
+            <span className="policy-summary-label">Daily Limit ({asset})</span>
+            <span className="policy-summary-value">{limit}</span>
+          </div>
+        ))}
+        <div className="policy-summary-item">
+          <span className="policy-summary-label">Allowed Assets</span>
+          <span className="policy-summary-value">{policy.allowedAssets.join(', ')}</span>
+        </div>
+        <div className="policy-summary-item">
+          <span className="policy-summary-label">Destinations</span>
+          <span className="policy-summary-value">
+            {policy.allowedDestinations.length === 0 ? 'Any' : policy.allowedDestinations.length + ' whitelisted'}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function PolicySettings({ agentId }: { agentId: string }) {
@@ -293,12 +456,26 @@ function PolicySettings({ agentId }: { agentId: string }) {
   );
 }
 
-export default function AgentDetail({ agentId }: { agentId: string }) {
+export default function AgentDetail() {
+  const agentId = useParams<{ agentId: string }>().agentId ?? '';
   const [agent, setAgent] = useState<AgentRecord | null>(null);
   const [activity, setActivity] = useState<ActivityRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [spending, setSpending] = useState<SpendingData | null>(null);
+  const [spendingError, setSpendingError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.getAgentSpending(agentId);
+        setSpending(res.spending);
+      } catch (e: any) {
+        setSpendingError(e.message ?? 'Failed to load spending');
+      }
+    })();
+  }, [agentId]);
 
   useEffect(() => {
     (async () => {
@@ -332,14 +509,28 @@ export default function AgentDetail({ agentId }: { agentId: string }) {
     );
   }
 
+  const handleStatusChange = (newStatus: string) => {
+    setAgent((prev) => prev ? { ...prev, status: newStatus as typeof prev.status } : prev);
+  };
+
   return (
     <section>
-      <h1>{agent.displayName}</h1>
-      <div className="cards">
-        <Card title="ID" value={agent.id} />
-        <Card title="Status" value={agent.status} />
-        <Card title="Address" value={agent.stellarAddress.slice(0, 12) + '...'} />
-        <Card title="Capabilities" value={agent.capabilities.join(', ')} />
+      <AgentHeader agent={agent} onStatusChange={handleStatusChange} />
+      <div className="block">
+        <h2>Financial Control</h2>
+        {spending === null && spendingError === null ? (
+          <Skeleton label="Loading spending..." />
+        ) : spendingError ? (
+          <div className="error">{spendingError}</div>
+        ) : spending && Object.keys(spending).length > 0 ? (
+          <div className="spending-overview">
+            {Object.entries(spending).map(([asset, data]) => (
+              <SpendingCard key={asset} asset={asset} data={data} />
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state"><p>No daily spending limits configured.</p></div>
+        )}
       </div>
       <div className="block">
         <h2>Recent Activity</h2>
@@ -379,37 +570,11 @@ export default function AgentDetail({ agentId }: { agentId: string }) {
       </div>
       <div className="block">
         <h2>Policy</h2>
-        <PolicySettings agentId={agentId} />
+        <PolicySummary agentId={agentId} />
+        <div className="policy-edit-section">
+          <PolicySettings agentId={agentId} />
+        </div>
       </div>
     </section>
-  );
-}
-
-function Card({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="card">
-      <div className="card-title">{title}</div>
-      <div className="card-value">{value}</div>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const cls = status === 'submitted' ? 'badge-ok'
-    : status === 'failed' || status === 'rejected' ? 'badge-err'
-    : 'badge-info';
-  return <span className={'badge ' + cls}>{status}</span>;
-}
-
-function Skeleton({ label }: { label: string }) {
-  return <div className="skeleton">{label}</div>;
-}
-
-function EmptyState({ title, message }: { title: string; message: string }) {
-  return (
-    <div className="empty-state">
-      <h2>{title}</h2>
-      <p>{message}</p>
-    </div>
   );
 }

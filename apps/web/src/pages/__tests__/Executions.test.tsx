@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import '@testing-library/jest-dom';
+import { MemoryRouter } from 'react-router-dom';
+import Executions from '../Executions';
+
 // Mock API — hoisted so vi.fn references are available in the mock factory
 const { mockListAllExecutions, mockGetQueueStatus, mockGetAgent, mockListAgentExecutions, mockListActivity, mockListAgents } = vi.hoisted(() => ({
   mockListAllExecutions: vi.fn(),
@@ -21,9 +25,6 @@ vi.mock('../../api', () => ({
   },
 }));
 
-import Executions from '../Executions';
-import '@testing-library/jest-dom';
-
 describe('Executions page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -32,14 +33,14 @@ describe('Executions page', () => {
   it('renders loading state', () => {
     mockListAllExecutions.mockReturnValue(new Promise(() => {}));
     mockGetQueueStatus.mockReturnValue(new Promise(() => {}));
-    render(<div>Loading...</div>);
-    expect(screen.getByText('Loading...')).toBeInTheDocument();
+    render(<MemoryRouter><Executions /></MemoryRouter>);
+    expect(screen.getByText('Loading executions...')).toBeInTheDocument();
   });
 
   it('renders empty state when no executions', async () => {
     mockListAllExecutions.mockResolvedValue({ executions: [] });
     mockGetQueueStatus.mockResolvedValue({ running: false, byStatus: {} });
-    render(<div>No executions found</div>);
+    render(<MemoryRouter><Executions /></MemoryRouter>);
     await waitFor(() => {
       expect(screen.getByText('No executions found')).toBeInTheDocument();
     });
@@ -47,7 +48,8 @@ describe('Executions page', () => {
 
   it('renders error state', async () => {
     mockListAllExecutions.mockRejectedValue(new Error('API error'));
-    render(<div>API error</div>);
+    mockGetQueueStatus.mockResolvedValue({ running: false, byStatus: {} });
+    render(<MemoryRouter><Executions /></MemoryRouter>);
     await waitFor(() => {
       expect(screen.getByText('API error')).toBeInTheDocument();
     });
@@ -79,9 +81,9 @@ describe('Executions page', () => {
       ],
     });
     mockGetQueueStatus.mockResolvedValue({ running: true, byStatus: { submitted: 1 } });
-    render(<div>exec-1</div>);
+    render(<MemoryRouter><Executions /></MemoryRouter>);
     await waitFor(() => {
-      expect(screen.getByText('exec-1')).toBeInTheDocument();
+      expect(screen.getByText('exec-1'.slice(0, 8))).toBeInTheDocument();
     });
   });
 
@@ -111,70 +113,20 @@ describe('Executions page', () => {
       ],
     });
     mockGetQueueStatus.mockResolvedValue({ running: true, byStatus: { dead_letter: 1 } });
-    render(<div>Dead Letter</div>);
+    render(<MemoryRouter><Executions /></MemoryRouter>);
     await waitFor(() => {
-      expect(screen.getByText('Dead Letter')).toBeInTheDocument();
+      expect(screen.getAllByText(/Dead Letter/).length).toBeGreaterThan(0);
     });
   });
 
   it('calls listAllExecutions and never listAgents (N+1 removed)', async () => {
     mockListAllExecutions.mockResolvedValue({ executions: [] });
     mockGetQueueStatus.mockResolvedValue({ running: false, byStatus: {} });
-    render(<Executions />);
+    render(<MemoryRouter><Executions /></MemoryRouter>);
     await waitFor(() => {
       expect(mockListAllExecutions).toHaveBeenCalledTimes(1);
     });
     expect(mockListAgents).not.toHaveBeenCalled();
     expect(mockListAgentExecutions).not.toHaveBeenCalled();
-  });
-});
-
-describe('ExecutionList in AgentDetail', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('renders executions section', async () => {
-    mockGetAgent.mockResolvedValue({
-      id: 'agent-a',
-      displayName: 'Agent A',
-      description: '',
-      ownerId: 'owner-a',
-      stellarAddress: 'G...',
-      capabilities: [],
-      status: 'active',
-      active: true,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    mockListAgentExecutions.mockResolvedValue({
-      agentId: 'agent-a',
-      executions: [
-        {
-          id: 'exec-agent-1',
-          ownerId: 'owner-a',
-          agentId: 'agent-a',
-          approvalId: null,
-          activityId: null,
-          intent: { type: 'payment', asset: 'XLM', amount: '5', destination: 'G...', reason: 'test' },
-          status: 'failed',
-          policyDecision: null,
-          simulationResult: null,
-          txHash: null,
-          error: 'Network timeout',
-          attempt: 2,
-          nextRetryAt: '2026-01-01T00:01:00Z',
-          startedAt: '2026-01-01T00:00:00Z',
-          completedAt: null,
-          errorClass: 'transient',
-          createdAt: '2026-01-01T00:00:00Z',
-          updatedAt: '2026-01-01T00:00:00Z',
-        },
-      ],
-    });
-    render(<div>exec-agent-1</div>);
-    await waitFor(() => {
-      expect(screen.getByText('exec-agent-1')).toBeInTheDocument();
-    });
   });
 });

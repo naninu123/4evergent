@@ -1,11 +1,11 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { test, expect, describe, vi, beforeEach } from 'vitest';
 
-const { mockGetStoredToken, mockStoreAuth, mockClearAuth, mockApiHealth } = vi.hoisted(() => ({
+const { mockGetStoredToken, mockStoreAuth, mockClearAuth, mockApiListAgents } = vi.hoisted(() => ({
   mockGetStoredToken: vi.fn(),
   mockStoreAuth: vi.fn(),
   mockClearAuth: vi.fn(),
-  mockApiHealth: vi.fn(),
+  mockApiListAgents: vi.fn(),
 }));
 
 vi.mock('../auth', () => ({
@@ -17,7 +17,7 @@ vi.mock('../auth', () => ({
 
 vi.mock('../api', () => ({
   api: {
-    health: mockApiHealth,
+    listAgents: mockApiListAgents,
   },
 }));
 
@@ -33,7 +33,7 @@ function renderAuth() {
 
 async function waitForLoginForm() {
   await waitFor(() => {
-    expect(screen.getByText('Enter your access token to continue')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign In' })).toBeInTheDocument();
   });
 }
 
@@ -54,7 +54,7 @@ describe('AuthGate', () => {
 
   test('shows verifying state when token exists but not yet validated', () => {
     mockGetStoredToken.mockReturnValue('some-token');
-    mockApiHealth.mockReturnValue(new Promise(() => {})); // pending forever
+    mockApiListAgents.mockReturnValue(new Promise(() => {})); // pending forever
 
     renderAuth();
 
@@ -63,7 +63,7 @@ describe('AuthGate', () => {
 
   test('shows dashboard when token is valid', async () => {
     mockGetStoredToken.mockReturnValue('valid-token');
-    mockApiHealth.mockResolvedValue({ status: 'ok', signerAccountId: 'GTEST' });
+    mockApiListAgents.mockResolvedValue({ agents: [] });
 
     renderAuth();
 
@@ -74,7 +74,7 @@ describe('AuthGate', () => {
 
   test('shows login when stored token is invalid', async () => {
     mockGetStoredToken.mockReturnValue('invalid-token');
-    mockApiHealth.mockRejectedValue(new Error('401 Unauthorized'));
+    mockApiListAgents.mockRejectedValue(new Error('401 Unauthorized'));
 
     renderAuth();
 
@@ -100,7 +100,7 @@ describe('AuthGate', () => {
 
   test('successful login stores token and shows dashboard', async () => {
     mockGetStoredToken.mockReturnValue(null);
-    mockApiHealth.mockResolvedValue({ status: 'ok', signerAccountId: 'GTEST' });
+    mockApiListAgents.mockResolvedValue({ agents: [] });
 
     renderAuth();
 
@@ -123,7 +123,7 @@ describe('AuthGate', () => {
 
   test('failed login shows error message', async () => {
     mockGetStoredToken.mockReturnValue(null);
-    mockApiHealth.mockRejectedValue(new Error('401 Unauthorized'));
+    mockApiListAgents.mockRejectedValue(new Error('401 Unauthorized'));
 
     renderAuth();
 
@@ -136,7 +136,7 @@ describe('AuthGate', () => {
     fireEvent.click(submitButton);
 
     await waitFor(() => {
-      expect(screen.getByText(/Invalid token or authentication failed/)).toBeInTheDocument();
+      expect(screen.getByText('Invalid token or authentication failed.')).toBeInTheDocument();
     });
 
     expect(mockClearAuth).toHaveBeenCalled();
@@ -144,7 +144,7 @@ describe('AuthGate', () => {
 
   test('logout clears auth and shows login', async () => {
     mockGetStoredToken.mockReturnValue('valid-token');
-    mockApiHealth.mockResolvedValue({ status: 'ok', signerAccountId: 'GTEST' });
+    mockApiListAgents.mockResolvedValue({ agents: [] });
 
     renderAuth();
 

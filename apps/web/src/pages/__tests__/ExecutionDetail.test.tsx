@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import ExecutionDetail from '../ExecutionDetail';
 
 const mockGetExecution = vi.fn();
@@ -14,6 +15,16 @@ vi.mock('../../api', () => ({
     cancelExecution: (...args: any[]) => mockCancelExecution(...args),
   },
 }));
+
+function renderDetail() {
+  return render(
+    <MemoryRouter initialEntries={['/executions/exec-1']}>
+      <Routes>
+        <Route path="/executions/:executionId" element={<ExecutionDetail />} />
+      </Routes>
+    </MemoryRouter>
+  );
+}
 
 function makeExecution(overrides: Partial<any> = {}) {
   return {
@@ -44,7 +55,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
   describe('Retry visibility', () => {
     it('shows Retry for failed status', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'failed' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Retry Execution')).toBeInTheDocument();
       });
@@ -52,7 +63,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
 
     it('shows Retry for dead_letter status', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'dead_letter' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Retry Execution')).toBeInTheDocument();
       });
@@ -60,7 +71,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
 
     it('hides Retry for queued status', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'queued' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.queryByText('Retry Execution')).not.toBeInTheDocument();
       });
@@ -68,7 +79,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
 
     it('hides Retry for executing status', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'executing' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.queryByText('Retry Execution')).not.toBeInTheDocument();
       });
@@ -76,7 +87,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
 
     it('hides Retry for submitted status', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'submitted' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.queryByText('Retry Execution')).not.toBeInTheDocument();
       });
@@ -84,7 +95,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
 
     it('hides Retry for confirmed status', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'confirmed' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.queryByText('Retry Execution')).not.toBeInTheDocument();
       });
@@ -94,20 +105,20 @@ describe('ExecutionDetail retry/cancel actions', () => {
   describe('Retry action', () => {
     it('calls retryExecution with correct ID and refreshes on success', async () => {
       mockRetryExecution.mockResolvedValue({ execution: makeExecution({ status: 'queued', attempt: 2 }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Retry Execution')).toBeInTheDocument();
       });
       fireEvent.click(screen.getByText('Retry Execution'));
       await waitFor(() => {
         expect(mockRetryExecution).toHaveBeenCalledWith('exec-1');
-        expect(mockGetExecution).toHaveBeenCalledTimes(1); // initial only; success uses returned data
+        expect(mockGetExecution).toHaveBeenCalledTimes(1);
       });
     });
 
     it('disables button during request', async () => {
       mockRetryExecution.mockImplementation(() => new Promise(() => {}));
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Retry Execution')).toBeInTheDocument();
       });
@@ -121,14 +132,13 @@ describe('ExecutionDetail retry/cancel actions', () => {
       const err: any = new Error('max retry attempts reached');
       err.status = 409;
       mockRetryExecution.mockRejectedValue(err);
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Retry Execution')).toBeInTheDocument();
       });
       fireEvent.click(screen.getByText('Retry Execution'));
       await waitFor(() => {
         expect(screen.getByText('max retry attempts reached')).toBeInTheDocument();
-        // Refresh should have been attempted
         expect(mockGetExecution).toHaveBeenCalledTimes(2);
       });
     });
@@ -137,7 +147,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
       const err: any = new Error('network error');
       err.status = 500;
       mockRetryExecution.mockRejectedValue(err);
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Retry Execution')).toBeInTheDocument();
       });
@@ -151,7 +161,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
   describe('Cancel visibility (mirrors backend FSM: queued, executing)', () => {
     it('shows Cancel for queued status', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'queued' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Cancel Execution')).toBeInTheDocument();
       });
@@ -159,7 +169,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
 
     it('shows Cancel for executing status', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'executing' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Cancel Execution')).toBeInTheDocument();
       });
@@ -167,7 +177,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
 
     it('hides Cancel for failed status', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'failed' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.queryByText('Cancel Execution')).not.toBeInTheDocument();
       });
@@ -175,7 +185,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
 
     it('hides Cancel for dead_letter status', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'dead_letter' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.queryByText('Cancel Execution')).not.toBeInTheDocument();
       });
@@ -183,7 +193,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
 
     it('hides Cancel for confirmed status', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'confirmed' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.queryByText('Cancel Execution')).not.toBeInTheDocument();
       });
@@ -194,21 +204,21 @@ describe('ExecutionDetail retry/cancel actions', () => {
     it('calls cancelExecution with correct ID and refreshes on success', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'queued' }) });
       mockCancelExecution.mockResolvedValue({ execution: makeExecution({ status: 'cancelled' }) });
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Cancel Execution')).toBeInTheDocument();
       });
       fireEvent.click(screen.getByText('Cancel Execution'));
       await waitFor(() => {
         expect(mockCancelExecution).toHaveBeenCalledWith('exec-1');
-        expect(mockGetExecution).toHaveBeenCalledTimes(1); // initial only; success uses returned data
+        expect(mockGetExecution).toHaveBeenCalledTimes(1);
       });
     });
 
     it('disables button during request', async () => {
       mockGetExecution.mockResolvedValue({ execution: makeExecution({ status: 'queued' }) });
       mockCancelExecution.mockImplementation(() => new Promise(() => {}));
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Cancel Execution')).toBeInTheDocument();
       });
@@ -223,7 +233,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
       const err: any = new Error('cannot cancel execution in status confirmed');
       err.status = 409;
       mockCancelExecution.mockRejectedValue(err);
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Cancel Execution')).toBeInTheDocument();
       });
@@ -239,7 +249,7 @@ describe('ExecutionDetail retry/cancel actions', () => {
       const err: any = new Error('state changed');
       err.status = 409;
       mockCancelExecution.mockRejectedValue(err);
-      render(<ExecutionDetail executionId="exec-1"/>);
+      renderDetail();
       await waitFor(() => {
         expect(screen.getByText('Cancel Execution')).toBeInTheDocument();
       });
@@ -247,6 +257,25 @@ describe('ExecutionDetail retry/cancel actions', () => {
       await waitFor(() => {
         expect(screen.getByText('state changed')).toBeInTheDocument();
       });
+    });
+  });
+
+  describe('Activity cross-link', () => {
+    it('shows View Activity link when execution has an activityId', async () => {
+      mockGetExecution.mockResolvedValue({ execution: makeExecution({ activityId: 'act-42' }) });
+      renderDetail();
+      await waitFor(() => {
+        expect(screen.getByText('View Activity')).toBeInTheDocument();
+      });
+    });
+
+    it('hides View Activity link when execution has no activityId', async () => {
+      mockGetExecution.mockResolvedValue({ execution: makeExecution({ activityId: null }) });
+      renderDetail();
+      await waitFor(() => {
+        expect(screen.getByText('Execution')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('View Activity')).not.toBeInTheDocument();
     });
   });
 });

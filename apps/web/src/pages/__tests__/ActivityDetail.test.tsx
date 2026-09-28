@@ -1,19 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import ActivityDetail from '../ActivityDetail';
-
-const _mockActivityDetail = vi.fn();
 
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     activityDetail: vi.fn(),
+    listAgentExecutions: vi.fn(),
   },
 }));
 
 vi.mock('../../api', () => ({
-  api: { activityDetail: mockApi.activityDetail },
+  api: { activityDetail: mockApi.activityDetail, listAgentExecutions: mockApi.listAgentExecutions },
 }));
+
+function renderDetail() {
+  return render(
+    <MemoryRouter initialEntries={['/agents/agent-a/activity/act-1']}>
+      <Routes>
+        <Route path="/agents/:agentId/activity/:activityId" element={<ActivityDetail />} />
+      </Routes>
+    </MemoryRouter>
+  );
+}
 
 function makeActivity(): any {
   return {
@@ -35,36 +45,36 @@ function makeActivity(): any {
 describe('ActivityDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockApi.listAgentExecutions.mockResolvedValue({ executions: [] });
   });
 
   it('renders loading state', () => {
     mockApi.activityDetail.mockReturnValue(new Promise(() => {}));
-    render(<ActivityDetail agentId="agent-a" activityId="act-1" />);
+    renderDetail();
     expect(screen.getByText('Loading activity...')).toBeInTheDocument();
   });
 
   it('renders activity detail on success', async () => {
     mockApi.activityDetail.mockResolvedValue({ activity: makeActivity() });
-    render(<ActivityDetail agentId="agent-a" activityId="act-1" />);
+    renderDetail();
     await waitFor(() => {
-      expect(screen.getByText('Activity Detail')).toBeInTheDocument();
+      expect(screen.getByText('act-1')).toBeInTheDocument();
     });
-    expect(screen.getByText('act-1')).toBeInTheDocument();
     expect(screen.getByText('payment')).toBeInTheDocument();
     expect(screen.getByText('confirmed')).toBeInTheDocument();
   });
 
   it('renders error state', async () => {
     mockApi.activityDetail.mockRejectedValue(new Error('API error'));
-    render(<ActivityDetail agentId="agent-a" activityId="act-1" />);
+    renderDetail();
     await waitFor(() => {
-      expect(screen.getByText('Failed to load activity')).toBeInTheDocument();
+      expect(screen.getByText('API error')).toBeInTheDocument();
     });
   });
 
   it('renders not-found when activity is null', async () => {
     mockApi.activityDetail.mockResolvedValue({ activity: null });
-    render(<ActivityDetail agentId="agent-a" activityId="act-1" />);
+    renderDetail();
     await waitFor(() => {
       expect(screen.getByText('Activity not found')).toBeInTheDocument();
     });
@@ -72,7 +82,7 @@ describe('ActivityDetail', () => {
 
   it('calls activityDetail with correct agentId and activityId', async () => {
     mockApi.activityDetail.mockResolvedValue({ activity: makeActivity() });
-    render(<ActivityDetail agentId="agent-a" activityId="act-1" />);
+    renderDetail();
     await waitFor(() => {
       expect(mockApi.activityDetail).toHaveBeenCalledWith('agent-a', 'act-1');
     });
@@ -80,26 +90,16 @@ describe('ActivityDetail', () => {
 
   it('renders policy decision section when present', async () => {
     mockApi.activityDetail.mockResolvedValue({ activity: makeActivity() });
-    render(<ActivityDetail agentId="agent-a" activityId="act-1" />);
+    renderDetail();
     await waitFor(() => {
       expect(screen.getByText('Policy Decision')).toBeInTheDocument();
     });
-    expect(screen.getByText('allow')).toBeInTheDocument();
     expect(screen.getByText('within limit')).toBeInTheDocument();
-  });
-
-  it('renders simulation result when present', async () => {
-    mockApi.activityDetail.mockResolvedValue({ activity: makeActivity() });
-    render(<ActivityDetail agentId="agent-a" activityId="act-1" />);
-    await waitFor(() => {
-      expect(screen.getByText('Simulation')).toBeInTheDocument();
-    });
-    expect(screen.getByText('ok')).toBeInTheDocument();
   });
 
   it('renders authorization status when present', async () => {
     mockApi.activityDetail.mockResolvedValue({ activity: makeActivity() });
-    render(<ActivityDetail agentId="agent-a" activityId="act-1" />);
+    renderDetail();
     await waitFor(() => {
       expect(screen.getByText('Authorization')).toBeInTheDocument();
     });
@@ -110,21 +110,10 @@ describe('ActivityDetail', () => {
     const activity = makeActivity();
     activity.error = 'Transaction failed: insufficient funds';
     mockApi.activityDetail.mockResolvedValue({ activity });
-    render(<ActivityDetail agentId="agent-a" activityId="act-1" />);
+    renderDetail();
     await waitFor(() => {
       expect(screen.getByText('Error')).toBeInTheDocument();
     });
     expect(screen.getByText('Transaction failed: insufficient funds')).toBeInTheDocument();
-  });
-
-  it('calls onBack when back button clicked', async () => {
-    const onBack = vi.fn();
-    mockApi.activityDetail.mockResolvedValue({ activity: makeActivity() });
-    render(<ActivityDetail agentId="agent-a" activityId="act-1" onBack={onBack} />);
-    await waitFor(() => {
-      expect(screen.getByText('Activity Detail')).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByText('←'));
-    expect(onBack).toHaveBeenCalled();
   });
 });

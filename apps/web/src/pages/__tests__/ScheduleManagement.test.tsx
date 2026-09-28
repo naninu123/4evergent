@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { test, expect, describe, vi, beforeEach } from 'vitest';
-import { ScheduleManagement } from '../../pages/ScheduleManagement';
+import { MemoryRouter } from 'react-router-dom';
+import { ScheduleManagement } from '../ScheduleManagement';
 
 const { mockListSchedules, mockCreateSchedule, mockPauseSchedule, mockDisableSchedule, mockDeleteSchedule, mockUpdateSchedule } = vi.hoisted(() => ({
   mockListSchedules: vi.fn(),
@@ -51,7 +52,7 @@ describe('ScheduleManagement', () => {
   test('schedule list loads from API', async () => {
     mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('0 0 * * *')).toBeInTheDocument();
@@ -63,7 +64,7 @@ describe('ScheduleManagement', () => {
   test('empty schedule state', async () => {
     mockListSchedules.mockResolvedValue({ schedules: [] });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText(/No schedules for this agent/)).toBeInTheDocument();
@@ -73,7 +74,7 @@ describe('ScheduleManagement', () => {
   test('schedule loading state', () => {
     mockListSchedules.mockReturnValue(new Promise(() => {}));
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     expect(screen.getByText('Loading schedules...')).toBeInTheDocument();
   });
@@ -81,7 +82,7 @@ describe('ScheduleManagement', () => {
   test('create form renders', async () => {
     mockListSchedules.mockResolvedValue({ schedules: [] });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('Create Schedule')).toBeInTheDocument();
@@ -99,7 +100,7 @@ describe('ScheduleManagement', () => {
   test('validation blocks invalid submission', async () => {
     mockListSchedules.mockResolvedValue({ schedules: [] });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('Create Schedule')).toBeInTheDocument();
@@ -120,7 +121,7 @@ describe('ScheduleManagement', () => {
     mockListSchedules.mockResolvedValue({ schedules: [] });
     mockCreateSchedule.mockResolvedValue({ schedule: defaultSchedule });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('Create Schedule')).toBeInTheDocument();
@@ -164,7 +165,7 @@ describe('ScheduleManagement', () => {
     mockCreateSchedule.mockResolvedValue({ schedule: defaultSchedule });
     mockListSchedules.mockResolvedValueOnce({ schedules: [defaultSchedule] });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('Create Schedule')).toBeInTheDocument();
@@ -198,7 +199,7 @@ describe('ScheduleManagement', () => {
     mockListSchedules.mockResolvedValue({ schedules: [] });
     mockCreateSchedule.mockRejectedValue(new Error('Invalid schedule expression'));
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('Create Schedule')).toBeInTheDocument();
@@ -235,7 +236,7 @@ describe('ScheduleManagement', () => {
     });
     mockCreateSchedule.mockReturnValue(createPromise as any);
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('Create Schedule')).toBeInTheDocument();
@@ -272,7 +273,7 @@ describe('ScheduleManagement', () => {
     mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
     mockPauseSchedule.mockResolvedValue({ schedule: { ...defaultSchedule, status: 'paused' } });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('Pause')).toBeInTheDocument();
@@ -289,7 +290,7 @@ describe('ScheduleManagement', () => {
     mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
     mockDisableSchedule.mockResolvedValue({ schedule: { ...defaultSchedule, status: 'disabled' } });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('Disable')).toBeInTheDocument();
@@ -307,7 +308,7 @@ describe('ScheduleManagement', () => {
     mockDeleteSchedule.mockResolvedValue({ deleted: true });
     window.confirm = vi.fn(() => true);
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('Delete')).toBeInTheDocument();
@@ -325,7 +326,7 @@ describe('ScheduleManagement', () => {
   test('cron preset buttons work', async () => {
     mockListSchedules.mockResolvedValue({ schedules: [] });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('Create Schedule')).toBeInTheDocument();
@@ -351,7 +352,7 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
   test('Edit action appears for schedule', async () => {
     mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     await waitFor(() => {
       expect(screen.getByText('0 0 * * *')).toBeInTheDocument();
@@ -363,7 +364,7 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
   test('Clicking Edit enters edit mode', async () => {
     mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     const editButton = await screen.findByText('Edit');
     fireEvent.click(editButton);
@@ -376,7 +377,7 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
   test('Existing scheduleExpression appears in input', async () => {
     mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     const editButton = await screen.findByText('Edit');
     fireEvent.click(editButton);
@@ -388,7 +389,7 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
   test('Cancel exits edit mode without PATCH', async () => {
     mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     const editButton = await screen.findByText('Edit');
     fireEvent.click(editButton);
@@ -406,7 +407,7 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
     const updatedSchedule = { ...defaultSchedule, scheduleExpression: '0 */6 * * *' };
     mockUpdateSchedule.mockResolvedValue({ schedule: updatedSchedule });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     const editButton = await screen.findByText('Edit');
     fireEvent.click(editButton);
@@ -429,7 +430,7 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
     const updatedSchedule = { ...defaultSchedule, scheduleExpression: '0 */6 * * *' };
     mockUpdateSchedule.mockResolvedValue({ schedule: updatedSchedule });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     const editButton = await screen.findByText('Edit');
     fireEvent.click(editButton);
@@ -453,7 +454,7 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
     mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
     mockUpdateSchedule.mockRejectedValue(new Error('Invalid cron expression: must be 5 fields'));
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     const editButton = await screen.findByText('Edit');
     fireEvent.click(editButton);
@@ -482,7 +483,7 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
     });
     mockUpdateSchedule.mockReturnValue(updatePromise as any);
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     const editButton = await screen.findByText('Edit');
     fireEvent.click(editButton);
@@ -505,7 +506,7 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
   test('Empty expression does not submit', async () => {
     mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
 
-    render(<ScheduleManagement agentId="agent-1" />);
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
 
     const editButton = await screen.findByText('Edit');
     fireEvent.click(editButton);

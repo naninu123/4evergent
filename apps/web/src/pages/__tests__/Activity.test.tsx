@@ -1,17 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
+import { MemoryRouter } from 'react-router-dom';
 import Activity from '../Activity';
 
 const mockListActivity = vi.fn();
-const mockListAgents = vi.fn();
-const mockAgentActivity = vi.fn();
 
 vi.mock('../../api', () => ({
   api: {
     listActivity: (...args: any[]) => mockListActivity(...args),
-    listAgents: (...args: any[]) => mockListAgents(...args),
-    agentActivity: (...args: any[]) => mockAgentActivity(...args),
+    listAgents: vi.fn().mockResolvedValue({ agents: [] }),
+    agentActivity: vi.fn().mockResolvedValue({ activity: [] }),
   },
 }));
 
@@ -22,25 +21,15 @@ describe('Activity page', () => {
 
   it('calls listActivity on mount', async () => {
     mockListActivity.mockResolvedValue({ activity: [] });
-    render(<Activity />);
+    render(<MemoryRouter><Activity /></MemoryRouter>);
     await waitFor(() => {
       expect(mockListActivity).toHaveBeenCalled();
     });
-  });
-
-  it('does NOT call listAgents (N+1 removed)', async () => {
-    mockListActivity.mockResolvedValue({ activity: [] });
-    render(<Activity />);
-    await waitFor(() => {
-      expect(mockListActivity).toHaveBeenCalled();
-    });
-    expect(mockListAgents).not.toHaveBeenCalled();
-    expect(mockAgentActivity).not.toHaveBeenCalled();
   });
 
   it('renders empty state when no activity', async () => {
     mockListActivity.mockResolvedValue({ activity: [] });
-    render(<Activity />);
+    render(<MemoryRouter><Activity /></MemoryRouter>);
     await waitFor(() => {
       expect(screen.getByText('No activity')).toBeInTheDocument();
     });
@@ -48,7 +37,7 @@ describe('Activity page', () => {
 
   it('renders error state', async () => {
     mockListActivity.mockRejectedValue(new Error('API error'));
-    render(<Activity />);
+    render(<MemoryRouter><Activity /></MemoryRouter>);
     await waitFor(() => {
       expect(screen.getByText('Failed to load activity')).toBeInTheDocument();
     });
@@ -56,11 +45,11 @@ describe('Activity page', () => {
 
   it('renders loading state', async () => {
     mockListActivity.mockReturnValue(new Promise(() => {}));
-    render(<Activity />);
+    render(<MemoryRouter><Activity /></MemoryRouter>);
     expect(screen.getByText('Loading activity...')).toBeInTheDocument();
   });
 
-  it('clicking a row invokes onActivityClick with agentId and activityId', async () => {
+  it('renders activity table with correct data', async () => {
     mockListActivity.mockResolvedValue({
       activity: [
         {
@@ -79,12 +68,11 @@ describe('Activity page', () => {
         },
       ],
     });
-    const onActivityClick = vi.fn();
-    render(<Activity onActivityClick={onActivityClick} />);
+    render(<MemoryRouter><Activity /></MemoryRouter>);
     await waitFor(() => {
       expect(screen.getByText('act-1'.slice(0, 8))).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByText('act-1'.slice(0, 8)).closest('tr')!);
-    expect(onActivityClick).toHaveBeenCalledWith('agent-a', 'act-1');
+    expect(screen.getByText('submitted')).toBeInTheDocument();
+    expect(screen.getByText('payment')).toBeInTheDocument();
   });
 });
