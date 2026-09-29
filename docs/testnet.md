@@ -161,6 +161,99 @@ before submission (simulation gate verified, no real transaction sent).
 - Is never returned through API responses
 - Is never logged
 
+## Soroban Contract: agent-registry (deployed)
+
+| Field | Value |
+|---|---|
+| Contract | `contracts/agent-registry` (crate `agent-registry`) |
+| Network | **Stellar Testnet only** (`Test SDF Network ; September 2015`) |
+| Contract ID | `CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7` |
+| Deployed | 2026-09-28 (UTC) |
+| Deployer | local CLI identity `deployer` (testnet key, never committed) |
+| Built wasm | `contracts/target/wasm32-unknown-unknown/release/agent_registry.wasm`, 9,549 bytes optimized |
+| Wasm hash | `83656ffddd08a22e1977b6cf129af4d6515be7e8494d843ded1aa1c0ef3f8445` |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 |
+| Stellar Lab | https://lab.stellar.org/r/testnet/contract/CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 |
+| Upload tx | https://stellar.expert/explorer/testnet/tx/baebfc6bddb46e406fd5cd6d202798983c733498fc9952ba1e14f141071a2d1c |
+| Create tx | https://stellar.expert/explorer/testnet/tx/bd88d3b35cbd02eb00056d9169848093e7ade2d6f3f2e4069c00f09d7fa9247f |
+
+`contracts/permissions` is **not deployed** on any network: it is excluded from
+the contracts workspace, is not compiled or tested, and lacks authorization
+checks. See `contracts/permissions/README.md`.
+
+### Prerequisites
+
+Pinned toolchain comes from `contracts/rust-toolchain.toml` (Rust 1.81.0 with the
+`wasm32-unknown-unknown` target). Install the CLI if missing:
+
+```bash
+cargo install --locked stellar-cli
+```
+
+Verified with: `rustc --version`, `cargo --version`, `stellar --version`,
+`rustup target list --installed`.
+
+### Build
+
+Always run cargo from `contracts/` so the pinned toolchain and `Cargo.lock` apply:
+
+```bash
+cd contracts
+cargo test --locked
+cargo +1.81.0 test --locked                     # 15 unit tests expected
+stellar contract build                          # wasm artifact + optimized hash printed
+```
+
+Artifact: `contracts/target/wasm32-unknown-unknown/release/agent_registry.wasm`.
+
+### Deploy (testnet)
+
+Create and fund a throwaway testnet identity. The secret key stays in the local
+CLI config (`~/.config/stellar/identity/`, mode `0600`) — never commit it, never
+print it, and `.gitignore` already covers `.env*`:
+
+```bash
+stellar keys generate deployer --network testnet --fund
+stellar keys address deployer                   # public key only
+```
+
+Deploy and give it a local alias:
+
+```bash
+cd contracts
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/agent_registry.wasm \
+  --source deployer --network testnet --alias agent_registry
+```
+
+`--network testnet` is required and there is no mainnet path in this repo. The
+command prints the contract ID; it also stores the ID under the alias in the
+local CLI config.
+
+### Verify
+
+```bash
+# read-only call (query returns null for an id that was never registered)
+stellar contract invoke --id  --source deployer --network testnet --send=no \
+  -- query --id not_registered
+
+# write then read back
+stellar contract invoke --id  --source deployer --network testnet \
+  -- register --caller $(stellar keys address deployer) --id deploy_smoke \
+    --display_name "Deploy Smoke" --stellar_address $(stellar keys address deployer) \
+    --capabilities '["pay"]'
+stellar contract invoke --id  --source deployer --network testnet --send=no \
+  -- query --id deploy_smoke
+
+# confirm the on-chain wasm matches the local build (sha256 == wasm hash above)
+stellar contract fetch --id  --network testnet --out-file /tmp/fetched.wasm
+sha256sum /tmp/fetched.wasm
+```
+
+Verified on 2026-09-28: `query` on an unknown id returned `null`; after
+`register`, `query` returned the record with `"active": true`; the fetched wasm
+sha256 equalled `83656ffddd08a22e1977b6cf129af4d6515be7e8494d843ded1aa1c0ef3f8445`.
+
 ## Safety Guards (Phase 21)
 
 - **Network validation**: Only Testnet URL + passphrase accepted. Mainnet explicitly rejected.
