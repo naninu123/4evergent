@@ -619,6 +619,7 @@ export async function createApiServer(options: ServerOptions) {
       ownerId: a.ownerId,
       stellarAddress: a.stellarAddress,
       capabilities: a.capabilities,
+      status: a.status,
       active: a.active,
       createdAt: a.createdAt,
     }));

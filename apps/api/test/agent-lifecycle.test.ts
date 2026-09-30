@@ -377,3 +377,119 @@ test("STATUS: paused agent intent creates no execution-queue entry", async () =>
     await close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// GET /agents — list response must carry the persisted agent status
+// Regression: handleListAgents previously omitted `status`, forcing CLI to
+// collapse disabled→paused and dashboard to render an empty badge.
+// ---------------------------------------------------------------------------
+
+function findAgent(list: any[], id: string) {
+  return list.find((a) => a.id === id);
+}
+
+test("LIST: active agent includes status 'active'", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-active", "owner-a", "active"));
+  try {
+    const res = await get(baseUrl, "/agents");
+    assert.equal(res.status, 200);
+    const a = findAgent(res.body.agents, "agent-active");
+    assert.ok(a, "agent-active present in list");
+    assert.equal(a.status, "active");
+    assert.equal(a.active, true);
+  } finally {
+    await close();
+  }
+});
+
+test("LIST: paused agent includes status 'paused'", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-paused", "owner-a", "paused"));
+  try {
+    const res = await get(baseUrl, "/agents");
+    const a = findAgent(res.body.agents, "agent-paused");
+    assert.ok(a, "agent-paused present in list");
+    assert.equal(a.status, "paused");
+    // status (not the active boolean) is what distinguishes paused/disabled.
+    assert.equal(a.active, false);
+  } finally {
+    await close();
+  }
+});
+
+test("LIST: disabled agent includes status 'disabled' (distinct from paused)", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-disabled", "owner-a", "disabled"));
+  try {
+    const res = await get(baseUrl, "/agents");
+    const a = findAgent(res.body.agents, "agent-disabled");
+    assert.ok(a, "agent-disabled present in list");
+    assert.equal(a.status, "disabled");
+    assert.equal(a.active, false);
+    // The exact bug: disabled must not be reported as paused.
+    assert.notEqual(a.status, "paused");
+  } finally {
+    await close();
+  }
+});
+
+test("LIST: all three statuses coexist and are distinguishable", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-active", "owner-a", "active"));
+  registerAgent(makeAgent("agent-paused", "owner-a", "paused"));
+  registerAgent(makeAgent("agent-disabled", "owner-a", "disabled"));
+  try {
+    const res = await get(baseUrl, "/agents");
+    const byId = Object.fromEntries(
+      res.body.agents.map((a: any) => [a.id, a.status])
+    );
+    assert.equal(byId["agent-active"], "active");
+    assert.equal(byId["agent-paused"], "paused");
+    assert.equal(byId["agent-disabled"], "disabled");
+  } finally {
+    await close();
+  }
+});
+
+test("LIST: live status change via PATCH is reflected in list", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-a", "owner-a", "active"));
+  try {
+    let res = await get(baseUrl, "/agents");
+    assert.equal(findAgent(res.body.agents, "agent-a").status, "active");
+
+    await patch(baseUrl, "/agents/agent-a/status", { status: "disabled" });
+
+    res = await get(baseUrl, "/agents");
+    assert.equal(findAgent(res.body.agents, "agent-a").status, "disabled");
+  } finally {
+    await close();
+  }
+});
+
+test("LIST: owner isolation unchanged — cross-owner agent absent, no status leak", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-mine", "owner-a", "active"));
+  registerAgent(makeAgent("agent-theirs", "owner-b", "paused"));
+  try {
+    const res = await get(baseUrl, "/agents");
+    const ids = res.body.agents.map((a: any) => a.id);
+    assert.ok(ids.includes("agent-mine"), "own agent present");
+    assert.ok(!ids.includes("agent-theirs"), "cross-owner agent must not appear");
+  } finally {
+    await close();
+  }
+});
