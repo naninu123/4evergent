@@ -1,0 +1,23 @@
+# Keep the build context small and avoid leaking local state into images.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.vercel
+**/.turbo
+
+# Local environment files (never bake secrets into an image).
+.env
+.env.*
+!.env.example
+
+# Local SQLite databases / volumes.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# VCS + tooling noise.
+.git
+.gitignore
+**/*.log
+**/.DS_Store

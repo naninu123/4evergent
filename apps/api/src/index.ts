@@ -1428,7 +1428,13 @@ export async function createApiServer(options: ServerOptions) {
 
   return {
     server,
-    listen: (port: number) => new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve)),
+    // Bind host is configurable so the server can be hosted behind a container
+    // or reverse proxy. Defaults to loopback: local development and the test
+    // suite stay reachable only from this machine unless a caller explicitly
+    // opts into a wider bind. See apps/api/src/server.ts — production startup
+    // fails closed when HOST is non-loopback and API_KEYS is unset.
+    listen: (port: number, host: string = "127.0.0.1") =>
+      new Promise<void>((resolve) => server.listen(port, host, resolve)),
     close: () => new Promise<void>((resolve) => {
       if (scheduler) {
         scheduler.stop();

@@ -9,21 +9,23 @@
  *   STELLAR_TESTNET_SECRET_KEY  — Testnet secret key (required for signing)
  *   STELLAR_HORIZON_URL         — Horizon URL (default: https://horizon-testnet.stellar.org)
  *   PORT                        — Server port (default: 3000)
+ *   HOST                        — Bind host (default: 127.0.0.1; set 0.0.0.0 in a container)
  *   DATABASE_PATH               — SQLite file path (optional, in-memory if unset)
  *   DEV_OWNER_ID                — Development owner identity (default: "operator")
  *
  * LIVE_SUBMIT must be explicitly set to "1" to enable real Testnet submission.
  *
  * AUTH MODE:
- *   Development (default):
- *     DevAuthProvider is used. Any request is auto-authenticated.
- *
  *   Production:
- *     Set API_KEYS environment variable to enable production auth.
+ *     Set API_KEYS to enable production auth.
  *     Format: API_KEYS=key1:owner1:subject1,key2:owner2:subject2
  *     ProductionApiKeyAuthProvider validates Bearer tokens against configured keys.
  *
- *   Production mode requires valid API key for ALL requests.
+ *   Development:
+ *     Loopback binds (127.0.0.1/::1) automatically use DevAuthProvider.
+ *     A non-loopback bind WITHOUT API_KEYS is refused at startup unless
+ *     ALLOW_DEV_AUTH=1 is explicitly set — the API never serves unauthenticated
+ *     traffic on a public interface by accident.
  */
 
 import { createApiServer } from "./index.js";
@@ -32,11 +34,11 @@ import { DevAuthProvider, ProductionApiKeyAuthProvider } from "@4evergent/shared
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 
-function parseApiKeys(envVar: string | undefined): Record<string, { ownerId: string; subject: string }> | null {
-  if (!envVar) return null;
+function parseApiKeys(envVar: string | undefined): Record<string, { ownerId: string; subject: string }> {
+  if (!envVar) return {};
   const keys: Record<string, { ownerId: string; subject: string }> = {};
   const entries = envVar.split(",").map((e) => e.trim()).filter(Boolean);
-  
+
   for (const entry of entries) {
     const parts = entry.split(":");
     if (parts.length < 2) {
@@ -50,13 +52,56 @@ function parseApiKeys(envVar: string | undefined): Record<string, { ownerId: str
     }
     keys[key] = { ownerId, subject: subject || `key:${key.slice(0, 8)}` };
   }
-  
-  return Object.keys(keys).length > 0 ? keys : null;
+
+  return keys;
+}
+
+/** Loopback addresses that keep development ergonomics (no API_KEYS needed). */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
+export type AuthModeDecision =
+  | { mode: "production"; reason: string }
+  | { mode: "development"; reason: string; devOptIn: boolean }
+  | { mode: "refuse"; reason: string };
+
+/**
+ * Pure auth-mode selection used at startup. Kept exported and side-effect free
+ * so the fail-closed rule is directly testable.
+ *
+ * Rules:
+ * 1. API_KEYS present  -> production auth (unchanged behavior, precedence over
+ *    any dev opt-in flag).
+ * 2. Loopback bind     -> development auth (preserves local ergonomics).
+ * 3. Public bind + no API_KEYS + ALLOW_DEV_AUTH=1 -> development auth, explicit opt-in.
+ * 4. Public bind + no API_KEYS -> refuse startup (fail closed).
+ */
+export function decideAuthMode(input: {
+  host: string;
+  hasApiKeys: boolean;
+  allowDevAuth: boolean;
+}): AuthModeDecision {
+  const isLoopback = LOOPBACK_HOSTS.has(input.host);
+  if (input.hasApiKeys) {
+    return { mode: "production", reason: "API_KEYS configured" };
+  }
+  if (isLoopback) {
+    return { mode: "development", reason: "loopback bind, API_KEYS unset", devOptIn: false };
+  }
+  if (input.allowDevAuth) {
+    return { mode: "development", reason: "ALLOW_DEV_AUTH=1 explicitly set", devOptIn: true };
+  }
+  return {
+    mode: "refuse",
+    reason:
+      `refusing to start: bind host '${input.host}' is not loopback and API_KEYS is unset. ` +
+      "Set API_KEYS for production authentication, bind to 127.0.0.1, or explicitly set ALLOW_DEV_AUTH=1.",
+  };
 }
 
 async function main() {
   const horizonUrl = process.env.STELLAR_HORIZON_URL || TESTNET_HORIZON_URL;
   const port = Number(process.env.PORT || 3000);
+  const host = process.env.HOST || "127.0.0.1";
   const dbPath = process.env.DATABASE_PATH || undefined;
   const devOwnerId = process.env.DEV_OWNER_ID || "operator";
 
@@ -76,19 +121,35 @@ async function main() {
     process.exit(1);
   }
 
-  // Phase 28T: Production auth provider selection
+  // Phase 28T + production safety: auth provider selection fails closed when a
+  // public bind would otherwise fall through to DevAuthProvider.
   const apiKeys = parseApiKeys(process.env.API_KEYS);
-  let authProvider;
+  const decision = decideAuthMode({
+    host,
+    hasApiKeys: Object.keys(apiKeys).length > 0,
+    allowDevAuth: process.env.ALLOW_DEV_AUTH === "1",
+  });
 
-  if (apiKeys) {
-    authProvider = new ProductionApiKeyAuthProvider({ apiKeys });
-    console.log(`[4evergent] Auth: production (${Object.keys(apiKeys).length} API key(s) configured)`);
-  } else {
-    authProvider = new DevAuthProvider({ defaultOwnerId: devOwnerId });
-    console.log(`[4evergent] Auth: development (ownerId: ${devOwnerId})`);
+  if (decision.mode === "refuse") {
+    console.error(`FATAL: ${decision.reason}`);
+    process.exit(1);
   }
 
-  console.log(`[4evergent] Starting API server on port ${port}`);
+  const authProvider =
+    decision.mode === "production"
+      ? new ProductionApiKeyAuthProvider({ apiKeys })
+      : new DevAuthProvider({ defaultOwnerId: devOwnerId });
+
+  if (decision.mode === "production") {
+    console.log(`[4evergent] Auth: production (${Object.keys(apiKeys).length} API key(s) configured)`);
+  } else {
+    console.log(
+      `[4evergent] Auth: development (ownerId: ${devOwnerId})` +
+        (decision.devOptIn ? " [ALLOW_DEV_AUTH=1 — public bind without API_KEYS]" : "")
+    );
+  }
+
+  console.log(`[4evergent] Starting API server on ${host}:${port}`);
   console.log(`[4evergent] Horizon: ${horizonUrl}`);
   console.log(`[4evergent] Network: Testnet`);
   console.log(`[4evergent] Signer: ${signer.getAccountId().slice(0, 12)}...`);
@@ -106,12 +167,21 @@ async function main() {
       authProvider,
     });
 
-    await server.listen(port);
-    console.log(`[4evergent] Server listening on http://127.0.0.1:${port}`);
+    await server.listen(port, host);
+    console.log(`[4evergent] Server listening on http://${host}:${port}`);
   } catch (err: any) {
     console.error(`FATAL: ${err.message}`);
     process.exit(1);
   }
 }
 
-void main();
+// Only run main() when executed directly — importing decideAuthMode (tests)
+// must not start a server or call process.exit().
+const isDirectRun =
+  typeof process !== "undefined" &&
+  process.argv[1] !== undefined &&
+  import.meta.url === new URL(`file://${process.argv[1]}`).href;
+
+if (isDirectRun) {
+  void main();
+}

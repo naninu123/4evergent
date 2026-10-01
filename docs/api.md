@@ -276,3 +276,101 @@ Queue summary for the caller's executions. Returns
 - This API is served by `apps/api` (`pnpm --filter @4evergent/api start`,
   default port 3000). Configuration via environment — see
   [testnet.md](testnet.md) and `.env.example`.
+
+---
+
+## Hosted runtime (production deployment)
+
+The API is a **long-running, stateful Node.js service**. It is not a serverless
+function and does not support scale-to-zero. Any hosting choice must satisfy
+the requirements below; this document does not endorse a specific provider.
+
+### Runtime requirements
+
+- **Node.js 22 or newer.** `apps/api` and the `@4evergent/database` stores use
+  the built-in `node:sqlite` module (Node 22+). The repository pins
+  `pnpm@10.34.5` (root `packageManager`) and Node 22 (`.nvmrc`).
+- **One instance only.** Sequence-sensitive Stellar submission is serialized by
+  an in-process coordinator (`AccountSequenceCoordinator`), and the execution
+  queue and reconciler run as in-process timers. Running two instances against
+  the same database would allow duplicate workers and conflicting sequence
+  numbers. Do not autoscale horizontally.
+
+### Required environment
+
+| Variable | Required | Notes |
+|---|---|---|
+| `STELLAR_TESTNET_SECRET_KEY` | yes | Testnet signing key, read at startup by `TestnetLocalSigner`. Never bake into an image. |
+| `STELLAR_HORIZON_URL` | no | Defaults to `https://horizon-testnet.stellar.org`. **Must contain `testnet`** or startup fails. |
+| `HOST` | yes in a container | Bind address. Use `0.0.0.0` to be reachable outside the container/network namespace. Defaults to `127.0.0.1` (loopback only). |
+| `PORT` | usually | Defaults to `3000`. Most platforms inject this. |
+| `DATABASE_PATH` | yes in production | SQLite file path. Omit it and all records live in memory and are lost on restart. Mount a **persistent** volume at this path. |
+| `API_KEYS` | yes unless deliberately public | `key:ownerId[:subject]`, comma-separated. Enables `ProductionApiKeyAuthProvider`; every protected endpoint then requires `Authorization: Bearer <key>`. |
+| `CORS_ORIGIN` | when the frontend is cross-origin | Comma-separated exact browser origins. Unset ⇒ no `Access-Control-Allow-Origin` header ⇒ browsers block the calls. |
+| `LIVE_SUBMIT` | no | `1` enables real Testnet submission. Off by default. |
+| `ALLOW_DEV_AUTH` | no | See "Authentication fail-closed" below. |
+
+### Authentication fail-closed
+
+Development auth (`DevAuthProvider`) authenticates **every** request as a single
+default owner with no credentials. To keep local development simple while
+preventing an accidental public exposure, startup refuses to run when:
+
+- `HOST` is not loopback (`127.0.0.1`, `localhost`, `::1`), **and**
+- `API_KEYS` is not set, **and**
+- `ALLOW_DEV_AUTH` is not `1`.
+
+That combination exits with a `FATAL` error rather than serving an
+unauthenticated API on a public interface. Setting `ALLOW_DEV_AUTH=1` is an
+explicit operator opt-in and must not be used for a real deployment.
+
+### Persistent filesystem
+
+`DATABASE_PATH` must live on storage that survives restarts and redeploys —
+a container volume or attached disk. An ephemeral container filesystem loses
+agents, activities, approvals, schedules, executions, and policy config on every
+restart, and the SQLite file cannot be reliably shared between instances.
+
+### Background workers
+
+`apps/api/src/server.ts` starts, in-process:
+
+- an **execution queue** (polls for due executions every 10s, with retry and
+  dead-letter semantics), and
+- a **transaction status reconciler** (polls Horizon every 30s for submitted
+  transactions).
+
+Startup also runs `ExecutionRecoveryService.recover()` to re-queue records left
+in `executing` by an unclean shutdown. These timers require a process that stays
+alive; a platform that freezes or suspends idle processes will delay execution
+and reconciliation. Note also that the process has no `SIGTERM`/`SIGINT` handler,
+so a platform that stops hard on shutdown can interrupt in-flight work — the
+startup recovery pass is what repairs that on the next boot.
+
+### Not supported: serverless and scale-to-zero
+
+This API must not be deployed to a request-scoped serverless or scale-to-zero
+platform. The blockers are structural, not configuration:
+
+- file-backed SQLite (no shared database service),
+- long-lived in-process timers (queue, reconciler, scheduler),
+- in-process sequence serialization for Stellar submissions,
+- a persistent single-instance process model.
+
+Deploy it as a long-running service with a persistent volume. The Dockerfile in
+`apps/api/Dockerfile` builds a provider-neutral image for that purpose:
+
+```
+docker build -f apps/api/Dockerfile -t 4evergent-api .
+```
+
+It runs the repository's own start script (`pnpm --filter @4evergent/api start`
+→ `node apps/api/dist/server.js`) and takes all configuration from the runtime
+environment. No provider-specific configuration is included.
+
+### Frontend integration
+
+The dashboard (`apps/web`) is a static Vite SPA. Set `VITE_API_BASE` at build
+time to the API's public origin, and set the API's `CORS_ORIGIN` to the
+frontend's origin. The two are configured independently — the frontend must not
+rely on same-origin `/api` proxying. See `.env.example`.
