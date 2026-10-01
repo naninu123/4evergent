@@ -4,6 +4,7 @@
   "private": true,
   "description": "4evergent — Autonomous AI Agents on Stellar",
   "license": "MIT",
+  "packageManager": "pnpm@10.34.5",
   "engines": {
     "node": ">=22",
     "pnpm": ">=9"
