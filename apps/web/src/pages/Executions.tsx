@@ -104,48 +104,50 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
             : 'No executions match the selected filter.'}
         />
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Agent</th>
-              <th>Intent</th>
-              <th>Amount</th>
-              <th>Status</th>
-              <th>Attempt</th>
-              <th>Next Retry</th>
-              <th>Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((e) => {
-              const isRetrying = inferRetrying(e);
-              const statusDisplay = isRetrying ? 'Retrying' : statusLabel(e.status);
-              const statusCls = isRetrying ? 'badge-warn' : statusClass(e.status);
-              return (
-                <tr
-                  key={e.id}
-                  onClick={() => onExecutionClick?.(e.id)}
-                  style={{ cursor: onExecutionClick ? 'pointer' : undefined }}
-                >
-                  <td><code>{e.id.slice(0, 8)}</code></td>
-                  <td><code>{e.agentId.slice(0, 8)}</code></td>
-                  <td>{e.intent.type}</td>
-                  <td>{e.intent.type === 'payment' ? `${e.intent.amount} ${(e.intent.assetDetails as { code?: string } | undefined)?.code ?? e.intent.asset}` : '-'}</td>
-                  <td>
-                    <span className={`badge ${statusCls}`}>
-                      {statusDisplay}
-                      {e.status === 'dead_letter' && ' ⚠'}
-                    </span>
-                  </td>
-                  <td>{e.attempt > 0 ? String(e.attempt) : '-'}</td>
-                  <td>{e.nextRetryAt ? new Date(e.nextRetryAt).toLocaleString() : '-'}</td>
-                  <td>{new Date(e.createdAt).toLocaleString()}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="table-wrapper">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Agent</th>
+                <th>Intent</th>
+                <th>Amount</th>
+                <th>Status</th>
+                <th>Attempt</th>
+                <th>Next Retry</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((e) => {
+                const isRetrying = inferRetrying(e);
+                const statusDisplay = isRetrying ? 'Retrying' : statusLabel(e.status);
+                const statusCls = isRetrying ? 'badge-warn' : statusClass(e.status);
+                return (
+                  <tr
+                    key={e.id}
+                    onClick={() => onExecutionClick?.(e.id)}
+                    style={{ cursor: onExecutionClick ? 'pointer' : undefined }}
+                  >
+                    <td><code>{e.id.slice(0, 8)}</code></td>
+                    <td><code>{e.agentId.slice(0, 8)}</code></td>
+                    <td>{e.intent.type}</td>
+                    <td>{e.intent.type === 'payment' ? `${e.intent.amount} ${(e.intent.assetDetails as { code?: string } | undefined)?.code ?? e.intent.asset}` : '-'}</td>
+                    <td>
+                      <span className={`badge ${statusCls}`}>
+                        {statusDisplay}
+                        {e.status === 'dead_letter' && ' ⚠'}
+                      </span>
+                    </td>
+                    <td>{e.attempt > 0 ? String(e.attempt) : '-'}</td>
+                    <td>{e.nextRetryAt ? new Date(e.nextRetryAt).toLocaleString() : '-'}</td>
+                    <td>{new Date(e.createdAt).toLocaleString()}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );

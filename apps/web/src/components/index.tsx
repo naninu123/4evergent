@@ -113,9 +113,23 @@ export function Amount({ value, asset }: { value: string | number; asset?: strin
 export function Address({ address, len = 12 }: { address: string; len?: number }) {
   if (!address) return <span className="muted">-</span>;
   const formatted = address.length > len ? `${address.slice(0, len / 2)}…${address.slice(-len / 2)}` : address;
-  const handleCopy = () => navigator.clipboard?.writeText(address);
+  const copy = () => navigator.clipboard?.writeText(address);
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      copy();
+    }
+  };
   return (
-    <code className="address" title={address} onClick={handleCopy}>
+    <code
+      className="address"
+      role="button"
+      tabIndex={0}
+      title={`${address} (click to copy)`}
+      aria-label={`Copy address ${address}`}
+      onClick={copy}
+      onKeyDown={onKey}
+    >
       {formatted}
     </code>
   );

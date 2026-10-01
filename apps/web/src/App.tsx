@@ -18,7 +18,7 @@ import Submit from './pages/Submit';
    Auth inline form (login screen shown when unauthenticated)
    ========================================================================== */
 
-function AuthInline() {
+function AuthInline({ onSuccess }: { onSuccess?: () => void }) {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
@@ -44,14 +44,20 @@ function AuthInline() {
       await api.listAgents();
       const subject = getStoredSubject() ?? 'authenticated-user';
       storeAuth(token.trim(), subject);
-      navigate('/overview');
+      if (onSuccess) {
+        // Rendered inside RequireAuth: let it re-validate and render the app
+        // in place instead of relying on a route change.
+        onSuccess();
+      } else {
+        navigate('/overview');
+      }
     } catch (_err) {
       clearAuth();
       setLoginError('Invalid token or authentication failed.');
     } finally {
       setLoading(false);
     }
-  }, [navigate]);
+  }, [navigate, onSuccess]);
 
   return (
     <div className="auth-screen">
@@ -93,8 +99,6 @@ function AuthInline() {
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
-  const navigate = useNavigate();
-  const location = useLocation();
 
   useEffect(() => {
     const token = getStoredToken();
@@ -111,12 +115,6 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
       });
   }, []);
 
-  useEffect(() => {
-    if (authenticated === false) {
-      navigate('/', { state: { from: location.pathname } });
-    }
-  }, [authenticated, navigate, location.pathname]);
-
   if (authenticated === null) {
     return (
       <div className="auth-screen">
@@ -130,7 +128,11 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   }
 
   if (authenticated === false) {
-    return <AuthInline />;
+    // Render AuthInline in place. AuthInline already validated the token
+    // against a protected endpoint, so on success we can flip straight to
+    // authenticated — no redirect through the landing page, and no reliance
+    // on the mount-only validation effect re-running.
+    return <AuthInline onSuccess={() => setAuthenticated(true)} />;
   }
 
   return <>{children}</>;
@@ -179,6 +181,7 @@ function Layout({ children }: { children: React.ReactNode }) {
                 <a
                   key={item.path}
                   href={item.path}
+                  aria-label={item.label}
                   className={`nav-item ${currentPath.startsWith(item.path) ? 'active' : ''}`}
                   aria-current={currentPath.startsWith(item.path) ? 'page' : undefined}
                 >

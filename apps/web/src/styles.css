@@ -936,18 +936,19 @@ code.copyable:hover { text-decoration: underline; }
    ========================================================================== */
 
 @media (max-width: 768px) {
+  /* Keep labels readable: a collapsed rail whose text is hidden renders six
+     unidentifiable blank targets. Slightly narrower than desktop, but every
+     nav item still shows its name. */
   .sidebar {
-    width: 60px;
-    min-width: 60px;
-  }
-
-  .sidebar .nav-text {
-    display: none;
+    width: 108px;
+    min-width: 108px;
   }
 
   .sidebar .nav-item {
-    padding: var(--space-sm);
-    text-align: center;
+    padding: var(--space-sm) var(--space-xs);
+    text-align: left;
+    font-size: var(--text-xs);
+    line-height: 1.3;
   }
 
   .nav-item.active {
@@ -956,7 +957,7 @@ code.copyable:hover { text-decoration: underline; }
   }
 
   .main {
-    padding: var(--space-lg);
+    padding: var(--space-md);
   }
 
   .nav-section-title {
@@ -974,4 +975,36 @@ code.copyable:hover { text-decoration: underline; }
   .card-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+
+@media (max-width: 400px) {
+  .sidebar {
+    width: 92px;
+    min-width: 92px;
+  }
+
+  .card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   Focus visibility
+   Keyboard users need a visible focus indicator on every interactive
+   element; the inputs below only styled :focus, leaving buttons and links
+   with the browser default removed in some engines.
+   ========================================================================== */
+
+.btn:focus-visible,
+.btn-ghost:focus-visible,
+.nav-item:focus-visible,
+.logout-btn:focus-visible,
+.address:focus-visible,
+a:focus-visible,
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
