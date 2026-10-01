@@ -28,9 +28,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: baseHeaders,
     keepalive: false,
     ...init,
+    // Merged headers last so a caller-supplied `init.headers` cannot silently
+    // drop the Content-Type/Authorization set above.
+    headers: baseHeaders,
   });
   const body = res.status !== 204 ? await res.json() : null;
   if (!res.ok) {

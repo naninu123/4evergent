@@ -144,21 +144,23 @@ export default function Overview() {
 
       {hasRecentActivity && (
         <Section title="Recent Activity">
-          <table className="table">
-            <thead>
-              <tr><th>Activity</th><th>Agent</th><th>Status</th><th>Time</th></tr>
-            </thead>
-            <tbody>
-              {recentActivity.map((a) => (
-                <tr key={a.id}>
-                  <td><code>{a.id.slice(0, 8)}</code></td>
-                  <td><code>{a.agentId.slice(0, 8)}</code></td>
-                  <td><StatusBadge status={a.status} /></td>
-                  <td className="muted">{new Date(a.createdAt).toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-wrapper">
+            <table className="table">
+              <thead>
+                <tr><th>Activity</th><th>Agent</th><th>Status</th><th>Time</th></tr>
+              </thead>
+              <tbody>
+                {recentActivity.map((a) => (
+                  <tr key={a.id}>
+                    <td><code>{a.id.slice(0, 8)}</code></td>
+                    <td><code>{a.agentId.slice(0, 8)}</code></td>
+                    <td><StatusBadge status={a.status} /></td>
+                    <td className="muted">{new Date(a.createdAt).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Section>
       )}
     </section>
