@@ -42,14 +42,6 @@ const STAGES: Stage[] = [
   { label: 'Activity', desc: 'Recorded and replayable', kind: 'record' },
 ];
 
-const CHIPS = ['Secure operations', 'No arbitrary execution', 'Open source', 'Fast & low cost'];
-
-const HERO_CARDS = [
-  { k: 'wallet', title: 'Permissioned wallets', line: 'Each agent gets a scoped Stellar address.' },
-  { k: 'policy', title: 'Deterministic policy', line: 'Rules decide, not the model.' },
-  { k: 'oss', title: 'Open source & built for Stellar', line: 'MIT licensed, testnet first.' },
-];
-
 type CapKey = 'agent' | 'policy' | 'intent' | 'simulation' | 'approval' | 'execution' | 'schedule' | 'audit';
 
 const CAPABILITIES: { k: CapKey; title: string; line: string }[] = [
@@ -61,12 +53,6 @@ const CAPABILITIES: { k: CapKey; title: string; line: string }[] = [
   { k: 'execution', title: 'Execution', line: 'One coordinated writer per account, retry and dead-letter.' },
   { k: 'schedule', title: 'Schedules', line: 'Recurring intents — active, paused or disabled.' },
   { k: 'audit', title: 'Audit trail', line: 'Every decision, simulation and transaction recorded.' },
-];
-
-const TESTNET_POINTS = [
-  { k: 'env', label: 'Testnet environment', line: 'Horizon Testnet with the SDF test passphrase.' },
-  { k: 'sim', label: 'Simulated approvals & execution', line: 'Every transaction is simulated before signing.' },
-  { k: 'obs', label: 'Full observability', line: 'Activity and execution history stay on record.' },
 ];
 
 /* --- inline icons ---------------------------------------------------------- */
@@ -115,9 +101,9 @@ const EDGES: string[] = [
   'M140 150 C 186 150, 182 240, 226 240',
   'M258 62 C 296 62, 292 96, 320 96',
   'M352 96 C 380 96, 378 148, 398 148',
-  'M398 174 C 380 208, 366 206, 336 206',
+  'M396 172 C 378 204, 366 204, 336 204',
   'M258 150 C 302 150, 302 198, 258 198',
-  'M408 172 C 408 196, 372 214, 336 214',
+  'M402 168 C 402 194, 372 212, 336 212',
 ];
 
 function PolicyGraph() {
@@ -198,7 +184,7 @@ function PolicyGraph() {
         <text className="lp-tag" x="350" y="84">simulate</text>
         <text className="lp-tag" x="356" y="232">sign</text>
         <text className="lp-tag" x="392" y="232">submit</text>
-        <text className="lp-tag lp-tag-dim" x="428" y="182">stellar</text>
+        <text className="lp-tag lp-tag-dim" x="360" y="182">stellar</text>
 
         {/* hold → expiry return path */}
         <text className="lp-tag lp-tag-dim" x="286" y="196">expires</text>
@@ -214,19 +200,6 @@ function PolicyGraph() {
         <span className="lp-mono">allow → simulate → sign → submit</span>
       </div>
     </div>
-  );
-}
-
-function HeroCards() {
-  return (
-    <ul className="lp-hero-cards">
-      {HERO_CARDS.map((c) => (
-        <li className="lp-hero-card" key={c.k}>
-          <span className="lp-hero-card-title">{c.title}</span>
-          <span className="lp-hero-card-line">{c.line}</span>
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -260,61 +233,6 @@ function Pipeline() {
   );
 }
 
-/* --- control plane --------------------------------------------------------- */
-
-type RowState = 'ok' | 'hold' | 'live' | 'err';
-
-function Row({
-  id, main, meta, state, chip,
-}: { id: string; main: string; meta: string; state: RowState; chip: string }) {
-  return (
-    <li className={`lp-row lp-row-${state}`}>
-      <span className="lp-mono lp-row-id">{id}</span>
-      <span className="lp-row-main-txt">{main}</span>
-      <span className="lp-row-meta">{meta}</span>
-      <span className={`lp-chip lp-chip-${state === 'live' ? 'info' : state}`}>
-        <span className="lp-chip-dot" aria-hidden="true" />
-        {chip}
-      </span>
-    </li>
-  );
-}
-
-function ControlPlane() {
-  return (
-    <div className="lp-cp">
-      <section className="lp-panel-box" aria-labelledby="lp-cp-appr">
-        <header className="lp-panel-box-head">
-          <h3 id="lp-cp-appr" className="lp-panel-box-name">Approvals</h3>
-          <span className="lp-mono lp-panel-box-meta">pending_approval · approved · rejected</span>
-        </header>
-        <ul className="lp-rows">
-          <Row id="a91f4c02" main="250.00 USDC" meta="payment · expires in 22h" state="hold" chip="pending_approval" />
-          <Row id="3c88e7b4" main="AQUA trustline" meta="trustline · approved" state="ok" chip="approved" />
-          <Row id="b2d5e019" main="9,400.00 USDC" meta="payment · over threshold" state="err" chip="rejected" />
-        </ul>
-      </section>
-
-      <div className="lp-bridge" aria-hidden="true">
-        <span className="lp-bridge-line" />
-        <span className="lp-bridge-label lp-mono">on approve</span>
-      </div>
-
-      <section className="lp-panel-box" aria-labelledby="lp-cp-exec">
-        <header className="lp-panel-box-head">
-          <h3 id="lp-cp-exec" className="lp-panel-box-name">Executions</h3>
-          <span className="lp-mono lp-panel-box-meta">queued · executing · confirmed · failed</span>
-        </header>
-        <ul className="lp-rows">
-          <Row id="e4b1a077" main="120.00 USDC" meta="attempt 1" state="ok" chip="confirmed" />
-          <Row id="e4b1a081" main="48.50 USDC" meta="attempt 2" state="live" chip="executing" />
-          <Row id="e4b1a090" main="AQUA trustline" meta="retry scheduled" state="err" chip="failed" />
-        </ul>
-      </section>
-    </div>
-  );
-}
-
 export default function Landing() {
   return (
     <div className="lp">
@@ -328,15 +246,13 @@ export default function Landing() {
           </Link>
 
           <nav className="lp-nav" aria-label="Landing sections">
-            <a href="#product">Product</a>
-            <a href="#capabilities">Capabilities</a>
-            <a href="#network">Network</a>
             <a href={DOCS_URL} target="_blank" rel="noreferrer noopener">Docs</a>
+            <a href={REPO_URL} target="_blank" rel="noreferrer noopener">Source</a>
+            <a href={`${REPO_URL}#readme`} target="_blank" rel="noreferrer noopener">Community</a>
           </nav>
 
           <div className="lp-actions">
-            <a className="lp-ghost lp-ghost-sm" href={REPO_URL} target="_blank" rel="noreferrer noopener">Repository</a>
-            <Link to="/login" className="lp-solid lp-solid-sm">Sign In</Link>
+            <Link to="/login" className="lp-solid lp-solid-sm">Get Started</Link>
           </div>
         </div>
       </header>
@@ -352,11 +268,12 @@ export default function Landing() {
 
           <div className="lp-hero-in">
             <div className="lp-hero-copy">
-              <p className="lp-eyebrow">Autonomous financial agents</p>
+              <p className="lp-eyebrow"><span className="lp-eyebrow-dot" aria-hidden="true" />Policy engine</p>
               <h1 id="lp-h1" className="lp-h1">
-                Agents that act,
-                <em>under control.</em>
+                Autonomous
+                <em>Financial Agents</em>
               </h1>
+              <p className="lp-h1sub">Agents that act,<br />under control.</p>
               <p className="lp-lede">
                 4evergent is an open-source framework for running agents with
                 permissioned Stellar wallets. The model proposes a typed intent — a
@@ -365,7 +282,7 @@ export default function Landing() {
                 signed.
               </p>
               <div className="lp-cta">
-                <a className="lp-solid lp-solid-lg" href={DOCS_URL} target="_blank" rel="noreferrer noopener">View docs</a>
+                <a className="lp-solid lp-solid-lg" href={DOCS_URL} target="_blank" rel="noreferrer noopener">View docs <span aria-hidden="true">→</span></a>
                 <a className="lp-ghost lp-ghost-lg" href={REPO_URL} target="_blank" rel="noreferrer noopener">Read the source</a>
               </div>
             </div>
@@ -375,12 +292,6 @@ export default function Landing() {
             </div>
           </div>
 
-          <div className="lp-hero-lower">
-            <HeroCards />
-            <ul className="lp-chips">
-              {CHIPS.map((c) => (<li className="lp-chip lp-chip-neutral" key={c}>{c}</li>))}
-            </ul>
-          </div>
         </section>
 
         {/* ============================= PIPELINE ============================= */}
@@ -394,50 +305,45 @@ export default function Landing() {
             </p>
 
             <Pipeline />
-
-            <div className="lp-verdicts">
-              <p className="lp-verdicts-label">Policy answers with one of three verdicts</p>
-              <div className="lp-verdict-row">
-                <div className="lp-verdict lp-verdict-ok">
-                  <code>allow</code><span>Proceeds to simulation and execution.</span>
-                </div>
-                <div className="lp-verdict lp-verdict-hold">
-                  <code>requires_approval</code><span>Halts at the human gate until approved or expired.</span>
-                </div>
-                <div className="lp-verdict lp-verdict-err">
-                  <code>deny</code><span>Rejected by rule — never built, never signed.</span>
-                </div>
-              </div>
-            </div>
           </div>
         </section>
 
         {/* =========================== CONTROL PLANE ========================== */}
         <section className="lp-band" id="product" aria-labelledby="lp-h-cp">
           <div className="lp-band-in">
-            <p className="lp-kicker">Control plane</p>
-            <h2 id="lp-h-cp" className="lp-h2">The operator sees every state</h2>
-            <p className="lp-secnote">
-              The framework ships with an operational dashboard. The columns, status
-              values and table components below are taken from the shipped Approvals and
-              Executions views.
-            </p>
-
-            <ControlPlane />
-
-            <p className="lp-fineprint">
-              Illustrative rows — not live data. Status values match ApprovalStatus and
-              ExecutionStatus in the shipped types.
-            </p>
+            <p className="lp-kicker">Control</p>
+            <div className="lp-cp-cols">
+              <div className="lp-cp-col">
+                <h2 id="lp-h-cp" className="lp-h2">Control Plane</h2>
+                <p className="lp-sub">Policy, identity and compliance — always on.</p>
+                <ul className="lp-checks">
+                  <li>Deterministic policy engine</li>
+                  <li>Permissioned wallets</li>
+                  <li>Audit &amp; observability</li>
+                </ul>
+              </div>
+              <div className="lp-cp-col">
+                <h3 className="lp-h2">Autonomous Agents</h3>
+                <p className="lp-sub">Secure, composable and built for the real world.</p>
+                <ul className="lp-checks">
+                  <li>On-chain &amp; off-chain actions</li>
+                  <li>Context-aware decision making</li>
+                  <li>Full lifecycle control</li>
+                </ul>
+              </div>
+            </div>
           </div>
         </section>
 
         {/* ============================ CAPABILITIES ========================== */}
         <section className="lp-band" id="capabilities" aria-labelledby="lp-h-caps">
-          <div className="lp-band-in">
-            <p className="lp-kicker">Capabilities</p>
-            <h2 id="lp-h-caps" className="lp-h2">Built for real-world agents</h2>
-            <p className="lp-secnote">Eight core capabilities. One framework.</p>
+          <div className="lp-band-in lp-caps-layout">
+            <div className="lp-caps-head">
+              <p className="lp-kicker">Capabilities</p>
+              <h2 id="lp-h-caps" className="lp-h2">Built for what's next.</h2>
+              <p className="lp-sub">Eight core capabilities working together to give you
+                programmable, secure and compliant financial agents.</p>
+            </div>
 
             <ul className="lp-caps">
               {CAPABILITIES.map((c) => (
@@ -455,40 +361,17 @@ export default function Landing() {
 
         {/* ============================== NETWORK ============================= */}
         <section className="lp-band" id="network" aria-labelledby="lp-h-net">
-          <div className="lp-band-in lp-net">
-            <div className="lp-net-visual">
-              <div className="lp-netpanel">
-                <div className="lp-netpanel-head">
-                  <span className="lp-mono">stellar · testnet</span>
-                  <span className="lp-chip lp-chip-info">live</span>
-                </div>
-                <dl className="lp-netpanel-rows">
-                  <div className="lp-netpanel-row"><dt>Network</dt><dd className="lp-mono">Test SDF Network ; September 2015</dd></div>
-                  <div className="lp-netpanel-row"><dt>Horizon</dt><dd className="lp-mono">horizon-testnet.stellar.org</dd></div>
-                  <div className="lp-netpanel-row"><dt>Submission</dt><dd className="lp-mono">LIVE_SUBMIT off</dd></div>
-                </dl>
+          <div className="lp-band-in">
+            <div className="lp-testnet">
+              <span className="lp-testnet-arc" aria-hidden="true" />
+              <span className="lp-testnet-icon" aria-hidden="true">◎</span>
+              <div className="lp-testnet-copy">
+                <p className="lp-kicker">Testnet</p>
+                <h2 id="lp-h-net" className="lp-h2">Try it on Stellar Testnet</h2>
+                <p className="lp-sub">Explore the platform, test agents and build with
+                  confidence — all on the Stellar Testnet.</p>
               </div>
-            </div>
-
-            <div className="lp-net-copy">
-              <p className="lp-kicker">Network</p>
-              <h2 id="lp-h-net" className="lp-h2">Testnet first</h2>
-              <p className="lp-secnote">
-                Runs against Stellar Testnet only — no mainnet assumption and no real
-                value at risk. Live submission stays off unless you switch it on
-                explicitly.
-              </p>
-              <ul className="lp-points">
-                {TESTNET_POINTS.map((p) => (
-                  <li className="lp-point" key={p.k}>
-                    <span className="lp-point-mark" aria-hidden="true" />
-                    <span className="lp-point-body">
-                      <span className="lp-point-label">{p.label}</span>
-                      <span className="lp-point-line">{p.line}</span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <Link to="/login" className="lp-testnet-go">Get started <span aria-hidden="true">→</span></Link>
             </div>
           </div>
         </section>
@@ -496,15 +379,10 @@ export default function Landing() {
         {/* ============================== CLOSING ============================= */}
         <section className="lp-final" aria-labelledby="lp-h-final">
           <div className="lp-final-in">
-            <span className="lp-final-mark" aria-hidden="true">▲</span>
-            <h2 id="lp-h-final" className="lp-h2 lp-h2-final">Open source. Built for the future.</h2>
+            <h2 id="lp-h-final" className="lp-h2 lp-h2-final">Secure. Compliant. Programmable.</h2>
             <p className="lp-final-note">
-              Join the community, contribute, or deploy your own agents today.
+              The financial agent platform for a more open internet.
             </p>
-            <div className="lp-cta lp-cta-center">
-              <Link to="/login" className="lp-solid lp-solid-lg">Open the dashboard</Link>
-              <a className="lp-ghost lp-ghost-lg" href={REPO_URL} target="_blank" rel="noreferrer noopener">Repository</a>
-            </div>
           </div>
         </section>
       </main>
@@ -515,7 +393,6 @@ export default function Landing() {
             <span className="lp-brand-mark" aria-hidden="true">▲</span>
             4evergent
           </span>
-          <span className="lp-foot-note">© 2026 4evergent · Open source, built on Stellar.</span>
           <nav className="lp-foot-links" aria-label="Footer links">
             <a href={REPO_URL} target="_blank" rel="noreferrer noopener">Source</a>
             <a href={DOCS_URL} target="_blank" rel="noreferrer noopener">Docs</a>
