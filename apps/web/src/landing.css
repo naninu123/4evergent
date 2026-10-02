@@ -307,7 +307,11 @@
   position: relative;
   border: 1px solid var(--lp-line-2);
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(8, 28, 64, 0.94), rgba(2, 10, 22, 0.97));
+  background:
+    linear-gradient(rgba(30, 80, 150, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 80, 150, 0.07) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(8, 28, 64, 0.94), rgba(2, 10, 22, 0.97));
+  background-size: 28px 28px, 28px 28px, auto;
   box-shadow: 0 30px 70px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(150, 205, 255, 0.09);
   padding: 16px;
   overflow: hidden;
@@ -394,7 +398,10 @@
   50%      { opacity: 1;   transform: scale(1.1); }
 }
 
-.lp-core { animation: lp-core 3s ease-in-out infinite; }
+.lp-core {
+  animation: lp-core 3s ease-in-out infinite;
+  box-shadow: 0 0 14px rgba(8, 184, 248, 0.4);
+}
 @keyframes lp-core {
   0%, 100% { opacity: 0.85; }
   50%      { opacity: 1; }
@@ -541,11 +548,22 @@
    ========================================================================== */
 
 .lp-pipe-scroll {
+  position: relative;
   margin-top: clamp(16px, 2vw, 26px);
   overflow-x: auto;
   padding-bottom: 8px;
   scrollbar-width: thin;
   scrollbar-color: var(--lp-line-2) transparent;
+}
+.lp-pipe-scroll::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  right: 0;
+  height: 56px;
+  background: linear-gradient(180deg, transparent, rgba(140, 180, 255, 0.035) 45%, transparent);
+  pointer-events: none;
 }
 .lp-pipe-scroll::-webkit-scrollbar { height: 6px; }
 .lp-pipe-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -595,7 +613,7 @@
   left: 30px; right: 0; top: 50%;
   height: 2px;
   transform: translateY(-50%);
-  background: linear-gradient(90deg, var(--lp-deep-hi), var(--lp-deep));
+  background: linear-gradient(90deg, #0d2137, #0d2137);
   overflow: hidden;
 }
 .lp-step-wire::after {
@@ -785,7 +803,7 @@
   padding: 13px 15px;
   border: 1px solid var(--lp-line);
   border-radius: 11px;
-  background: linear-gradient(180deg, rgba(5, 22, 44, 0.66), rgba(2, 8, 17, 0.72));
+  background: linear-gradient(180deg, rgba(4, 26, 52, 0.7), rgba(1, 8, 18, 0.75));
   min-width: 0;
   transition: border-color .18s ease, background-color .18s ease, transform .18s ease;
 }
@@ -821,7 +839,7 @@
 .lp-netpanel {
   border: 1px solid var(--lp-line-2);
   border-radius: 13px;
-  background: linear-gradient(180deg, rgba(4, 18, 38, 0.91), rgba(2, 8, 17, 0.95));
+  background: linear-gradient(180deg, rgba(2, 10, 24, 0.97), rgba(3, 16, 34, 0.95));
   box-shadow: 0 22px 50px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(150, 205, 255, 0.07);
   overflow: hidden;
 }
