@@ -1008,3 +1008,440 @@ input:focus-visible,
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
+/* ==========================================================================
+   Public Landing Page
+   Scoped to .landing-* only. Nothing here affects the dashboard, auth screen
+   or any other existing view. Palette, fonts and tokens are reused as-is.
+   ========================================================================== */
+
+.landing-main {
+  padding-top: var(--space-3xl);
+  padding-bottom: var(--space-3xl);
+  overflow-wrap: anywhere;
+}
+
+.landing-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+/* ---- Hero ---------------------------------------------------------------- */
+
+.landing-hero {
+  padding-bottom: var(--space-3xl);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.landing-eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  margin-bottom: var(--space-lg);
+}
+
+.landing-title {
+  font-size: clamp(28px, 5.2vw, 42px);
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  font-weight: 700;
+  color: var(--color-text);
+  max-width: 18ch;
+  margin-bottom: var(--space-lg);
+}
+
+.landing-lede {
+  font-size: var(--text-lg);
+  line-height: 1.6;
+  color: var(--color-text-dim);
+  max-width: 60ch;
+  margin-bottom: var(--space-2xl);
+}
+
+.landing-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.landing-cta-row-left {
+  justify-content: flex-start;
+}
+
+/* ---- Section rhythm ------------------------------------------------------ */
+
+.landing-section {
+  padding-top: var(--space-3xl);
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-3xl);
+}
+
+.landing-h2 {
+  font-size: clamp(19px, 2.4vw, 24px);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--color-text);
+  margin-bottom: var(--space-sm);
+}
+
+.landing-section-note {
+  font-size: var(--text-base);
+  line-height: 1.65;
+  color: var(--color-text-dim);
+  max-width: 66ch;
+  margin-bottom: var(--space-2xl);
+}
+
+.landing-section-note-tight {
+  margin-bottom: 0;
+  margin-top: var(--space-2xl);
+}
+
+.landing-fineprint {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  margin-top: var(--space-md);
+}
+
+/* ---- Signature: execution pipeline --------------------------------------- */
+
+.landing-pipeline {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: var(--space-2xl);
+}
+
+.landing-pipeline-step {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  align-items: start;
+  gap: var(--space-md);
+  position: relative;
+  padding-bottom: var(--space-lg);
+}
+
+.landing-pipeline-step:last-child {
+  padding-bottom: 0;
+}
+
+/* connector: from below one node to the next */
+.landing-pipeline-step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 26px;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-border);
+}
+
+.landing-pipeline-index {
+  position: relative;
+  z-index: 1;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-hover);
+  background: var(--color-surface-elev);
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.landing-pipeline-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.landing-pipeline-label {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-text);
+  letter-spacing: -0.005em;
+}
+
+.landing-pipeline-note {
+  font-size: var(--text-sm);
+  color: var(--color-text-dim);
+  overflow-wrap: anywhere;
+}
+
+/* The two boundaries in the pipeline carry the accent: policy evaluates,
+   the approval gate is the point where a human takes over. */
+.landing-pipeline-step:is([data-gate='policy'], [data-gate='approval'])::before {
+  background: var(--color-border-hover);
+}
+
+.landing-pipeline-step[data-gate='policy'] .landing-pipeline-index {
+  border-color: rgba(0, 212, 255, 0.45);
+  background: var(--color-info-bg);
+  color: var(--color-accent);
+}
+
+.landing-pipeline-step[data-gate='approval'] .landing-pipeline-index {
+  border-color: rgba(255, 170, 0, 0.45);
+  background: var(--color-warn-bg);
+  color: var(--color-warn);
+}
+
+.landing-pipeline-step[data-gate='terminal'] .landing-pipeline-index {
+  border-color: rgba(0, 255, 136, 0.4);
+  background: var(--color-ok-bg);
+  color: var(--color-ok);
+}
+
+/* ---- Policy decision states ---------------------------------------------- */
+
+.landing-decisions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: var(--space-sm);
+}
+
+.landing-decision {
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-ok);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  min-width: 0;
+}
+
+.landing-decision-warn {
+  border-left-color: var(--color-warn);
+}
+
+.landing-decision-err {
+  border-left-color: var(--color-err);
+}
+
+.landing-decision-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.landing-decision-note {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+/* ---- Real product surface ------------------------------------------------ */
+
+.landing-surface {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.landing-surface-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-xs) var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-elev);
+}
+
+.landing-surface-bar:first-child {
+  border-top: none;
+}
+
+.landing-surface-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.landing-surface-meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  overflow-wrap: anywhere;
+}
+
+.landing-caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---- Capabilities -------------------------------------------------------- */
+
+.landing-cap-grid {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  gap: 1px;
+  background: var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.landing-cap {
+  background: var(--color-surface);
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.landing-cap-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-text);
+  letter-spacing: -0.005em;
+}
+
+.landing-cap-detail {
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--color-text-dim);
+  overflow-wrap: anywhere;
+}
+
+/* ---- Stellar / testnet facts --------------------------------------------- */
+
+.landing-facts {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.landing-fact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: var(--space-md);
+  padding: var(--space-md) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.landing-fact-key {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  padding-top: 2px;
+}
+
+.landing-fact-value {
+  font-size: var(--text-base);
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+/* ---- Final CTA ----------------------------------------------------------- */
+
+.landing-final {
+  padding-top: var(--space-3xl);
+  padding-bottom: var(--space-3xl);
+}
+
+/* ---- Footer -------------------------------------------------------------- */
+
+.landing-footer {
+  height: auto;
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: none;
+  border-top: 1px solid var(--color-border);
+}
+
+.landing-footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+.landing-footer-text {
+  font-size: var(--text-xs);
+}
+
+.landing-footer-link {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.landing-footer-link:hover {
+  color: var(--color-accent);
+}
+
+/* ---- Landing focus visibility -------------------------------------------- */
+
+.landing-main a:focus-visible,
+.landing-topbar-actions a:focus-visible,
+.landing-footer a:focus-visible,
+.landing-surface .table-wrapper:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ---- Landing responsive -------------------------------------------------- */
+
+@media (max-width: 768px) {
+  .landing-main {
+    padding-top: var(--space-2xl);
+    padding-bottom: var(--space-2xl);
+  }
+
+  .landing-hero,
+  .landing-section {
+    padding-top: var(--space-2xl);
+    padding-bottom: var(--space-2xl);
+  }
+
+  .landing-hero {
+    padding-bottom: var(--space-2xl);
+  }
+
+  .landing-final {
+    padding-top: var(--space-2xl);
+    padding-bottom: var(--space-2xl);
+  }
+
+  .landing-lede {
+    font-size: var(--text-base);
+  }
+
+  .landing-fact {
+    grid-template-columns: 1fr;
+    gap: var(--space-2xs);
+  }
+
+  .landing-pipeline-step {
+    gap: var(--space-sm);
+  }
+}
+
+@media (max-width: 420px) {
+  /* Keep the header to brand + env badge + primary action. The repository
+     link remains available in the hero and final CTA. */
+  .landing-topbar-actions .landing-topbar-link {
+    display: none;
+  }
+}
