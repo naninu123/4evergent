@@ -1,6 +1,6 @@
 .lp {
   /* palette measured from the reference capture */
-  --lp-bg: #00050b;
+  --lp-bg: #000612;
   --lp-bg-soft: #040910;
   --lp-panel-2: #0a2447;
 
@@ -153,13 +153,13 @@
 
 .lp-glow { position: absolute; border-radius: 50%; filter: blur(70px); }
 .lp-glow-a {
-  width: 620px; height: 620px; right: -170px; top: -300px;
-  background: radial-gradient(circle, rgba(8, 85, 155, 0.18), transparent 72%);
+  width: 560px; height: 560px; right: -60px; top: -160px;
+  background: radial-gradient(circle, rgba(8, 85, 155, 0.22), transparent 70%);
   animation: lp-drift 26s ease-in-out infinite alternate;
 }
 .lp-glow-b {
-  width: 480px; height: 480px; left: -200px; top: 20px;
-  background: radial-gradient(circle, rgba(107, 92, 255, 0.16), transparent 68%);
+  width: 380px; height: 380px; right: 40px; top: 40px;
+  background: radial-gradient(circle, rgba(45, 120, 210, 0.14), transparent 70%);
   animation: lp-drift 32s ease-in-out infinite alternate-reverse;
 }
 @keyframes lp-drift {
@@ -173,7 +173,7 @@
   margin: 0 auto;
   padding: clamp(20px, 2.4vw, 30px) var(--lp-gutter) clamp(18px, 2.2vw, 28px);
   display: grid;
-  grid-template-columns: minmax(0, 0.96fr) minmax(0, 1.04fr);
+  grid-template-columns: minmax(0, 0.72fr) minmax(0, 0.98fr);
   gap: clamp(26px, 3.4vw, 48px);
   align-items: center;
 }
@@ -276,7 +276,7 @@
 }
 .lp-solid-sm { padding: 8px 15px; font-size: 13px; min-height: 34px; }
 /* header CTA: cyan pill, but smaller than the in-page CTAs */
-.lp-actions .lp-solid-sm { padding: 6px 13px; font-size: 12px; min-height: 30px; }
+.lp-actions .lp-solid-sm { padding: 5px 12px; font-size: 11.5px; min-height: 27px; }
 .lp-solid-lg, .lp-ghost-lg { padding: 11px 20px; font-size: 14px; min-height: 44px; }
 
 /* ---- hero graph panel ---------------------------------------------------- */
@@ -291,7 +291,7 @@
     linear-gradient(180deg, rgba(6, 20, 42, 0.94), rgba(1, 6, 14, 0.96));
   background-size: 28px 28px, 28px 28px, auto;
   box-shadow: 0 26px 60px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(150, 205, 255, 0.07);
-  padding: 14px 16px 12px;
+  padding: 12px 14px;
   overflow: hidden;
 }
 .lp-graph::before {
@@ -302,22 +302,6 @@
   background: linear-gradient(90deg, transparent, rgba(34, 191, 240, 0.5), transparent);
 }
 
-.lp-graph-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--lp-line);
-}
-.lp-graph-title {
-  font-family: var(--lp-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--lp-mid);
-}
 
 .lp-graph-svg { display: block; width: 100%; height: auto; margin: 6px 0 0; }
 
@@ -350,7 +334,7 @@
   fill: none;
   stroke: rgba(47, 201, 247, 0.72);
   stroke-width: 2;
-  transform-origin: 122px 150px;
+  transform-origin: 300px 176px;
   animation: lp-breathe 3.4s ease-in-out infinite;
 }
 .lp-ring-2 {
@@ -377,7 +361,7 @@
 .lp-core-ok     { fill: var(--lp-ok); }
 .lp-core-hold   { fill: var(--lp-hold); }
 .lp-core-err    { fill: var(--lp-err); }
-.lp-core-blue   { fill: var(--lp-blue); }
+.lp-core-blue   { fill: #3f7fd0; }
 .lp-core-chain  { fill: #4d8dff; }
 
 .lp-tag {
@@ -386,31 +370,23 @@
   fill: #9fb4c8;
   letter-spacing: 0.02em;
 }
-.lp-tag-head { fill: var(--lp-cyan); font-size: 9.5px; letter-spacing: 0.13em; }
+.lp-tag-head { fill: #eaf4fc; font-size: 9.5px; letter-spacing: 0.13em; }
 .lp-tag-dim  { fill: #6b7c92; font-size: 9.5px; }
+.lp-tag-ok   { fill: var(--lp-ok); }
+.lp-tag-hold { fill: var(--lp-hold); }
+.lp-tag-err  { fill: var(--lp-err); }
 
-.lp-graph-legend {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 10px 0 0;
-  border-top: 1px solid var(--lp-line);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  font-family: var(--lp-mono);
-  font-size: 10px;
+/* dashed stubs linking the execution-chain nodes */
+.lp-edge-dash {
+  fill: none;
+  stroke: rgba(47, 201, 247, 0.55);
+  stroke-width: 1.4;
+  stroke-dasharray: 4 4;
 }
-.lp-graph-legend li { display: inline-flex; align-items: center; gap: 7px; }
-.lp-gl-ok   { color: var(--lp-ok); }
-.lp-gl-hold { color: var(--lp-hold); }
-.lp-gl-err  { color: var(--lp-err); }
-.lp-dot {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 8px currentColor;
-}
-.lp-graph-foot { margin-top: 8px; }
+
+/* official Stellar mark rendered inside the "stellar" chain node */
+.lp-stellar-mark path { fill: var(--lp-ink); }
+
 
 /* ---- bands --------------------------------------------------------------- */
 
@@ -428,7 +404,7 @@
   font-size: 10.5px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: #5f93c4;
+  color: var(--lp-low);
 }
 
 .lp-h2 {
@@ -550,12 +526,9 @@
 .lp-step-desc { font-size: 11.5px; line-height: 1.45; color: var(--lp-low); overflow-wrap: anywhere; }
 
 .lp-step-policy .lp-step-mark { color: var(--lp-cyan); border-color: rgba(47, 201, 247, 0.6); }
-.lp-step-policy .lp-step-label { color: var(--lp-cyan); }
 .lp-step-gate .lp-step-mark { color: var(--lp-hold); border-color: rgba(255, 181, 71, 0.5); }
-.lp-step-gate .lp-step-label { color: var(--lp-hold); }
 .lp-step-chain .lp-step-mark { color: var(--lp-blue); border-color: rgba(47, 111, 208, 0.55); }
 .lp-step-record .lp-step-mark { color: var(--lp-ok); border-color: rgba(47, 224, 138, 0.5); }
-.lp-step-record .lp-step-label { color: var(--lp-ok); }
 .lp-step:hover .lp-step-mark { transform: translateY(-2px) scale(1.06); }
 
 /* ---- verdicts ------------------------------------------------------------ */
@@ -670,7 +643,12 @@
   left: 2px;
   top: 8px;
   width: 7px; height: 7px;
-  border: 1.2px solid #4a7ba8;
+  border: 0;
+  left: 1px;
+  top: 7px;
+  width: 5px; height: 9px;
+  border-left: 1.6px solid #8a5a3c;
+  border-top: 1.6px solid #8a5a3c;
   transform: rotate(45deg);
 }
 
@@ -713,9 +691,10 @@
   width: 30px; height: 30px;
   display: grid; place-items: center;
   border-radius: 8px;
-  border: 1px solid rgba(34, 191, 240, 0.24);
-  background: rgba(34, 191, 240, 0.07);
+  border: 1.4px solid rgba(47, 201, 247, 0.55);
+  background: rgba(34, 191, 240, 0.1);
   color: var(--lp-cyan);
+  box-shadow: 0 0 10px rgba(34, 191, 240, 0.25);
 }
 .lp-cap-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .lp-cap-title { font-size: 13px; font-weight: 650; letter-spacing: -0.01em; color: var(--lp-ink); white-space: nowrap; }

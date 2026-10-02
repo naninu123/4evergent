@@ -93,18 +93,48 @@ function Icon({ name }: { name: CapKey }) {
  *   a pending approval can expire back into the record (dashed return path)
  * All labels are real enum values or shipped stage names; nothing is invented.
  */
+/*
+ * Wide single-panel topology, matching the reference capture:
+ *   payment / trustline (left)  →  POLICY ENGINE (centre, layered rings)
+ *   engine → allow | requires_approval | deny (right, colour-coded)
+ *   the allow branch sweeps into a bottom execution row:
+ *   simulate → sign → submit → stellar → expires  (dashed stubs)
+ * The "stellar" node carries the official Stellar rocket mark.
+ * All labels are real enum values or shipped stage names; nothing is invented.
+ */
 const EDGES: string[] = [
-  'M52 66 C 84 66, 86 150, 104 150',
-  'M52 234 C 84 234, 86 150, 104 150',
-  'M140 150 C 186 150, 182 62, 226 62',
-  'M140 150 L 226 150',
-  'M140 150 C 186 150, 182 240, 226 240',
-  'M258 62 C 296 62, 292 96, 320 96',
-  'M352 96 C 380 96, 378 148, 398 148',
-  'M396 172 C 378 204, 366 204, 336 204',
-  'M258 150 C 302 150, 302 198, 258 198',
-  'M402 168 C 402 194, 372 212, 336 212',
+  'M70 118 C 150 118, 214 176, 251 176',
+  'M70 248 C 150 248, 214 176, 251 176',
+  'M349 176 C 446 176, 508 74, 596 74',
+  'M349 176 L 596 176',
+  'M349 176 C 446 176, 508 278, 596 278',
+  'M349 176 C 452 200, 478 320, 534 338',
 ];
+const EXEC_DASH: string[] = [
+  'M118 338 L 200 338',
+  'M246 338 L 336 338',
+  'M382 338 L 472 338',
+  'M560 338 L 626 338',
+];
+
+/* Official Stellar rocket mark — path data taken verbatim from the official
+   Stellar Docs logo (https://developers.stellar.org/img/docusaurus/stellar-logo.svg),
+   whose viewBox is "0 0 799.93 200"; the mark occupies x 0..240. */
+const STELLAR_ROCKET =
+  'M203 26.16l-28.46 14.5-137.43 70a82.49 82.49 0 0 1-.7-10.69A81.87 81.87 0 0 1 158.2 28.6l16.29-8.3 2.43-1.24A100 100 0 0 0 18.18 100q0 3.82.29 7.61a18.19 18.19 0 0 1-9.88 17.58L0 129.57V150l25.29-12.89 8.19-4.18 8.07-4.11L186.43 55l16.28-8.29 33.65-17.15V9.14zM236.36 50L49.78 145l-16.28 8.31L0 170.38v20.41l33.27-16.95 28.46-14.5 137.57-70.1A83.45 83.45 0 0 1 200 100a81.87 81.87 0 0 1-121.91 71.36l-1 .53-17.66 9A100 100 0 0 0 218.18 100c0-2.57-.1-5.14-.29-7.68a18.2 18.2 0 0 1 9.87-17.58l8.6-4.38z';
+
+function StellarMark({ x, y, size = 18 }: { x: number; y: number; size?: number }) {
+  const k = size / 240;
+  return (
+    <g
+      className="lp-stellar-mark"
+      transform={`translate(${x - size / 2} ${y - size / 2}) scale(${k})`}
+      aria-hidden="true"
+    >
+      <path d={STELLAR_ROCKET} />
+    </g>
+  );
+}
 
 function PolicyGraph() {
   return (
@@ -113,92 +143,77 @@ function PolicyGraph() {
       role="img"
       aria-label="Diagram: typed payment and trustline intents reach the policy engine, which answers allow, requires_approval or deny. Only an allowed intent proceeds to simulate, sign and submit on Stellar Testnet. A pending approval can expire."
     >
-      <div className="lp-graph-head">
-        <span className="lp-graph-title">Policy engine</span>
-        <span className="lp-chip lp-chip-info">
-          <span className="lp-chip-dot" aria-hidden="true" />
-          evaluating
-        </span>
-      </div>
-
-      <svg className="lp-graph-svg" viewBox="0 0 460 300" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      <svg className="lp-graph-svg" viewBox="0 0 720 368" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
         <defs>
           <linearGradient id="lpWire" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#2fc9f7" stopOpacity="0.9" />
+            <stop offset="0%" stopColor="#2fc9f7" stopOpacity="0.85" />
             <stop offset="50%" stopColor="#2fc9f7" stopOpacity="1" />
-            <stop offset="100%" stopColor="#2fc9f7" stopOpacity="0.9" />
+            <stop offset="100%" stopColor="#2fc9f7" stopOpacity="0.85" />
           </linearGradient>
           <radialGradient id="lpHub" cx="50%" cy="50%" r="50%">
             <stop offset="0%" stopColor="#5fe0ff" stopOpacity="0.5" />
-            <stop offset="60%" stopColor="#2fc9f7" stopOpacity="0.16" />
+            <stop offset="55%" stopColor="#2fc9f7" stopOpacity="0.18" />
             <stop offset="100%" stopColor="#2fc9f7" stopOpacity="0" />
           </radialGradient>
         </defs>
 
         {/* deep-blue structural lattice behind the network */}
         <g className="lp-lattice">
-          {Array.from({ length: 7 }, (_, i) => (
-            <line key={`v${i}`} x1={40 + i * 64} y1="12" x2={40 + i * 64} y2="288" />
+          {Array.from({ length: 12 }, (_, i) => (
+            <line key={`v${i}`} x1={24 + i * 62} y1="10" x2={24 + i * 62} y2="358" />
           ))}
-          {Array.from({ length: 5 }, (_, i) => (
-            <line key={`h${i}`} x1="12" y1={30 + i * 62} x2="448" y2={30 + i * 62} />
+          {Array.from({ length: 6 }, (_, i) => (
+            <line key={`h${i}`} x1="14" y1={18 + i * 64} x2="706" y2={18 + i * 64} />
           ))}
         </g>
 
         {/* engine bloom */}
-        <circle cx="122" cy="150" r="52" fill="url(#lpHub)" />
+        <circle cx="300" cy="176" r="66" fill="url(#lpHub)" />
 
         {/* continuous deep-blue bed under every wire */}
         {EDGES.map((d, i) => (<path key={`u${i}`} className="lp-edge-under" d={d} />))}
         {/* bright cyan core */}
         {EDGES.map((d, i) => (<path key={`c${i}`} className="lp-edge" d={d} />))}
-        {/* travelling pulse on the three primary branches */}
+        {/* travelling pulse on the primary branches */}
         <path className="lp-edge-flow" d={EDGES[2]} />
         <path className="lp-edge-flow" d={EDGES[3]} />
         <path className="lp-edge-flow" d={EDGES[5]} />
 
         {/* intent sources */}
-        <circle className="lp-core lp-core-src" cx="44" cy="66" r="13" />
-        <circle className="lp-core lp-core-src" cx="44" cy="234" r="13" />
-        <text className="lp-tag" x="62" y="56">payment</text>
-        <text className="lp-tag" x="62" y="224">trustline</text>
+        <circle className="lp-core lp-core-src" cx="58" cy="118" r="12" />
+        <circle className="lp-core lp-core-src" cx="58" cy="248" r="12" />
+        <text className="lp-tag" x="80" y="110">payment</text>
+        <text className="lp-tag" x="80" y="240">trustline</text>
 
-        {/* policy engine hub */}
-        <circle className="lp-ring lp-ring-2" cx="122" cy="150" r="40" />
-        <circle className="lp-ring" cx="122" cy="150" r="30" />
-        <circle className="lp-core lp-core-engine" cx="122" cy="150" r="21" />
-        <text className="lp-tag lp-tag-head" x="122" y="110">POLICY ENGINE</text>
+        {/* policy engine hub: layered rings + core */}
+        <ellipse className="lp-ring lp-ring-2" cx="300" cy="176" rx="49" ry="45" />
+        <ellipse className="lp-ring" cx="300" cy="176" rx="36" ry="33" />
+        <circle className="lp-core lp-core-engine" cx="300" cy="176" r="14" />
+        <text className="lp-tag lp-tag-head" x="300" y="180" textAnchor="middle">POLICY ENGINE</text>
 
-        {/* verdicts */}
-        <circle className="lp-halo" cx="242" cy="62" r="24" /><circle className="lp-core lp-core-ok" cx="242" cy="62" r="15" />
-        <circle className="lp-halo" cx="242" cy="150" r="24" /><circle className="lp-core lp-core-hold" cx="242" cy="150" r="15" />
-        <circle className="lp-halo" cx="242" cy="240" r="24" /><circle className="lp-core lp-core-err" cx="242" cy="240" r="15" />
-        <text className="lp-tag" x="260" y="48">allow</text>
-        <text className="lp-tag" x="260" y="136">requires_approval</text>
-        <text className="lp-tag" x="260" y="226">deny</text>
+        {/* verdicts with colour-coded halos */}
+        <circle className="lp-halo" cx="666" cy="74" r="24" /><circle className="lp-core lp-core-ok" cx="666" cy="74" r="14" />
+        <circle className="lp-halo" cx="666" cy="176" r="24" /><circle className="lp-core lp-core-hold" cx="666" cy="176" r="14" />
+        <circle className="lp-halo" cx="666" cy="278" r="24" /><circle className="lp-core lp-core-err" cx="666" cy="278" r="14" />
+        <text className="lp-tag lp-tag-ok" x="612" y="58">allow</text>
+        <text className="lp-tag lp-tag-hold" x="612" y="160">requires_approval</text>
+        <text className="lp-tag lp-tag-err" x="612" y="262">deny</text>
 
-        {/* allow → simulate → sign · submit */}
-        <circle className="lp-core lp-core-blue" cx="336" cy="96" r="13" />
-        <circle className="lp-core lp-core-chain" cx="404" cy="160" r="13" />
-        <circle className="lp-core lp-core-chain" cx="328" cy="212" r="13" />
-        <text className="lp-tag" x="350" y="84">simulate</text>
-        <text className="lp-tag" x="356" y="232">sign</text>
-        <text className="lp-tag" x="392" y="232">submit</text>
-        <text className="lp-tag lp-tag-dim" x="360" y="182">stellar</text>
-
-        {/* hold → expiry return path */}
-        <text className="lp-tag lp-tag-dim" x="286" y="196">expires</text>
+        {/* execution chain: four chain nodes + dashed stubs */}
+        <circle className="lp-core lp-core-blue" cx="100" cy="338" r="10" />
+        <circle className="lp-core lp-core-blue" cx="228" cy="338" r="10" />
+        <circle className="lp-core lp-core-blue" cx="364" cy="338" r="10" />
+        <circle className="lp-core lp-core-blue" cx="542" cy="338" r="10" />
+        {EXEC_DASH.map((d, i) => (<path key={`d${i}`} className="lp-edge-dash" d={d} />))}
+        <text className="lp-tag" x="68" y="364">simulate</text>
+        <text className="lp-tag" x="220" y="364">sign</text>
+        <text className="lp-tag" x="356" y="364">submit</text>
+        <StellarMark x={542} y={338} size={20} />
+        <text className="lp-tag" x="532" y="316">stellar</text>
+        <circle className="lp-core lp-core-err" cx="672" cy="338" r="10" />
+        <text className="lp-tag" x="640" y="364">expires</text>
       </svg>
 
-      <ul className="lp-graph-legend">
-        <li className="lp-gl-ok"><span className="lp-dot" aria-hidden="true" />allow</li>
-        <li className="lp-gl-hold"><span className="lp-dot" aria-hidden="true" />requires_approval</li>
-        <li className="lp-gl-err"><span className="lp-dot" aria-hidden="true" />deny</li>
-      </ul>
-
-      <div className="lp-graph-foot">
-        <span className="lp-mono">allow → simulate → sign → submit</span>
-      </div>
     </div>
   );
 }
