@@ -23,6 +23,11 @@ export default tseslint.config(
   js.configs.recommended,
   tseslint.configs.recommended,
   {
+    // live integration tests run as plain ESM under node --test
+    files: ["**/*.mjs"],
+    languageOptions: { globals: { ...globals.node } },
+  },
+  {
     files: ["**/*.{ts,tsx}"],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser },

@@ -109,7 +109,7 @@ test("CORS: OPTIONS preflight returns 204 with allowed methods and headers", asy
     assert.equal(res.status, 204);
     assert.equal(header(res, "access-control-allow-origin"), ALLOWED_ORIGIN);
     assert.equal(header(res, "access-control-allow-methods"), "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    assert.equal(header(res, "access-control-allow-headers"), "Authorization, Content-Type, Idempotency-Key");
+    assert.equal(header(res, "access-control-allow-headers"), "Authorization, Content-Type, Idempotency-Key, X-Requested-With");
     assert.equal(header(res, "vary"), "Origin");
   } finally {
     await close();

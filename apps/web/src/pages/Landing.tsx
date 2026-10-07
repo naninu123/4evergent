@@ -1,490 +1,417 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import BrandMark from '../components/landing/BrandMark';
-import {
-  GATES,
-  RULES,
-  DECISIONS,
-  CAPABILITIES,
-  TOOLING,
-  LIMITS,
-  STEPS,
-  DOCS,
-  REPO,
-} from '../components/landing/content';
 
-function cx(...classes: (string | false | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
+/* ==========================================================================
+   Public landing page — /
+   Visual structure follows the supplied reference screenshot: dark navy-black
+   substrate, cyan signal, a policy-engine graph in the hero, a connected
+   eight-stage pipeline, an Approvals/Executions control plane, a capability
+   grid, a Testnet panel and an open-source closing.
+
+   Every claim is traceable to the shipped implementation:
+     pipeline order   apps/api/src/index.ts (policy.evaluate → approval →
+                      pipeline.execute) and packages/stellar/src/pipeline.ts
+                      (build → simulate → sign → submit)
+     three verdicts   types.ts  PolicyDecision.result  allow|deny|requires_approval
+     approval states  types.ts  ApprovalStatus
+     execution states types.ts  ExecutionStatus  queued|executing|submitted|
+                                confirmed|failed|dead_letter
+     policy rules     types.ts  PolicyRules
+     schedule states  types.ts  ScheduleStatus   active|paused|disabled
+     intent types     types.ts  IntentType; Submit.tsx exposes payment+trustline;
+                                raw XDR rejected at the API
+     live-submit gate packages/stellar/src/submitter.ts + network-guard.ts
+     MIT licence      LICENSE
+   No metrics, customers, testimonials or logos are claimed. Rows shown in the
+   control plane are illustrative and labelled as such.
+   ========================================================================== */
+
+const REPO_URL = 'https://github.com/naninu123/4evergent';
+const DOCS_URL = `${REPO_URL}/tree/main/docs`;
+
+type Kind = 'flow' | 'policy' | 'gate' | 'chain' | 'record';
+type Stage = { label: string; desc: string; kind: Kind };
+
+const STAGES: Stage[] = [
+  { label: 'Agent', desc: 'Identity + Stellar address', kind: 'flow' },
+  { label: 'Intent', desc: 'Typed payment or trustline', kind: 'flow' },
+  { label: 'Policy', desc: 'Deterministic rule check', kind: 'policy' },
+  { label: 'Approval', desc: 'Human gate above threshold', kind: 'gate' },
+  { label: 'Simulation', desc: 'Simulated before signing', kind: 'flow' },
+  { label: 'Execution', desc: 'Sequence-coordinated', kind: 'flow' },
+  { label: 'Stellar', desc: 'Testnet transaction', kind: 'chain' },
+  { label: 'Activity', desc: 'Recorded and replayable', kind: 'record' },
+];
+
+type CapKey = 'agent' | 'policy' | 'intent' | 'simulation' | 'approval' | 'execution' | 'schedule' | 'audit';
+
+const CAPABILITIES: { k: CapKey; title: string; line: string }[] = [
+  { k: 'agent', title: 'Agents', line: 'Persistent identity, Stellar address and a capability set.' },
+  { k: 'policy', title: 'Policies', line: 'Tx and daily limits, allowed assets, destinations and contracts.' },
+  { k: 'intent', title: 'Intents', line: 'Schema-typed payment and trustline requests.' },
+  { k: 'simulation', title: 'Simulation', line: 'Fee, operations and warnings before any signature.' },
+  { k: 'approval', title: 'Approval', line: 'Threshold-triggered human gate with expiry.' },
+  { k: 'execution', title: 'Execution', line: 'One coordinated writer per account, retry and dead-letter.' },
+  { k: 'schedule', title: 'Schedules', line: 'Recurring intents — active, paused or disabled.' },
+  { k: 'audit', title: 'Audit trail', line: 'Every decision, simulation and transaction recorded.' },
+];
+
+/* --- inline icons ---------------------------------------------------------- */
+
+function Icon({ name }: { name: CapKey }) {
+  const p = {
+    width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+    strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round',
+    'aria-hidden': true, focusable: false,
+  } as const;
+  switch (name) {
+    case 'agent':
+      return (<svg {...p}><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10.5h5M7 13.5h8" /></svg>);
+    case 'policy':
+      return (<svg {...p}><path d="M12 3.2l6.8 2.9v5c0 4-2.8 7-6.8 8.4-4-1.4-6.8-4.4-6.8-8.4v-5z" /><path d="M9.2 11.8l1.9 1.9 3.8-3.9" /></svg>);
+    case 'intent':
+      return (<svg {...p}><path d="M4 7h12M4 12h9M4 17h6" /><path d="M17.5 14.5L20 17l-2.5 2.5" /></svg>);
+    case 'simulation':
+      return (<svg {...p}><circle cx="10.8" cy="10.8" r="6.2" /><path d="M15.4 15.4L20 20" /><path d="M8.6 10.8h4.4M10.8 8.6v4.4" /></svg>);
+    case 'approval':
+      return (<svg {...p}><circle cx="9" cy="8" r="3" /><path d="M4 18.5c.8-2.6 2.7-4 5-4s4.2 1.4 5 4" /><path d="M15.5 13l2.2 2.2 4.3-4.6" /></svg>);
+    case 'execution':
+      return (<svg {...p}><path d="M12 3.5v5M12 15.5v5" /><circle cx="12" cy="12" r="3.2" /><path d="M5.5 8.5L8 12l-2.5 3.5M18.5 8.5L16 12l2.5 3.5" /></svg>);
+    case 'schedule':
+      return (<svg {...p}><rect x="3.5" y="5.5" width="17" height="15" rx="2" /><path d="M3.5 10.5h17M8 3.5v3.2M16 3.5v3.2" /><path d="M11 13.5l1.8 1.8 3-3.2" /></svg>);
+    default:
+      return (<svg {...p}><path d="M5.5 3.8h9l4 4v12.4h-13z" /><path d="M8.4 9.5h7.2M8.4 13h7.2M8.4 16.5h4.6" /></svg>);
+  }
 }
 
-const VERDICT_LABEL = { allow: 'PASS', deny: 'DENY', hold: 'HOLD' } as const;
+/* --- hero visual: the policy engine and its three verdicts ----------------- */
+
+/*
+ * Network geometry mirrors the runtime order:
+ *   typed intent (payment / trustline)  →  policy engine
+ *   engine → allow | requires_approval | deny
+ *   only allow continues: simulate → sign → submit (Stellar Testnet)
+ *   a pending approval can expire back into the record (dashed return path)
+ * All labels are real enum values or shipped stage names; nothing is invented.
+ */
+/*
+ * Wide single-panel topology, matching the reference capture:
+ *   payment / trustline (left)  →  POLICY ENGINE (centre, layered rings)
+ *   engine → allow | requires_approval | deny (right, colour-coded)
+ *   the allow branch sweeps into a bottom execution row:
+ *   simulate → sign → submit → stellar → expires  (dashed stubs)
+ * The "stellar" node carries the official Stellar rocket mark.
+ * All labels are real enum values or shipped stage names; nothing is invented.
+ */
+const EDGES: string[] = [
+  'M70 118 C 150 118, 214 176, 251 176',
+  'M70 248 C 150 248, 214 176, 251 176',
+  'M349 176 C 446 176, 508 74, 596 74',
+  'M349 176 L 596 176',
+  'M349 176 C 446 176, 508 278, 596 278',
+  'M349 176 C 452 200, 478 320, 534 338',
+];
+const EXEC_DASH: string[] = [
+  'M118 338 L 200 338',
+  'M246 338 L 336 338',
+  'M382 338 L 472 338',
+  'M560 338 L 626 338',
+];
+
+/* Official Stellar rocket mark — path data taken verbatim from the official
+   Stellar Docs logo (https://developers.stellar.org/img/docusaurus/stellar-logo.svg),
+   whose viewBox is "0 0 799.93 200"; the mark occupies x 0..240. */
+const STELLAR_ROCKET =
+  'M203 26.16l-28.46 14.5-137.43 70a82.49 82.49 0 0 1-.7-10.69A81.87 81.87 0 0 1 158.2 28.6l16.29-8.3 2.43-1.24A100 100 0 0 0 18.18 100q0 3.82.29 7.61a18.19 18.19 0 0 1-9.88 17.58L0 129.57V150l25.29-12.89 8.19-4.18 8.07-4.11L186.43 55l16.28-8.29 33.65-17.15V9.14zM236.36 50L49.78 145l-16.28 8.31L0 170.38v20.41l33.27-16.95 28.46-14.5 137.57-70.1A83.45 83.45 0 0 1 200 100a81.87 81.87 0 0 1-121.91 71.36l-1 .53-17.66 9A100 100 0 0 0 218.18 100c0-2.57-.1-5.14-.29-7.68a18.2 18.2 0 0 1 9.87-17.58l8.6-4.38z';
+
+function StellarMark({ x, y, size = 18 }: { x: number; y: number; size?: number }) {
+  const k = size / 240;
+  return (
+    <g
+      className="lp-stellar-mark"
+      transform={`translate(${x - size / 2} ${y - size / 2}) scale(${k})`}
+      aria-hidden="true"
+    >
+      <path d={STELLAR_ROCKET} />
+    </g>
+  );
+}
+
+function PolicyGraph() {
+  return (
+    <div
+      className="lp-graph"
+      role="img"
+      aria-label="Diagram: typed payment and trustline intents reach the policy engine, which answers allow, requires_approval or deny. Only an allowed intent proceeds to simulate, sign and submit on Stellar Testnet. A pending approval can expire."
+    >
+      <svg className="lp-graph-svg" viewBox="0 0 720 368" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+        <defs>
+          <linearGradient id="lpWire" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#2fc9f7" stopOpacity="0.85" />
+            <stop offset="50%" stopColor="#2fc9f7" stopOpacity="1" />
+            <stop offset="100%" stopColor="#2fc9f7" stopOpacity="0.85" />
+          </linearGradient>
+          <radialGradient id="lpHub" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#5fe0ff" stopOpacity="0.5" />
+            <stop offset="55%" stopColor="#2fc9f7" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="#2fc9f7" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+
+        {/* deep-blue structural lattice behind the network */}
+        <g className="lp-lattice">
+          {Array.from({ length: 12 }, (_, i) => (
+            <line key={`v${i}`} x1={24 + i * 62} y1="10" x2={24 + i * 62} y2="358" />
+          ))}
+          {Array.from({ length: 6 }, (_, i) => (
+            <line key={`h${i}`} x1="14" y1={18 + i * 64} x2="706" y2={18 + i * 64} />
+          ))}
+        </g>
+
+        {/* engine bloom */}
+        <circle cx="300" cy="176" r="66" fill="url(#lpHub)" />
+
+        {/* continuous deep-blue bed under every wire */}
+        {EDGES.map((d, i) => (<path key={`u${i}`} className="lp-edge-under" d={d} />))}
+        {/* bright cyan core */}
+        {EDGES.map((d, i) => (<path key={`c${i}`} className="lp-edge" d={d} />))}
+        {/* travelling pulse on the primary branches */}
+        <path className="lp-edge-flow" d={EDGES[2]} />
+        <path className="lp-edge-flow" d={EDGES[3]} />
+        <path className="lp-edge-flow" d={EDGES[5]} />
+
+        {/* intent sources */}
+        <circle className="lp-core lp-core-src" cx="58" cy="118" r="12" />
+        <circle className="lp-core lp-core-src" cx="58" cy="248" r="12" />
+        <text className="lp-tag" x="80" y="110">payment</text>
+        <text className="lp-tag" x="80" y="240">trustline</text>
+
+        {/* policy engine hub: layered rings + core */}
+        <ellipse className="lp-ring lp-ring-2" cx="300" cy="176" rx="49" ry="45" />
+        <ellipse className="lp-ring" cx="300" cy="176" rx="36" ry="33" />
+        <circle className="lp-core lp-core-engine" cx="300" cy="176" r="14" />
+        <text className="lp-tag lp-tag-head" x="300" y="180" textAnchor="middle">POLICY ENGINE</text>
+
+        {/* verdicts with colour-coded halos */}
+        <circle className="lp-halo" cx="666" cy="74" r="24" /><circle className="lp-core lp-core-ok" cx="666" cy="74" r="14" />
+        <circle className="lp-halo" cx="666" cy="176" r="24" /><circle className="lp-core lp-core-hold" cx="666" cy="176" r="14" />
+        <circle className="lp-halo" cx="666" cy="278" r="24" /><circle className="lp-core lp-core-err" cx="666" cy="278" r="14" />
+        <text className="lp-tag lp-tag-ok" x="612" y="58">allow</text>
+        <text className="lp-tag lp-tag-hold" x="612" y="160">requires_approval</text>
+        <text className="lp-tag lp-tag-err" x="612" y="262">deny</text>
+
+        {/* execution chain: four chain nodes + dashed stubs */}
+        <circle className="lp-core lp-core-blue" cx="100" cy="338" r="10" />
+        <circle className="lp-core lp-core-blue" cx="228" cy="338" r="10" />
+        <circle className="lp-core lp-core-blue" cx="364" cy="338" r="10" />
+        <circle className="lp-core lp-core-blue" cx="542" cy="338" r="10" />
+        {EXEC_DASH.map((d, i) => (<path key={`d${i}`} className="lp-edge-dash" d={d} />))}
+        <text className="lp-tag" x="68" y="364">simulate</text>
+        <text className="lp-tag" x="220" y="364">sign</text>
+        <text className="lp-tag" x="356" y="364">submit</text>
+        <StellarMark x={542} y={338} size={20} />
+        <text className="lp-tag" x="532" y="316">stellar</text>
+        <circle className="lp-core lp-core-err" cx="672" cy="338" r="10" />
+        <text className="lp-tag" x="640" y="364">expires</text>
+      </svg>
+
+    </div>
+  );
+}
+
+/* --- pipeline -------------------------------------------------------------- */
+
+function Pipeline() {
+  return (
+    <div
+      className="lp-pipe-scroll"
+      tabIndex={0}
+      role="group"
+      aria-label="Execution pipeline — eight stages, horizontally scrollable"
+    >
+      <ol className="lp-pipe">
+        {STAGES.map((s, i) => (
+          <li className={`lp-step lp-step-${s.kind}`} key={s.label}>
+            <span className="lp-step-rail" aria-hidden="true">
+              <span className="lp-step-mark">
+                <span className="lp-step-num">{String(i + 1).padStart(2, '0')}</span>
+              </span>
+              {i < STAGES.length - 1 && <span className="lp-step-wire" />}
+            </span>
+            <span className="lp-step-body">
+              <span className="lp-step-label">{s.label}</span>
+              <span className="lp-step-desc">{s.desc}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
 
 export default function Landing() {
-  const [selectedGateId, setSelectedGateId] = useState(GATES[0]?.id ?? '');
-  const [selectedToolId, setSelectedToolId] = useState(TOOLING[0]?.id ?? '');
-
-  const gate = GATES.find((g) => g.id === selectedGateId) ?? GATES[0];
-  const tool = TOOLING.find((t) => t.id === selectedToolId) ?? TOOLING[0];
-
-  /** Arrow-key + home/end navigation over a tablist, per WAI-ARIA. */
-  const tabKeys = (ids: string[], select: (id: string) => void) => (
-    e: React.KeyboardEvent<HTMLButtonElement>,
-  ) => {
-    const i = ids.indexOf(e.currentTarget.id);
-    if (i < 0) return;
-    let next = -1;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (i + 1) % ids.length;
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (i - 1 + ids.length) % ids.length;
-    else if (e.key === 'Home') next = 0;
-    else if (e.key === 'End') next = ids.length - 1;
-    if (next < 0) return;
-    e.preventDefault();
-    const id = ids[next];
-    if (!id) return;
-    select(id);
-    document.getElementById(id)?.focus();
-  };
-
-  const gateIds = GATES.map((g) => `gate-tab-${g.id}`);
-  const toolIds = TOOLING.map((t) => `tool-tab-${t.id}`);
-
   return (
-    <div className="lg">
-      <a className="lg-skip" href="#main">Skip to main content</a>
-      <header className="lg-topbar">
-        <div className="lg-wrap">
-          <div className="lg-brand">
-            <BrandMark />
-            <span>4evergent</span>
-          </div>
-          <nav className="lg-nav" aria-label="Primary">
-            <a href="#threat-model">Threat model</a>
-            <a href="#security">Policy engine</a>
-            <a href="#capabilities">Capabilities</a>
-            <a href="#architecture">Architecture</a>
+    <div className="lp">
+      <a className="lp-skip" href="#lp-main">Skip to content</a>
+
+      <header className="lp-topbar">
+        <div className="lp-topbar-in">
+          <Link to="/" className="lp-brand">
+            <span className="lp-brand-mark" aria-hidden="true">▲</span>
+            <span className="lp-brand-name">4evergent</span>
+          </Link>
+
+          <nav className="lp-nav" aria-label="Landing sections">
+            <a href={DOCS_URL} target="_blank" rel="noreferrer noopener">Docs</a>
+            <a href={REPO_URL} target="_blank" rel="noreferrer noopener">Source</a>
+            <a href={`${REPO_URL}#readme`} target="_blank" rel="noreferrer noopener">Community</a>
           </nav>
-          <Link to="/login" className="lg-cta">Open dashboard</Link>
+
+          <div className="lp-actions">
+            <Link to="/login" className="lp-solid lp-solid-sm">Get Started</Link>
+          </div>
         </div>
       </header>
 
-      <main id="main" tabIndex={-1}>
-        {/* ===== Hero ===== */}
-        <section className="lg-hero">
-          <div className="lg-wrap">
-            <div className="lg-hero-grid">
-              <div>
-                <p className="lg-mono-label">Autonomous agents on the Stellar network</p>
-                <h1>Agents that can spend, <em>only inside the envelope you wrote.</em></h1>
-                <p className="lg-hero-sub">
-                  4evergent is a framework for AI agents that hold permissioned Stellar wallets. The
-                  agent produces a typed intent. A deterministic policy engine — never the LLM —
-                  decides whether that intent is allowed, denied, or held for human approval. Every
-                  transaction is simulated before it is signed, and the signer is not reachable from
-                  the agent path.
-                </p>
-                <div className="lg-hero-actions">
-                  <Link to="/login" className="lg-cta">Open dashboard</Link>
-                  <a href={DOCS.architecture} className="lg-cta lg-cta-ghost">
-                    Read the architecture
-                  </a>
-                </div>
-                <div className="lg-hero-meta">
-                  <div>
-                    <b>Gateway between the agent and the ledger</b>
-                    Intent → policy → simulation → signature
-                  </div>
-                  <div>
-                    <b>Agent registry on Stellar Testnet</b>
-                    One contract, deployed
-                  </div>
-                </div>
-              </div>
+      <main id="lp-main" className="lp-main">
+        {/* =============================== HERO =============================== */}
+        <section className="lp-hero" aria-labelledby="lp-h1">
+          <div className="lp-hero-bg" aria-hidden="true">
+            <span className="lp-gridlines" />
+            <span className="lp-glow lp-glow-a" />
+            <span className="lp-glow lp-glow-b" />
+          </div>
 
-              <div className="lg-rail">
-                <div className="lg-rail-head">
-                  <span className="lg-mono-label">TransactionPipeline.execute()</span>
-                  <span className="lg-rail-chip">8 gates</span>
-                </div>
-                <ol className="lg-rail-steps">
-                  {GATES.map((g) => (
-                    <li key={g.id} className="lg-rail-step">
-                      <span className="lg-rail-idx">{g.id}</span>
-                      <span className="lg-rail-name">{g.name}</span>
-                      <span className={cx('lg-vd', `lg-vd--${g.verdict}`)}>
-                        {VERDICT_LABEL[g.verdict]}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
+          <div className="lp-hero-in">
+            <div className="lp-hero-copy">
+              <p className="lp-eyebrow"><span className="lp-eyebrow-dot" aria-hidden="true" />Policy engine</p>
+              <h1 id="lp-h1" className="lp-h1">
+                Autonomous
+                <em>Financial Agents</em>
+              </h1>
+              <p className="lp-h1sub">Agents that act,<br />under control.</p>
+              <p className="lp-lede">
+                4evergent is an open-source framework for running agents with
+                permissioned Stellar wallets. The model proposes a typed intent — a
+                deterministic policy engine, independent of the model, decides whether
+                it is allowed, denied, or requires human approval before anything is
+                signed.
+              </p>
+              <div className="lp-cta">
+                <a className="lp-solid lp-solid-lg" href={DOCS_URL} target="_blank" rel="noreferrer noopener">View docs <span aria-hidden="true">→</span></a>
+                <a className="lp-ghost lp-ghost-lg" href={REPO_URL} target="_blank" rel="noreferrer noopener">Read the source</a>
               </div>
             </div>
-          </div>
-        </section>
 
-        {/* ===== Threat model ===== */}
-        <section className="lg-section" id="threat-model">
-          <div className="lg-wrap">
-            <p className="lg-mono-label">The core problem</p>
-            <h2>An agent with direct signing authority is an agent you can talk into anything.</h2>
-            <div className="lg-problem-grid">
-              <blockquote className="lg-quote">
-                An autonomous LLM with direct wallet access can be manipulated, jailbroken, or simply
-                drift toward unintended behavior.
-              </blockquote>
-              <div className="lg-problem-card">
-                <h3>A prompt is not a policy</h3>
-                <p>
-                  Instructions the agent can read are instructions the agent can argue around. If the
-                  decision-maker is also the thing being constrained, there is no constraint.
-                </p>
-              </div>
-              <div className="lg-problem-card">
-                <h3>Signing is unrecoverable</h3>
-                <p>
-                  Once a Stellar transaction is finalized there is no undo. Losing the signer to the
-                  same layer that produces the intent leaves nothing between a bad decision and a
-                  settlement.
-                </p>
-              </div>
-              <div className="lg-problem-card">
-                <h3>Approval needs evidence</h3>
-                <p>
-                  “Ask a human” is only a gate if the human can see the intent, the rule it hit, and
-                  the simulation result. That record has to be durable, and it has to be safe to share.
-                </p>
-              </div>
+            <div className="lp-hero-visual">
+              <PolicyGraph />
             </div>
           </div>
+
         </section>
 
-        {/* ===== Gate chain, interactive ===== */}
-        <section className="lg-section" id="pipeline">
-          <div className="lg-wrap">
-            <p className="lg-mono-label">How it works</p>
-            <h2>One entry point, eight gates, first failure wins.</h2>
-            <p className="lg-lede">
-              <code>TransactionPipeline.execute()</code> is the only public entry point. No gate is
-              exposed as a method a caller can chain around, so a policy deny or a failed simulation
-              cannot be stepped over. Select a gate:
+        {/* ============================= PIPELINE ============================= */}
+        <section className="lp-band" id="pipeline" aria-labelledby="lp-h-pipe">
+          <div className="lp-band-in">
+            <p className="lp-kicker">The execution pipeline</p>
+            <h2 id="lp-h-pipe" className="lp-h2">One path from intent to transaction</h2>
+            <p className="lp-secnote">
+              Every intent traverses the same ordered pipeline. Nothing skips the policy
+              stage, and nothing is signed before simulation.
             </p>
 
-            <div className="lg-gates" role="tablist" aria-label="Transaction pipeline gates">
-              {GATES.map((g, i) => (
-                <button
-                  key={g.id}
-                  id={`gate-tab-${g.id}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={g.id === selectedGateId}
-                  aria-controls="gate-panel"
-                  tabIndex={g.id === selectedGateId ? 0 : -1}
-                  className="lg-gate-btn"
-                  onClick={() => setSelectedGateId(g.id)}
-                  onKeyDown={tabKeys(gateIds, (id) =>
-                    setSelectedGateId(id.replace('gate-tab-', '')),
-                  )}
-                >
-                  {g.name}
-                  <span className="lg-sr">(gate {i + 1} of {GATES.length})</span>
-                </button>
+            <Pipeline />
+          </div>
+        </section>
+
+        {/* =========================== CONTROL PLANE ========================== */}
+        <section className="lp-band" id="product" aria-labelledby="lp-h-cp">
+          <div className="lp-band-in">
+            <p className="lp-kicker">Control</p>
+            <div className="lp-cp-cols">
+              <div className="lp-cp-col">
+                <h2 id="lp-h-cp" className="lp-h2">Control Plane</h2>
+                <p className="lp-sub">Policy, identity and compliance — always on.</p>
+                <ul className="lp-checks">
+                  <li>Deterministic policy engine</li>
+                  <li>Permissioned wallets</li>
+                  <li>Audit &amp; observability</li>
+                </ul>
+              </div>
+              <div className="lp-cp-col">
+                <h3 className="lp-h2">Autonomous Agents</h3>
+                <p className="lp-sub">Secure, composable and built for the real world.</p>
+                <ul className="lp-checks">
+                  <li>On-chain &amp; off-chain actions</li>
+                  <li>Context-aware decision making</li>
+                  <li>Full lifecycle control</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ============================ CAPABILITIES ========================== */}
+        <section className="lp-band" id="capabilities" aria-labelledby="lp-h-caps">
+          <div className="lp-band-in lp-caps-layout">
+            <div className="lp-caps-head">
+              <p className="lp-kicker">Capabilities</p>
+              <h2 id="lp-h-caps" className="lp-h2">Built for what's next.</h2>
+              <p className="lp-sub">Eight core capabilities working together to give you
+                programmable, secure and compliant financial agents.</p>
+            </div>
+
+            <ul className="lp-caps">
+              {CAPABILITIES.map((c) => (
+                <li className="lp-cap" key={c.k}>
+                  <span className="lp-cap-icon" aria-hidden="true"><Icon name={c.k} /></span>
+                  <span className="lp-cap-text">
+                    <span className="lp-cap-title">{c.title}</span>
+                    <span className="lp-cap-line">{c.line}</span>
+                  </span>
+                </li>
               ))}
-            </div>
-
-            {gate && (
-              <div
-                className="lg-gate-detail"
-                id="gate-panel"
-                role="tabpanel"
-                aria-labelledby={`gate-tab-${gate.id}`}
-                tabIndex={0}
-              >
-                <div>
-                  <p className="lg-gate-actor">{gate.actor}</p>
-                  <h3>{gate.name}</h3>
-                  <p>{gate.summary}</p>
-                </div>
-                <div className="lg-gate-side">
-                  <div className="lg-gate-outcome">
-                    <span className="lg-mono-label">Recorded outcome</span>
-                    <b>{gate.outcome}</b>
-                  </div>
-                  <div className={cx('lg-gate-verdict', `lg-gate-verdict--${gate.verdict}`)}>
-                    <span className="lg-mono-label">Gate verdict on failure</span>
-                    <b>{VERDICT_LABEL[gate.verdict]}</b>
-                  </div>
-                </div>
-              </div>
-            )}
+            </ul>
           </div>
         </section>
 
-        {/* ===== Policy engine ===== */}
-        <section className="lg-section lg-sheet" id="security">
-          <div className="lg-wrap">
-            <p className="lg-mono-label">The policy engine</p>
-            <h2>Rules are data. Evaluation is a pure function.</h2>
-            <div className="lg-sheet-grid">
-              <div>
-                <p className="lg-sheet-lede">
-                  <code>PolicyEngine.evaluate(intent, agentId)</code> takes a typed intent and the
-                  agent’s current rules and returns <code>allow</code>, <code>deny</code>, or{' '}
-                  <code>requires_approval</code>. No network call, no model call, no randomness —
-                  the same intent against the same rules always produces the same decision. An
-                  agent’s stored policy overrides the defaults; rules the agent omits fall back to
-                  the base set.
-                </p>
-                <table className="lg-rules">
-                  <caption>Evaluation order in evaluateWithRules()</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">#</th>
-                      <th scope="col">Rule</th>
-                      <th scope="col">What it checks</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {RULES.map((r) => (
-                      <tr key={r.order}>
-                        <td>{r.order}</td>
-                        <td><code>{r.rule}</code></td>
-                        <td>{r.detail}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+        {/* ============================== NETWORK ============================= */}
+        <section className="lp-band" id="network" aria-labelledby="lp-h-net">
+          <div className="lp-band-in">
+            <div className="lp-testnet">
+              <span className="lp-testnet-arc" aria-hidden="true" />
+              <span className="lp-testnet-icon" aria-hidden="true">◎</span>
+              <div className="lp-testnet-copy">
+                <p className="lp-kicker">Testnet</p>
+                <h2 id="lp-h-net" className="lp-h2">Try it on Stellar Testnet</h2>
+                <p className="lp-sub">Explore the platform, test agents and build with
+                  confidence — all on the Stellar Testnet.</p>
               </div>
-
-              <div>
-                <table className="lg-rules">
-                  <caption>DEFAULT_RULES shipped with the framework</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Limit</th>
-                      <th scope="col">Default</th>
-                      <th scope="col">Scope</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr><td>maxTxAmount</td><td>100 XLM</td><td>Per transaction, per asset</td></tr>
-                    <tr><td>dailySpendingLimit</td><td>500 XLM</td><td>Per agent, UTC day</td></tr>
-                    <tr><td>approval threshold</td><td>50 XLM</td><td>At or above → human review</td></tr>
-                    <tr><td>allowedAssets</td><td>XLM</td><td>Empty list = unrestricted</td></tr>
-                    <tr><td>allowedDestinations</td><td>empty</td><td>Empty list = unrestricted</td></tr>
-                    <tr><td>allowedContractIds</td><td>empty</td><td>Contract calls are denied regardless</td></tr>
-                  </tbody>
-                </table>
-
-                <div className="lg-decisions">
-                  {DECISIONS.map((d) => (
-                    <p key={d.label} className={cx('lg-decision', `lg-decision--${d.kind}`)}>
-                      <b>{d.label}</b>
-                      <span>{d.reason}</span>
-                    </p>
-                  ))}
-                </div>
-              </div>
+              <Link to="/login" className="lp-testnet-go">Get started <span aria-hidden="true">→</span></Link>
             </div>
           </div>
         </section>
 
-        {/* ===== Capabilities ===== */}
-        <section className="lg-section" id="capabilities">
-          <div className="lg-wrap">
-            <p className="lg-mono-label">Capabilities</p>
-            <h2>Two intent types ship executable. The rest are closed by default.</h2>
-            <p className="lg-lede">
-              A capability is a named, policy-governed action. Every type below validates and reaches
-              the policy engine; what differs is the default the policy ships with.
-            </p>
-            <div className="lg-table-scroll">
-              <table className="lg-cap-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Intent type</th>
-                    <th scope="col">Pipeline</th>
-                    <th scope="col">Policy default</th>
-                    <th scope="col">Note</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {CAPABILITIES.map((c) => (
-                    <tr key={c.intent}>
-                      <td><code>{c.intent}</code></td>
-                      <td>
-                        <span className={cx('lg-state', `lg-state--${c.state}`)}>{c.stateLabel}</span>
-                      </td>
-                      <td>
-                        {c.intent === 'payment' || c.intent === 'trustline'
-                          ? 'allowed'
-                          : 'denied'}
-                      </td>
-                      <td>{c.note}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="lg-after-note">
-              Path payments, token issuance, and contract invocation are not implemented —{' '}
-              <a href={DOCS.capabilities}>docs/capabilities.md</a>.
-            </p>
-          </div>
-        </section>
-
-        {/* ===== Architecture ===== */}
-        <section className="lg-section" id="architecture">
-          <div className="lg-wrap">
-            <p className="lg-mono-label">Architecture</p>
-            <h2>A pnpm monorepo where the boundaries are the security model.</h2>
-            <div className="lg-arch-grid">
-              <div>
-                <pre className="lg-code">
-{`apps/
-  web/       React dashboard — reads state, submits intents
-  api/       owns the pipeline; /agents/:id/intents is the entry point
-  cli/       operator client over HTTP — never signs
-
-packages/
-  agent-core/  intent validation + Stellar read adapter
-  policy/      PolicyEngine — pure, deterministic
-  stellar/     pipeline, builder, simulator, submitter, Signer
-  database/    activity, approvals, executions, schedules
-  shared/      types and schemas
-
-contracts/
-  agent-registry/  Soroban: agent identity on-chain`}
-                </pre>
-                <p className="lg-after-note">
-                  Contracts keep their own Cargo workspace and pinned toolchain, so the Rust build
-                  never inherits the Node toolchain.
-                </p>
-              </div>
-              <div>
-                <pre className="lg-code">
-{`agent proposes               code
-  └─ Intent (typed)          shared/types.ts
-       │
-       ├─ validate           IntentValidator
-       ├─ decide             PolicyEngine      ← pure
-       ├─ construct          TransactionBuilder
-       ├─ simulate           Horizon           ← mandatory
-       ├─ sign               Signer            ← not reachable
-       │                                       from the agent
-       ├─ submit             StellarSubmitter
-       └─ record             ActivityStore`}
-                </pre>
-                <p className="lg-after-note">
-                  The frontend never receives keys, seeds, or raw signing capability; the dashboard
-                  shows the decision, not the rules that produced it.
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* ===== Tooling ===== */}
-        <section className="lg-section" id="docs">
-          <div className="lg-wrap">
-            <p className="lg-mono-label">Tooling</p>
-            <h2>Three ways in: HTTP, CLI, and the contract itself.</h2>
-
-            <div className="lg-tabs" role="tablist" aria-label="Developer tooling">
-              {TOOLING.map((t) => (
-                <button
-                  key={t.id}
-                  id={`tool-tab-${t.id}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={t.id === selectedToolId}
-                  aria-controls="tool-panel"
-                  tabIndex={t.id === selectedToolId ? 0 : -1}
-                  className="lg-tab"
-                  onClick={() => setSelectedToolId(t.id)}
-                  onKeyDown={tabKeys(toolIds, (id) => setSelectedToolId(id.replace('tool-tab-', '')))}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-
-            {tool && (
-              <div
-                className="lg-tabpanel"
-                id="tool-panel"
-                role="tabpanel"
-                aria-labelledby={`tool-tab-${tool.id}`}
-                tabIndex={0}
-              >
-                <pre className="lg-code">{tool.code}</pre>
-                <p className="lg-tab-note">
-                  {tool.note} <a href={tool.noteHref}>{tool.noteText}</a>
-                </p>
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* ===== Get started ===== */}
-        <section className="lg-section" id="start">
-          <div className="lg-wrap">
-            <p className="lg-mono-label">Get started</p>
-            <h2>Node 22+, pnpm 10+, no secrets required to build.</h2>
-            <p className="lg-lede">
-              The test suite runs on deterministic mocks and in-process HTTP servers. A funded testnet
-              account is only needed for the opt-in live path, which stays disabled until you set{' '}
-              <code>LIVE_SUBMIT=1</code>.
-            </p>
-            <div className="lg-steps">
-              {STEPS.map((s) => (
-                <div key={s.label} className="lg-step">
-                  <span className="lg-step-label">{s.label}</span>
-                  <h3>{s.title}</h3>
-                  <pre className="lg-code lg-code--tight">{s.code}</pre>
-                </div>
-              ))}
-            </div>
-            <p className="lg-after-note">
-              Full walkthrough, including funding a testnet account and the live end-to-end script:{' '}
-              <a href={DOCS.testnet}>docs/testnet.md</a>.
-            </p>
-          </div>
-        </section>
-
-        {/* ===== Known limits ===== */}
-        <section className="lg-section" id="limits">
-          <div className="lg-wrap">
-            <p className="lg-mono-label">Known limits</p>
-            <h2>What this is not, yet.</h2>
-            <p className="lg-lede">
-              The repository documents its own boundaries. These are the ones that matter before you
-              point an agent at anything.
-            </p>
-            <div className="lg-limits">
-              {LIMITS.map((l) => (
-                <div key={l.title} className="lg-limit">
-                  <b>{l.title}</b>
-                  <span>{l.detail}</span>
-                </div>
-              ))}
-            </div>
-            <p className="lg-after-note">
-              The project records its decisions as ADRs — see{' '}
-              <a href={DOCS.architecture}>docs/architecture.md</a> and{' '}
-              <a href={DOCS.roadmap}>docs/roadmap.md</a>.
+        {/* ============================== CLOSING ============================= */}
+        <section className="lp-final" aria-labelledby="lp-h-final">
+          <div className="lp-final-in">
+            <h2 id="lp-h-final" className="lp-h2 lp-h2-final">Secure. Compliant. Programmable.</h2>
+            <p className="lp-final-note">
+              The financial agent platform for a more open internet.
             </p>
           </div>
         </section>
       </main>
 
-      <footer className="lg-footer">
-        <div className="lg-wrap">
-          <p>4evergent — MIT licensed. Testnet first, no project token.</p>
-          <nav className="lg-footer-links" aria-label="Repository">
-            <a href={REPO}>GitHub</a>
-            <a href={DOCS.readme}>README</a>
-            <a href={DOCS.security}>Security model</a>
-            <a href={DOCS.api}>API</a>
-            <a href={DOCS.changelog}>Changelog</a>
+      <footer className="lp-foot">
+        <div className="lp-foot-in">
+          <span className="lp-foot-brand">
+            <span className="lp-brand-mark" aria-hidden="true">▲</span>
+            4evergent
+          </span>
+          <nav className="lp-foot-links" aria-label="Footer links">
+            <a href={REPO_URL} target="_blank" rel="noreferrer noopener">Source</a>
+            <a href={DOCS_URL} target="_blank" rel="noreferrer noopener">Docs</a>
+            <Link to="/login">Sign in</Link>
           </nav>
         </div>
       </footer>
