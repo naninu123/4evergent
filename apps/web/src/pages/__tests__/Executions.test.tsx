@@ -87,6 +87,71 @@ describe('Executions page', () => {
     });
   });
 
+  it('renders a View execution link per row with correct href', async () => {
+    mockListAllExecutions.mockResolvedValue({
+      executions: [
+        {
+          id: 'exec-1',
+          ownerId: 'owner-a',
+          agentId: 'agent-a',
+          approvalId: null,
+          activityId: null,
+          intent: { type: 'payment', asset: 'XLM', amount: '10', destination: 'G...', reason: 'test' },
+          status: 'submitted',
+          policyDecision: null,
+          simulationResult: null,
+          txHash: 'tx-hash-1',
+          error: null,
+          attempt: 1,
+          nextRetryAt: null,
+          startedAt: null,
+          completedAt: null,
+          errorClass: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    mockGetQueueStatus.mockResolvedValue({ running: true, byStatus: { submitted: 1 } });
+    render(<MemoryRouter><Executions /></MemoryRouter>);
+    await waitFor(() => {
+      const link = screen.getByRole('link', { name: /exec-1/ });
+      expect(link).toHaveAttribute('href', '/executions/exec-1');
+    });
+  });
+
+  it('does not render a link when execution id is missing', async () => {
+    mockListAllExecutions.mockResolvedValue({
+      executions: [
+        {
+          id: '',
+          ownerId: 'owner-a',
+          agentId: 'agent-a',
+          approvalId: null,
+          activityId: null,
+          intent: { type: 'payment', asset: 'XLM', amount: '10', destination: 'G...', reason: 'test' },
+          status: 'queued',
+          policyDecision: null,
+          simulationResult: null,
+          txHash: null,
+          error: null,
+          attempt: 0,
+          nextRetryAt: null,
+          startedAt: null,
+          completedAt: null,
+          errorClass: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    mockGetQueueStatus.mockResolvedValue({ running: false, byStatus: {} });
+    render(<MemoryRouter><Executions /></MemoryRouter>);
+    await waitFor(() => {
+      expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    });
+  });
+
   it('renders dead-letter status correctly', async () => {
     mockListAllExecutions.mockResolvedValue({
       executions: [
