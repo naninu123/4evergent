@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { storeSubject, clearAuth } from '../auth';
+import LogoMark from '../components/LogoMark';
 
 interface LoginProps {
   onSuccess: () => void;
@@ -148,7 +149,7 @@ export default function Login({ onSuccess }: LoginProps) {
   return (
     <div className="auth-screen">
       <div className="auth-box">
-        <div className="auth-logo">▲</div>
+        <LogoMark className="auth-logo" size={32} />
         <h1>Welcome back</h1>
         <p className="muted">Sign in to your 4evergent account</p>
 

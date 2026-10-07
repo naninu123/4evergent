@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import LogoMark from '../components/LogoMark';
 
 /* ==========================================================================
    Public landing page — /
@@ -256,7 +257,7 @@ export default function Landing() {
       <header className="lp-topbar">
         <div className="lp-topbar-in">
           <Link to="/" className="lp-brand">
-            <span className="lp-brand-mark" aria-hidden="true">▲</span>
+            <LogoMark className="lp-brand-mark" size={22} />
             <span className="lp-brand-name">4evergent</span>
           </Link>
 
@@ -405,7 +406,7 @@ export default function Landing() {
       <footer className="lp-foot">
         <div className="lp-foot-in">
           <span className="lp-foot-brand">
-            <span className="lp-brand-mark" aria-hidden="true">▲</span>
+            <LogoMark className="lp-brand-mark" size={22} />
             4evergent
           </span>
           <nav className="lp-foot-links" aria-label="Footer links">
