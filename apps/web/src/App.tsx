@@ -1,7 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect, useCallback } from 'react';
-import { getStoredToken, storeAuth, clearAuth, getStoredSubject } from './auth';
-import { api } from './api';
+import { getStoredToken, clearAuth, getStoredSubject } from './auth';
+import { api, ApiError } from './api';
+import Login from './pages/Login';
 import Landing from './pages/Landing';
 import Overview from './pages/Overview';
 import Agents from './pages/Agents';
@@ -15,105 +16,47 @@ import ExecutionDetail from './pages/ExecutionDetail';
 import Submit from './pages/Submit';
 
 /* ==========================================================================
-   Auth inline form (login screen shown when unauthenticated)
+   Auth — session cookie (user login) with a legacy bearer fallback
    ========================================================================== */
 
-function AuthInline({ onSuccess }: { onSuccess?: () => void }) {
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
-
-  const handleLogin = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setLoading(true);
-    setLoginError(null);
-
-    const formData = new FormData(e.currentTarget);
-    const token = formData.get('token') as string;
-
-    if (!token || token.trim().length === 0) {
-      setLoginError('Please enter a token');
-      setLoading(false);
-      return;
-    }
-
-    storeAuth(token.trim(), 'pending');
-
-    try {
-      // Validate against a PROTECTED endpoint (not public /health).
-      await api.listAgents();
-      const subject = getStoredSubject() ?? 'authenticated-user';
-      storeAuth(token.trim(), subject);
-      if (onSuccess) {
-        // Rendered inside RequireAuth: let it re-validate and render the app
-        // in place instead of relying on a route change.
-        onSuccess();
-      } else {
-        navigate('/overview');
+/**
+ * Validate the current session against the API.
+ * Session cookie (HttpOnly) is the primary mechanism — no API key required.
+ * A legacy stored bearer token (API-key/CLI flows) still works as fallback.
+ */
+async function validateSession(): Promise<boolean> {
+  try {
+    await api.me();
+    return true; // real browser session
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) {
+      // No/invalid session — try the legacy bearer path if a token exists.
+      if (getStoredToken()) {
+        try {
+          await api.listAgents();
+          return true;
+        } catch {
+          clearAuth();
+          return false;
+        }
       }
-    } catch (_err) {
-      clearAuth();
-      setLoginError('Invalid token or authentication failed.');
-    } finally {
-      setLoading(false);
+      return false;
     }
-  }, [navigate, onSuccess]);
-
-  return (
-    <div className="auth-screen">
-      <form className="auth-box" onSubmit={handleLogin}>
-        <div className="auth-logo">▲</div>
-        <h1>4evergent</h1>
-        <p className="muted">Autonomous financial agents, with policy-controlled execution.</p>
-
-        <div className="auth-field">
-          <label htmlFor="token">Access Token</label>
-          <input
-            id="token"
-            name="token"
-            type="password"
-            placeholder="Enter your Bearer token"
-            autoComplete="off"
-            autoFocus
-          />
-        </div>
-
-        {loginError && <div className="error-banner">{loginError}</div>}
-
-        <button type="submit" disabled={loading} className="auth-submit">
-          {loading ? 'Authenticating...' : 'Sign In'}
-        </button>
-
-        <div className="auth-help">
-          <p className="muted">Development: Any non-empty token works with DevAuthProvider.</p>
-          <p className="muted">Production: Use a valid API key or JWT.</p>
-        </div>
-      </form>
-    </div>
-  );
+    // Network/server error: don't wipe state, but don't claim auth either.
+    return false;
+  }
 }
-
-/* ==========================================================================
-   Require Auth — validates session against a protected endpoint
-   ========================================================================== */
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
 
-  useEffect(() => {
-    const token = getStoredToken();
-    if (!token) {
-      setAuthenticated(false);
-      return;
-    }
-    // Validate against a PROTECTED endpoint (not public /health).
-    api.listAgents()
-      .then(() => setAuthenticated(true))
-      .catch(() => {
-        clearAuth();
-        setAuthenticated(false);
-      });
+  const check = useCallback(() => {
+    validateSession().then(setAuthenticated);
   }, []);
+
+  useEffect(() => {
+    check();
+  }, [check]);
 
   if (authenticated === null) {
     return (
@@ -128,11 +71,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   }
 
   if (authenticated === false) {
-    // Render AuthInline in place. AuthInline already validated the token
-    // against a protected endpoint, so on success we can flip straight to
-    // authenticated — no redirect through the landing page, and no reliance
-    // on the mount-only validation effect re-running.
-    return <AuthInline onSuccess={() => setAuthenticated(true)} />;
+    return <Login onSuccess={() => setAuthenticated(true)} />;
   }
 
   return <>{children}</>;
@@ -207,7 +146,13 @@ function OperatorBadge() {
     setSubject(getStoredSubject());
   }, []);
 
-  const handleLogout = useCallback(() => {
+  const handleLogout = useCallback(async () => {
+    // Invalidate the server-side session (cookie) — not just local state.
+    try {
+      await api.logout();
+    } catch {
+      // best-effort: local clear below still runs
+    }
     clearAuth();
     navigate('/');
   }, [navigate]);

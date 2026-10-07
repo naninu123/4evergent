@@ -1,4 +1,7 @@
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:3000';
+// Empty-string VITE_API_BASE (e.g. left blank in a deployment env panel) must
+// fall back to the local dev API — '' would silently make every request a
+// same-origin SPA fetch that returns index.html.
+const API_BASE = import.meta.env.VITE_API_BASE?.trim() || 'http://localhost:3000';
 import { getStoredToken, clearAuth } from './auth';
 
 export class ApiError extends Error {
@@ -10,34 +13,35 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * Requests carry:
+ *  - credentials: include → the HttpOnly session cookie (user login)
+ *  - X-Requested-With → CSRF guard for cookie-authenticated state changes
+ *  - legacy Bearer token if one is stored (API-key/CLI consumers only;
+ *    browser user login never sets it)
+ */
+async function request<T>(path: string, init?: RequestInit & { skipAuthClear?: boolean }): Promise<T> {
+  const { skipAuthClear, ...fetchInit } = init ?? {};
+  const headers = new Headers(fetchInit.headers);
+  if (!headers.has('Content-Type') && fetchInit.body != null) {
+    headers.set('Content-Type', 'application/json');
+  }
+  headers.set('X-Requested-With', '4evergent');
   const token = getStoredToken();
-  const baseHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-
-  // Merge any custom headers
-  if (init?.headers) {
-    const customHeaders = new Headers(init.headers);
-    customHeaders.forEach((value, key) => {
-      baseHeaders[key] = value;
-    });
-  }
-
-  // Add Authorization if token exists
-  if (token) {
-    baseHeaders['Authorization'] = `Bearer ${token}`;
-  }
+  if (token) headers.set('Authorization', `Bearer ${token}`);
 
   const res = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
     keepalive: false,
-    ...init,
-    // Merged headers last so a caller-supplied `init.headers` cannot silently
-    // drop the Content-Type/Authorization set above.
-    headers: baseHeaders,
+    ...fetchInit,
+    headers,
   });
-  const body = res.status !== 204 ? await res.json() : null;
+  const body = res.status !== 204 ? await res.json().catch(() => null) : null;
   if (!res.ok) {
     const message = body?.error ?? `API error ${res.status}`;
-    if (res.status === 401) {
+    // Probes (e.g. /auth/me during session bootstrap) must not wipe a stored
+    // legacy bearer token — the caller decides how to handle 401.
+    if (res.status === 401 && !skipAuthClear) {
       clearAuth();
     }
     throw new ApiError(res.status, message);
@@ -258,4 +262,37 @@ export const api = {
       `/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}/disable`,
       { method: 'POST', body: JSON.stringify({}) }
     ),
+
+  // ===== User authentication (session cookie; no Bearer API key needed) =====
+
+  authConfig: () =>
+    request<{ email: boolean; google: boolean; stellar: boolean; registration: boolean }>(
+      `/auth/config`
+    ),
+
+  me: () =>
+    request<{ subject: string; ownerId: string; method: string; displayName: string; email: string | null }>(
+      `/auth/me`,
+      { skipAuthClear: true }
+    ),
+
+  register: (body: { email: string; password: string; displayName?: string }) =>
+    request<{ subject: string }>('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
+
+  loginEmail: (body: { email: string; password: string }) =>
+    request<{ subject: string }>('/auth/login/email', { method: 'POST', body: JSON.stringify(body) }),
+
+  stellarChallenge: (publicKey: string) =>
+    request<{ challengeId: string; message: string; expiresAt: string; network: string }>(
+      '/auth/stellar/challenge',
+      { method: 'POST', body: JSON.stringify({ publicKey }) }
+    ),
+
+  stellarVerify: (body: { publicKey: string; challengeId: string; signature: string }) =>
+    request<{ subject: string }>('/auth/stellar/verify', { method: 'POST', body: JSON.stringify(body) }),
+
+  logout: () => request<null>('/auth/logout', { method: 'POST' }),
+
+  /** Full-page navigation target for the Google OAuth start (server-side flow). */
+  authStartUrl: () => `${API_BASE}/auth/google/start`,
 };
