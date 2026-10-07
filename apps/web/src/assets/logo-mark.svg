@@ -1,0 +1,10 @@
+<svg width="24" height="28" viewBox="0 0 24 28" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="4evergent">
+  <defs>
+    <linearGradient id="fg-mark-grad" x1="3" y1="2" x2="20" y2="26" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#10B0F0"/>
+      <stop offset="0.62" stop-color="#10B0F0"/>
+      <stop offset="1" stop-color="#285CFF"/>
+    </linearGradient>
+  </defs>
+  <path d="M13.6 3.5 L4.6 16 H19.4 M13.6 3.5 V24.5" stroke="url(#fg-mark-grad)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
