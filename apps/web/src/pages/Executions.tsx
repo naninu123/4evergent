@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api';
 import type { ExecutionRecord, QueueSummary, ExecutionStatus } from '../types';
 
@@ -129,7 +130,15 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
                     onClick={() => onExecutionClick?.(e.id)}
                     style={{ cursor: onExecutionClick ? 'pointer' : undefined }}
                   >
-                    <td><code>{e.id.slice(0, 8)}</code></td>
+                    <td>
+                      {e.id ? (
+                        <Link to={`/executions/${encodeURIComponent(e.id)}`} className="table-row-link">
+                          <code>{e.id.slice(0, 8)}</code>
+                        </Link>
+                      ) : (
+                        <code>{e.id.slice(0, 8)}</code>
+                      )}
+                    </td>
                     <td><code>{e.agentId.slice(0, 8)}</code></td>
                     <td>{e.intent.type}</td>
                     <td>{e.intent.type === 'payment' ? `${e.intent.amount} ${(e.intent.assetDetails as { code?: string } | undefined)?.code ?? e.intent.asset}` : '-'}</td>
