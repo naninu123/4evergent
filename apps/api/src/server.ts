@@ -31,6 +31,7 @@
 import { createApiServer } from "./index.js";
 import { TestnetLocalSigner, TESTNET_HORIZON_URL } from "@4evergent/stellar";
 import { DevAuthProvider, ProductionApiKeyAuthProvider } from "@4evergent/shared";
+import { createAuthModule } from "./auth.js";
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 
@@ -140,6 +141,35 @@ async function main() {
       ? new ProductionApiKeyAuthProvider({ apiKeys })
       : new DevAuthProvider({ defaultOwnerId: devOwnerId });
 
+  // Phase 28U: USER authentication module (browser sessions). The bearer
+  // provider above stays as the machine/API-key fallback.
+  const webOrigin = process.env.WEB_ORIGIN || "http://localhost:5173";
+  const authModule = createAuthModule({
+    dbPath,
+    fallbackProvider: authProvider,
+    config: {
+      webOrigin,
+      google: {
+        clientId: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        redirectUri: process.env.GOOGLE_REDIRECT_URI,
+      },
+      sessionTtlSeconds: process.env.SESSION_TTL_SECONDS
+        ? Number(process.env.SESSION_TTL_SECONDS)
+        : undefined,
+      cookieSecure:
+        process.env.COOKIE_SECURE === "1" ? true
+        : process.env.COOKIE_SECURE === "0" ? false
+        : undefined,
+      cookieSameSite:
+        process.env.COOKIE_SAMESITE === "none" ? "none"
+        : process.env.COOKIE_SAMESITE === "strict" ? "strict"
+        : "lax",
+      stellarDomain: process.env.STELLAR_DOMAIN || new URL(webOrigin).hostname,
+      allowRegistration: process.env.ALLOW_REGISTRATION === "0" ? false : true,
+    },
+  });
+
   if (decision.mode === "production") {
     console.log(`[4evergent] Auth: production (${Object.keys(apiKeys).length} API key(s) configured)`);
   } else {
@@ -165,6 +195,8 @@ async function main() {
       executionQueue: { enabled: true },
       reconciliation: { enabled: true },
       authProvider,
+      authModule,
+      corsOrigin: webOrigin,
     });
 
     await server.listen(port, host);

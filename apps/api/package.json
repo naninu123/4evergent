@@ -14,12 +14,13 @@
     "4evergent-api": "dist/server.js"
   },
   "dependencies": {
-    "@4evergent/shared": "workspace:*",
     "@4evergent/agent-core": "workspace:*",
-    "@4evergent/policy": "workspace:*",
-    "@4evergent/stellar": "workspace:*",
     "@4evergent/database": "workspace:*",
-    "@stellar/stellar-sdk": "^13.0.0"
+    "@4evergent/policy": "workspace:*",
+    "@4evergent/shared": "workspace:*",
+    "@4evergent/stellar": "workspace:*",
+    "@stellar/stellar-sdk": "^13.0.0",
+    "jose": "6.2.12"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

@@ -48,6 +48,7 @@ import {
   createActivity,
 } from "@4evergent/database";
 import type { PolicyRules, Agent, RequestContext, AuthorizationService, AuthProvider, AuthenticatedPrincipal } from "@4evergent/shared";
+import { createAuthModule, type PrincipalResolution } from "./auth.js";
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 
@@ -88,6 +89,8 @@ export interface ServerOptions {
   dbPath?: string;
   deferExecution?: boolean;
   authProvider?: AuthProvider;
+  /** Origin allowed for credentialed CORS (the browser app origin). */
+  corsOrigin?: string;
   authorizationService?: AuthorizationService;
   /** Enable the background scheduler to execute due schedules. */
   scheduler?: {
@@ -109,6 +112,8 @@ export interface ServerOptions {
     concurrency?: number;
     instance?: ExecutionQueue;
   };
+  /** User authentication module (sessions: email / Google / Stellar wallet). */
+  authModule?: ReturnType<typeof createAuthModule>;
   /** Enable on-chain transaction status reconciliation (opt-in). */
   reconciliation?: {
     enabled?: boolean;
@@ -146,14 +151,21 @@ export async function createApiServer(options: ServerOptions) {
     options.authorizationService ?? new ResourceAuthorizationService(defaultAuthzCtx);
 
   // Phase 28K-1: Authentication Boundary
+  // USER AUTH (session cookie) is resolved by the authModule when provided;
+  // the bearer AuthProvider remains the machine/API-key fallback.
   const authProvider = options.authProvider;
+  const authModule = options.authModule ?? null;
   const als = new AsyncLocalStorage<RequestContext>();
 
-  async function authenticateRequest(req: any): Promise<AuthenticatedPrincipal | null> {
-    if (!authProvider) return null;
-    return authProvider.authenticate({
+  async function authenticateRequest(req: any, method: string): Promise<PrincipalResolution> {
+    if (authModule) {
+      return authModule.authenticate(req, method);
+    }
+    if (!authProvider) return { principal: null, via: null, csrfFail: false };
+    const principal = await authProvider.authenticate({
       headers: req.headers as Record<string, string | string[] | undefined>,
     });
+    return { principal, via: principal ? "fallback" : null, csrfFail: false };
   }
 
   function principalToContext(principal: AuthenticatedPrincipal | null): RequestContext {
@@ -452,9 +464,9 @@ export async function createApiServer(options: ServerOptions) {
   // CORS configuration — configurable via CORS_ORIGIN environment variable.
   // Supports multiple origins: CORS_ORIGIN=https://app.example.com,https://preview.vercel.app
   const corsOrigins: string[] = (() => {
-    const raw = process.env.CORS_ORIGIN;
+    const raw = process.env.CORS_ORIGIN ?? options.corsOrigin;
     if (!raw) return [];
-    return raw.split(',').map((o) => o.trim()).filter(Boolean);
+    return raw.split(',').map((o: string) => o.trim()).filter(Boolean);
   })();
 
   function getCorsOrigin(req: any): string | null {
@@ -477,7 +489,8 @@ export async function createApiServer(options: ServerOptions) {
         res.writeHead(204, {
           "Access-Control-Allow-Origin": origin,
           "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-          "Access-Control-Allow-Headers": "Authorization, Content-Type, Idempotency-Key",
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, Idempotency-Key, X-Requested-With",
+          "Access-Control-Allow-Credentials": "true",
           "Vary": "Origin",
         });
       } else {
@@ -497,19 +510,35 @@ export async function createApiServer(options: ServerOptions) {
           headers = status;
           status = 200;
         }
-        const merged = { ...(headers ?? {}), 'Access-Control-Allow-Origin': corsOrigin, 'Vary': 'Origin' };
+        const merged = { ...(headers ?? {}), 'Access-Control-Allow-Origin': corsOrigin, 'Access-Control-Allow-Credentials': 'true', 'Vary': 'Origin' };
         return originalWriteHead(status, merged);
       };
     }
 
+    // Phase 28U: USER AUTH routes (/auth/*) — handled before the auth gate.
+    // These are the login/session endpoints (register, login, challenge,
+    // verify, google start/callback, logout, me, config).
+    if (authModule) {
+      const handled = await authModule.handleRoutes(req, res, url, method);
+      if (handled) return;
+    }
+
     // Phase 28K-1: Authenticate and create request-scoped context
-    const principal = await authenticateRequest(req);
-    const requestScopedCtx = principalToContext(principal);
+    const resolution = await authenticateRequest(req, method);
+    const requestScopedCtx = principalToContext(resolution.principal);
 
     return als.run(requestScopedCtx, () => {
       // Health check is public
       if (method === "GET" && url === "/health") {
         return json(res, { status: "ok", signerAccountId: options.signer.getAccountId() });
+      }
+
+      // CSRF guard: a valid session principal that failed the custom-header
+      // check must not be able to mutate state. Checked BEFORE the generic
+      // 401 gate so forged (cross-site) writes surface as 403, while an
+      // unauthenticated request still gets 401.
+      if (resolution.csrfFail) {
+        return json(res, { error: "csrf_failed" }, 403);
       }
 
       // Protected endpoints require authentication
