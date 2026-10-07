@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { getStoredToken, clearAuth } from './auth';
 import { api, ApiError } from './api';
 import Login from './pages/Login';
+import LogoMark from './components/LogoMark';
 import Landing from './pages/Landing';
 import Overview from './pages/Overview';
 import Agents from './pages/Agents';
@@ -62,7 +63,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     return (
       <div className="auth-screen">
         <div className="auth-box">
-          <div className="auth-logo">▲</div>
+          <LogoMark className="auth-logo" size={32} />
           <h1>4evergent</h1>
           <p className="muted">Verifying session...</p>
         </div>
@@ -104,7 +105,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       <header className="topbar">
         <div className="topbar-left">
           <div className="brand">
-            <span className="brand-mark">▲</span>
+            <LogoMark className="brand-mark" size={22} />
             <span className="brand-name">4evergent</span>
           </div>
           <span className="env-badge">Testnet</span>

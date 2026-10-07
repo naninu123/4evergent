@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getStoredToken, storeAuth, clearAuth, getStoredSubject } from './auth';
 import { api } from './api';
+import LogoMark from './components/LogoMark';
 
 interface AuthProps {
   children: React.ReactNode;
@@ -75,7 +76,7 @@ export function AuthGate({ children }: AuthProps) {
     return (
       <div className="auth-screen">
         <div className="auth-box">
-          <div className="auth-logo">▲</div>
+          <LogoMark className="auth-logo" size={32} />
           <h1>4evergent</h1>
           <p className="muted">Verifying session...</p>
         </div>
@@ -87,7 +88,7 @@ export function AuthGate({ children }: AuthProps) {
     return (
       <div className="auth-screen">
         <form className="auth-box" onSubmit={handleLogin}>
-          <div className="auth-logo">▲</div>
+          <LogoMark className="auth-logo" size={32} />
           <h1>4evergent</h1>
           <p className="muted">Enter your access token to continue.</p>
 
