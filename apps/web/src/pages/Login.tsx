@@ -15,6 +15,8 @@ interface AuthConfig {
 }
 
 import { isConnected, requestAccess, signMessage } from '@stellar/freighter-api';
+import googleGIcon from '../assets/google-g.svg';
+import freighterIcon from '../assets/freighter.png';
 
 const TESTNET_NETWORK_PASSPHRASE = 'Test SDF Network ; September 2015';
 
@@ -147,20 +149,20 @@ export default function Login({ onSuccess }: LoginProps) {
     <div className="auth-screen">
       <div className="auth-box">
         <div className="auth-logo">▲</div>
-        <h1>4evergent</h1>
-        <p className="muted">Autonomous financial agents, with policy-controlled execution.</p>
+        <h1>Welcome back</h1>
+        <p className="muted">Sign in to your 4evergent account</p>
 
         <div className="auth-providers">
           {config?.google && (
-            <button type="button" className="auth-provider" onClick={handleGoogle} disabled={busy}>
-              <span className="auth-provider-icon" aria-hidden="true">G</span>
+            <button type="button" className="auth-provider auth-provider-google" onClick={handleGoogle} disabled={busy}>
+              <img className="auth-provider-icon" src={googleGIcon} alt="" width={20} height={20} />
               Continue with Google
             </button>
           )}
           {config?.stellar && (
-            <button type="button" className="auth-provider" onClick={handleStellar} disabled={busy}>
-              <span className="auth-provider-icon" aria-hidden="true">✦</span>
-              Connect Stellar wallet
+            <button type="button" className="auth-provider auth-provider-wallet" onClick={handleStellar} disabled={busy}>
+              <img className="auth-provider-icon" src={freighterIcon} alt="" width={22} height={22} />
+              Connect with Freighter
             </button>
           )}
           {config && !config.google && (
@@ -212,6 +214,9 @@ export default function Login({ onSuccess }: LoginProps) {
 
         {config?.registration && (
           <p className="auth-help">
+            <span className="auth-switch-label">
+              {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+            </span>
             <button
               type="button"
               className="auth-switch"
@@ -220,7 +225,7 @@ export default function Login({ onSuccess }: LoginProps) {
                 setError(null);
               }}
             >
-              {mode === 'login' ? 'Create an account' : 'Sign in instead'}
+              {mode === 'login' ? 'Create account' : 'Sign in'}
             </button>
           </p>
         )}
