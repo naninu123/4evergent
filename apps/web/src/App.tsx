@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect, useCallback } from 'react';
-import { getStoredToken, clearAuth, getStoredSubject } from './auth';
+import { getStoredToken, clearAuth } from './auth';
 import { api, ApiError } from './api';
 import Login from './pages/Login';
 import Landing from './pages/Landing';
@@ -138,30 +138,69 @@ function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
+function maskAddress(addr: string): string {
+  const g = addr.startsWith('stellar:') ? addr.slice(8) : addr;
+  if (g.length <= 10) return g;
+  return `${g.slice(0, 6)}…${g.slice(-4)}`;
+}
+
 function OperatorBadge() {
-  const [subject, setSubject] = useState<string | null>(null);
+  const [me, setMe] = useState<{ method: string; displayName: string; email: string | null; subject: string } | null>(null);
+  const [copied, setCopied] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
-    setSubject(getStoredSubject());
+    api.me().then(setMe).catch(() => setMe(null));
   }, []);
 
   const handleLogout = useCallback(async () => {
-    // Invalidate the server-side session (cookie) — not just local state.
     try {
       await api.logout();
     } catch {
-      // best-effort: local clear below still runs
+      // best-effort
     }
     clearAuth();
-    navigate('/');
+    navigate('/login');
   }, [navigate]);
+
+  const handleCopy = useCallback(async () => {
+    if (!me) return;
+    const full = me.subject.startsWith('stellar:') ? me.subject.slice(8) : me.subject;
+    try {
+      await navigator.clipboard.writeText(full);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard unavailable
+    }
+  }, [me]);
+
+  const methodLabel = me?.method === 'stellar' ? 'Freighter' : me?.method === 'google' ? 'Google' : 'Email';
+  const identityText = me?.method === 'stellar'
+    ? maskAddress(me.subject)
+    : me?.email ?? me?.displayName ?? 'user';
 
   return (
     <div className="topbar-right">
-      {subject && <span className="operator-badge" title={`Operator: ${subject}`}>{subject}</span>}
-      <button className="logout-btn" onClick={handleLogout} title="Sign out">
-        Sign Out
+      {me && (
+        <div className="identity-area" title={`Signed in via ${me.method}`}>
+          <span className="identity-method">{methodLabel}</span>
+          <span className="identity-address">{identityText}</span>
+          {me.method === 'stellar' && (
+            <button
+              type="button"
+              className={`copy-btn${copied ? ' copied' : ''}`}
+              onClick={handleCopy}
+              title="Copy address"
+              aria-label="Copy address"
+            >
+              {copied ? '✓' : '⧉'}
+            </button>
+          )}
+        </div>
+      )}
+      <button className="logout-btn" onClick={handleLogout} title="Disconnect">
+        Disconnect
       </button>
     </div>
   );
