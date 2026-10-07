@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api';
 import type { SubmitPaymentIntent } from '../types';
+
+interface SubmitResult {
+  agentId: string;
+  activityId: string;
+  approvalId?: string;
+  status: string;
+}
 
 export default function Submit() {
   const [agents, setAgents] = useState<{ id: string; displayName: string }[]>([]);
@@ -16,7 +24,7 @@ export default function Submit() {
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<string | null>(null);
+  const [result, setResult] = useState<SubmitResult | null>(null);
 
   useEffect(() => {
     api.listAgents()
@@ -49,7 +57,7 @@ export default function Submit() {
       };
       api.submitPayment(selectedAgent, intent)
         .then((r) => {
-          setResult(`Intent submitted. Activity: ${r.activityId}${r.approvalId ? ', Approval: ' + r.approvalId : ''}. Status: ${r.status}`);
+          setResult({ agentId: selectedAgent, activityId: r.activityId, approvalId: r.approvalId, status: r.status });
         })
         .catch((e: any) => setError(e.message))
         .finally(() => setLoading(false));
@@ -65,7 +73,7 @@ export default function Submit() {
         reason,
       })
         .then((r) => {
-          setResult(`Trustline intent submitted. Activity: ${r.activityId}${r.approvalId ? ', Approval: ' + r.approvalId : ''}. Status: ${r.status}`);
+          setResult({ agentId: selectedAgent, activityId: r.activityId, approvalId: r.approvalId, status: r.status });
         })
         .catch((e: any) => setError(e.message))
         .finally(() => setLoading(false));
@@ -82,7 +90,32 @@ export default function Submit() {
       </div>
 
       {error && <div className="error-banner">{error}</div>}
-      {result && <div className="success-banner">{result}</div>}
+      {result && (
+        <div
+          className="success-banner"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 'var(--space-sm)',
+            flexWrap: 'wrap',
+          }}
+        >
+          <span>
+            Intent submitted. Activity: {result.activityId}
+            {result.approvalId ? `, Approval: ${result.approvalId}` : ''}. Status: {result.status}
+          </span>
+          {result.activityId && (
+            <Link
+              to={`/agents/${encodeURIComponent(result.agentId)}/activity/${encodeURIComponent(result.activityId)}`}
+              className="btn btn-ghost btn-sm"
+              style={{ flex: '0 0 auto' }}
+            >
+              View activity
+            </Link>
+          )}
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="surface" style={{ maxWidth: '500px' }}>
         <div className="field">
