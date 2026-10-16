@@ -221,7 +221,10 @@ for (const kind of ["InMemory", "SQLite"] as const) {
       assert.equal(await store.sweepDailySpending("2025-01-03"), 0);
     } finally {
       if (store instanceof SQLiteActivityStore) store.close();
-      if (dir) rmSync(dir, { recursive: true, force: true });
+      if (dir) {
+        closeAllSharedConnections();
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 }

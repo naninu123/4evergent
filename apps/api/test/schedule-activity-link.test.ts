@@ -75,7 +75,7 @@ async function startServer(intervalMs = 100): Promise<TestServer> {
 
   const server = await createApiServer({
     port: 0,
-    horizonUrl: "https://horizon-testnet.stellar.org",
+    horizonUrl: "https://127.0.0.1:1",
     signer: new MockSigner("test-agent"),
     policyRules: { maxTxAmount: { XLM: "1000" } },
     deferExecution: true,
@@ -212,18 +212,23 @@ test("SCHEDULE ACTIVITY TEST 4: no duplicate ActivityRecord after pipeline runs"
     await scheduleStore.create(schedule);
 
     // Wait for execution to reach a terminal state
-    await waitFor(async () => {
+    const execution = await waitFor(async () => {
       const recs = await executionStore.listByAgent(schedule.agentId);
       return findExecution(recs, "submitted") ?? findExecution(recs, "dead_letter") ?? findExecution(recs, "failed");
-    }, 2000);
+    }, 5000);
+    assert.ok(execution, "ExecutionRecord should reach a terminal state");
+    assert.ok(execution.activityId, "ExecutionRecord should retain its ActivityRecord link");
 
     // There should be exactly ONE ActivityRecord for this schedule's execution
     const allActivities = await activityStore.listByAgent(schedule.agentId);
     assert.equal(allActivities.length, 1, "Exactly one ActivityRecord should exist for the scheduled execution");
 
     // The activity should have been updated from "pending" to a terminal state
-    const activity = allActivities[0];
-    assert.notEqual(activity.status, "pending", "ActivityRecord should be updated to terminal state after pipeline runs");
+    const activity = await waitFor(async () => {
+      const record = await activityStore.get(execution.activityId!);
+      return record && record.status !== "pending" ? record : undefined;
+    }, 1000);
+    assert.ok(activity, "ActivityRecord should be updated after the execution completes");
   } finally {
     await close();
   }
