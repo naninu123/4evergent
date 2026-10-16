@@ -138,6 +138,18 @@ Approval state is recorded in the activity log. An approval is bound to a specif
 
 After approval, execution is enqueued through the persistent `ExecutionQueue` with retry and dead-letter semantics. If the process exits mid-execution, the `ExecutionRecoveryService` re-queues stuck records on startup.
 
+Approval does not freeze the policy that was in effect when the intent was
+created. Immediately before an approved intent proceeds to transaction
+construction, simulation, and signing, the pipeline evaluates it against the
+agent's current policy. A policy change that denies the intent therefore stops
+execution even when the intent was valid when submitted. This closes the gap
+between an earlier approval request and later execution.
+
+Intent creation already reserves daily spending. The execution-time evaluation
+checks the current daily limit without reserving the same amount again
+(`skipReservation`); this keeps the check read-only and avoids double-counting
+the reservation.
+
 ## Phase 5: Authorization & Ownership Model
 
 Every agent has an `ownerId`. Authorization is enforced server-side via `RequestContext` + `ResourceAuthorizationService`:
