@@ -153,6 +153,53 @@ test("approval: approve valid approval → 200 approved (async execution)", asyn
   }
 });
 
+test("approval: tightened current policy denies an existing approval before execution", async () => {
+  const initialRules: Partial<PolicyRules> = {
+    maxTxAmount: { XLM: "1000" },
+    requireHumanApprovalForAmountAbove: "10",
+  };
+  const { baseUrl, close, approvals } = await startServer({ policyRules: initialRules });
+  try {
+    const intentRes = await post(baseUrl, "/agents/test-agent/intents", {
+      type: "payment",
+      asset: "XLM",
+      destination: Keypair.random().publicKey(),
+      amount: "50",
+      reason: "current policy re-evaluation test",
+    });
+    assert.equal(intentRes.status, 202);
+    assert.equal(intentRes.body.status, "requires_approval");
+
+    // Tighten the agent policy after intent creation but before approval.
+    const policyRes = await fetch(`${baseUrl}/agents/test-agent/policy`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        maxTxAmount: { XLM: "1000" },
+        requireHumanApprovalForAmountAbove: "10",
+        allowedAssets: ["USDC"],
+      }),
+    });
+    assert.equal(policyRes.status, 200);
+
+    const approveRes = await post(baseUrl, `/approvals/${intentRes.body.approvalId}/approve`, { approver: "tester" });
+    assert.equal(approveRes.status, 200);
+
+    // Execution is asynchronous. It must re-check the new allowlist and fail
+    // before reaching simulation or signing.
+    let approval = await approvals.get(intentRes.body.approvalId);
+    for (let attempt = 0; attempt < 50 && approval?.status !== "failed"; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      approval = await approvals.get(intentRes.body.approvalId);
+    }
+    assert.ok(approval);
+    assert.equal(approval!.status, "failed");
+    assert.match(approval!.error ?? "", /Policy re-evaluation denied/);
+  } finally {
+    await close();
+  }
+});
+
 test("approval: second approve is rejected (idempotent — no double submission)", async () => {
   const rules: Partial<PolicyRules> = {
     maxTxAmount: { XLM: "1000" },

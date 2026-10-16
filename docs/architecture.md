@@ -118,3 +118,22 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 - Backward compatible: existing test helpers using `registerAgent()` still work
 - No production authentication — `requestContext.ownerId` is set server-side (existing limitation)
 - `AgentRecord` has no secret fields by construction
+
+## ADR-014: Re-evaluate current policy for approved execution
+
+**Status:** Accepted
+**Context:** An intent can wait for human approval while an agent's policy is
+changed. Executing solely from the decision made at intent creation would let
+an approval bypass a policy that was tightened in the meantime.
+**Decision:** Before an approved intent proceeds to transaction construction,
+simulation, or signing, evaluate it against the agent's current policy. A
+current-policy denial stops execution. The check uses `skipReservation` for
+daily spending: intent creation already reserved the amount, so execution
+checks the current limit without reserving that amount a second time.
+**Consequences:** Policy changes take effect for pending approvals at execution
+time, and a daily-spending re-check cannot double-reserve the original intent.
+The policy decision recorded at intent creation remains useful audit context,
+but does not grant a policy bypass. Alternatives considered were snapshotting
+the original rules for the lifetime of an approval, which would make tightened
+rules ineffective for pending transactions, and reserving again at execution,
+which would double-count the same intent.
