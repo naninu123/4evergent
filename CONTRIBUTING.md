@@ -88,6 +88,16 @@ Every capability must include:
 
 Run cargo from inside `contracts/` (`cd contracts && cargo test`) so `contracts/rust-toolchain.toml` (pinned 1.81.0) applies. The wasm target is `wasm32-unknown-unknown`. `contracts/Cargo.lock` is committed on purpose — builds are reproducible via `--locked`; use `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo generate-lockfile` when dependencies change so the MSRV-aware resolver keeps versions 1.81-compatible.
 
+Before opening a pull request, run these checks from the repository root:
+
+```bash
+cd contracts
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+`cargo fmt --all --check` verifies formatting without modifying files. Clippy checks the contracts workspace for lint warnings; CI treats warnings as errors.
+
 ## Code style
 
 - TypeScript with strict mode enabled.

@@ -183,6 +183,9 @@ checks. See `contracts/permissions/README.md`.
 
 ### Prerequisites
 
+Contracts CI enforces Rust formatting and Clippy checks. Run both locally from
+`contracts/` before opening a pull request.
+
 Pinned toolchain comes from `contracts/rust-toolchain.toml` (Rust 1.81.0 with the
 `wasm32-unknown-unknown` target). Install the CLI if missing:
 

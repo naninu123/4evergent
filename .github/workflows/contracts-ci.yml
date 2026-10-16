@@ -36,6 +36,13 @@ jobs:
 
       - name: Build (wasm32-unknown-unknown)
         run: cargo build --workspace --locked --manifest-path contracts/Cargo.toml --target wasm32-unknown-unknown
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+        working-directory: contracts
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: contracts
 
       - name: Test
         run: cargo test --workspace --locked --manifest-path contracts/Cargo.toml
