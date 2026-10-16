@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { StrKey } from "@stellar/stellar-sdk";
 import { log, generateRequestId, runRequestIdContext } from "./logging.js";
 import type {
   AgentIntent,
@@ -794,6 +795,11 @@ export async function createApiServer(options: ServerOptions) {
     if (b.stellarAddress !== undefined) {
       if (typeof b.stellarAddress !== "string") {
         return json(res, { error: "stellarAddress must be a string" }, 400);
+      }
+      if (b.stellarAddress.length > 0 && !StrKey.isValidEd25519PublicKey(b.stellarAddress)) {
+        return json(res, {
+          error: "stellarAddress must be a valid Stellar Ed25519 public key (G..., 56 characters)",
+        }, 400);
       }
       stellarAddress = b.stellarAddress;
     }
