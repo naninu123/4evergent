@@ -10,6 +10,7 @@
  *   FOREGENT_API_URL  — API base URL (default: http://127.0.0.1:3000)
  *   FOREGENT_API_KEY  — Bearer API key (production auth mode)
  *   FOREGENT_API_TIMEOUT_MS — Per-request timeout in ms (default: 5000)
+ *   FOREGENT_OUTPUT   — Output format ('json' for JSON mode)
  */
 
 import { exit } from "node:process";
@@ -17,6 +18,8 @@ import { createRequire } from "node:module";
 
 // The build replaces this lookup with the package version for a standalone CLI.
 const VERSION: string = createRequire(import.meta.url)("../package.json").version;
+
+let jsonMode = (process.env.FOREGENT_OUTPUT ?? "").toLowerCase() === "json";
 
 const API_URL = process.env.FOREGENT_API_URL ?? "http://127.0.0.1:3000";
 const API_KEY = process.env.FOREGENT_API_KEY;
@@ -127,6 +130,14 @@ async function request(path: string, init: RequestInit = {}): Promise<ApiRespons
 
 // --- Formatters ---
 
+function printResult(humanOutput: string, jsonValue: any) {
+  if (jsonMode) {
+    console.log(JSON.stringify(jsonValue, null, 2));
+  } else {
+    console.log(humanOutput);
+  }
+}
+
 function formatAgent(agent: any) {
   return `Agent:
   ID:           ${agent.id}
@@ -159,8 +170,10 @@ function formatExecution(e: any) {
 async function cmdHealth() {
   try {
     const { body } = await request("/health");
-    console.log(`API Status: ${body.status === "ok" ? "healthy" : "unhealthy"}`);
-    console.log(`Signer: ${body.signerAccountId?.slice(0, 12)}...`);
+    printResult(
+      `API Status: ${body.status === "ok" ? "healthy" : "unhealthy"}\nSigner: ${body.signerAccountId?.slice(0, 12)}...`,
+      body
+    );
     return 0;
   } catch (err: any) {
     console.error(`Health check failed: ${err.message}`);
@@ -171,13 +184,14 @@ async function cmdHealth() {
 async function cmdAgentList() {
   try {
     const { body } = await request("/agents");
-    if (!body.agents || body.agents.length === 0) {
+    if (!jsonMode && (!body.agents || body.agents.length === 0)) {
       console.log("No agents found.");
       return 0;
     }
-    for (const a of body.agents) {
-      console.log(`${a.id}\t${a.displayName}\t${a.status ?? (a.active ? "active" : "paused")}`);
-    }
+    const lines = (body.agents ?? []).map(
+      (a: any) => `${a.id}\t${a.displayName}\t${a.status ?? (a.active ? "active" : "paused")}`
+    );
+    printResult(lines.join("\n"), body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -192,7 +206,7 @@ async function cmdAgentGet(agentId: string) {
   }
   try {
     const { body } = await request(`/agents/${encodeURIComponent(agentId)}`);
-    console.log(formatAgent(body));
+    printResult(formatAgent(body), body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -211,7 +225,7 @@ async function cmdAgentStatus(agentId: string, status: "active" | "paused" | "di
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
     });
-    console.log(`Agent ${body.id} status: ${body.status}`);
+    printResult(`Agent ${body.id} status: ${body.status}`, body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -222,14 +236,15 @@ async function cmdAgentStatus(agentId: string, status: "active" | "paused" | "di
 async function cmdApprovalList() {
   try {
     const { body } = await request("/approvals");
-    if (!body.approvals || body.approvals.length === 0) {
+    if (!jsonMode && (!body.approvals || body.approvals.length === 0)) {
       console.log("No approvals found.");
       return 0;
     }
-    console.log(`ID\t\t\tAgent\t\t\tStatus\t\t\tCreated`);
-    for (const a of body.approvals) {
-      console.log(`${a.id.slice(0, 18)}\t${a.agentId.slice(0, 14)}\t\t${a.status}\t\t${new Date(a.createdAt).toLocaleString()}`);
+    const lines = [`ID\t\t\tAgent\t\t\tStatus\t\t\tCreated`];
+    for (const a of body.approvals ?? []) {
+      lines.push(`${a.id.slice(0, 18)}\t${a.agentId.slice(0, 14)}\t\t${a.status}\t\t${new Date(a.createdAt).toLocaleString()}`);
     }
+    printResult(lines.join("\n"), body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -248,8 +263,9 @@ async function cmdApprovalAction(approvalId: string, action: "approve" | "reject
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    console.log(`Approval ${body.status}: agent=${body.agentId} activity=${body.activityId}`);
-    if (body.message) console.log(`  ${body.message}`);
+    let msg = `Approval ${body.status}: agent=${body.agentId} activity=${body.activityId}`;
+    if (body.message) msg += `\n  ${body.message}`;
+    printResult(msg, body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -261,16 +277,17 @@ async function cmdExecutionList() {
   try {
     const { body } = await request("/executions?limit=100");
     const all: any[] = body.executions ?? [];
-    if (all.length === 0) {
+    if (!jsonMode && all.length === 0) {
       console.log("No executions found.");
       return 0;
     }
     // Global endpoint already returns owner-scoped records sorted by the store
-    console.log(`ID\t\tAgent\t\tStatus\t\tTxHash\t\t\tAttempt\tCreated`);
+    const lines = [`ID\t\tAgent\t\tStatus\t\tTxHash\t\t\tAttempt\tCreated`];
     for (const e of all) {
       const txh = e.txHash ? e.txHash.slice(0, 16) + "…" : "-";
-      console.log(`${e.id.slice(0, 14)}\t${e.agentId.slice(0, 10)}\t${e.status}\t${txh}\t${e.attempt}\t${new Date(e.createdAt).toLocaleString()}`);
+      lines.push(`${e.id.slice(0, 14)}\t${e.agentId.slice(0, 10)}\t${e.status}\t${txh}\t${e.attempt}\t${new Date(e.createdAt).toLocaleString()}`);
     }
+    printResult(lines.join("\n"), body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -285,7 +302,7 @@ async function cmdExecutionGet(executionId: string) {
   }
   try {
     const { body } = await request(`/executions/${encodeURIComponent(executionId)}`);
-    console.log(formatExecution(body.execution));
+    printResult(formatExecution(body.execution), body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -304,7 +321,7 @@ async function cmdExecutionRetry(executionId: string) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    console.log(`Execution ${body.execution?.id ?? executionId} retry queued: ${body.message ?? "ok"}`);
+    printResult(`Execution ${body.execution?.id ?? executionId} retry queued: ${body.message ?? "ok"}`, body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -323,7 +340,7 @@ async function cmdExecutionCancel(executionId: string) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    console.log(`Execution ${body.execution?.id ?? executionId} cancelled: ${body.message ?? "ok"}`);
+    printResult(`Execution ${body.execution?.id ?? executionId} cancelled: ${body.message ?? "ok"}`, body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -458,7 +475,7 @@ async function cmdPolicyGet(agentId: string) {
   }
   try {
     const { body } = await request(`/agents/${encodeURIComponent(agentId)}/policy`);
-    console.log(formatPolicy(body));
+    printResult(formatPolicy(body), body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -478,6 +495,10 @@ async function cmdActivityList(agentId: string, limit: string) {
   }
   try {
     const { body } = await request(`/agents/${encodeURIComponent(agentId)}/activity?limit=${n}`);
+    if (jsonMode) {
+      console.log(JSON.stringify(body, null, 2));
+      return 0;
+    }
     const activity = body.activity ?? [];
     if (activity.length === 0) {
       console.log("No activity found.");
@@ -503,7 +524,7 @@ async function cmdActivityGet(agentId: string, activityId: string) {
     const { body } = await request(
       `/agents/${encodeURIComponent(agentId)}/activity/${encodeURIComponent(activityId)}`,
     );
-    console.log(formatActivity(body.activity));
+    printResult(formatActivity(body.activity), body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -523,6 +544,10 @@ async function cmdScheduleList(agentId: string, limit: string) {
   }
   try {
     const { body } = await request(`/agents/${encodeURIComponent(agentId)}/schedules?limit=${n}`);
+    if (jsonMode) {
+      console.log(JSON.stringify(body, null, 2));
+      return 0;
+    }
     const schedules = body.schedules ?? [];
     if (schedules.length === 0) {
       console.log("No schedules found.");
@@ -546,7 +571,7 @@ async function cmdScheduleGet(agentId: string, scheduleId: string) {
   }
   try {
     const { body } = await request(`/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}`);
-    console.log(formatSchedule(body.schedule));
+    printResult(formatSchedule(body.schedule), body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -585,11 +610,14 @@ async function cmdIntentSubmit(agentId: string, args: string[], idempotencyKey: 
       body: JSON.stringify(intent),
     });
     // 200 = idempotent duplicate, 202 = accepted (requires approval or executing)
-    console.log(`Intent ${status === 200 ? "(idempotent duplicate)" : status === 202 ? "(accepted)" : "(submitted)"}: agent=${body.agentId} activity=${body.activityId} status=${body.status}`);
-    if (body.approvalId) console.log(`  Approval required: approvalId=${body.approvalId}`);
-    if (body.txHash) console.log(`  TxHash: ${body.txHash}`);
-    if (body.policyDecision) console.log(`  Policy: ${body.policyDecision.result} (${body.policyDecision.reason})`);
-    if (body.error) console.log(`  Error: ${body.error}`);
+    const lines = [
+      `Intent ${status === 200 ? "(idempotent duplicate)" : status === 202 ? "(accepted)" : "(submitted)"}: agent=${body.agentId} activity=${body.activityId} status=${body.status}`,
+    ];
+    if (body.approvalId) lines.push(`  Approval required: approvalId=${body.approvalId}`);
+    if (body.txHash) lines.push(`  TxHash: ${body.txHash}`);
+    if (body.policyDecision) lines.push(`  Policy: ${body.policyDecision.result} (${body.policyDecision.reason})`);
+    if (body.error) lines.push(`  Error: ${body.error}`);
+    printResult(lines.join("\n"), body);
     return 0;
   } catch (err: any) {
     if (err instanceof ApiError && err.status === 0) {
@@ -642,7 +670,7 @@ async function cmdAgentCreate(args: string[]) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ displayName, description, capabilities, stellarAddress }),
     });
-    console.log(`Agent created:\n  ID: ${body.agent.id}\n  Name: ${body.agent.displayName}\n  Status: ${body.agent.status}`);
+    printResult(`Agent created:\n  ID: ${body.agent.id}\n  Name: ${body.agent.displayName}\n  Status: ${body.agent.status}`, body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -674,7 +702,7 @@ async function cmdPolicyUpdate(agentId: string, args: string[]) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(policy),
     });
-    console.log(`Policy updated:\n  Agent: ${body.agentId}\n  Version: ${body.version}`);
+    printResult(`Policy updated:\n  Agent: ${body.agentId}\n  Version: ${body.version}`, body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -708,7 +736,7 @@ async function cmdScheduleCreate(agentId: string, args: string[]) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ intent, scheduleExpression: expression, timezone }),
     });
-    console.log(`Schedule created:\n  ID: ${body.schedule.id}\n  Expression: ${body.schedule.scheduleExpression}\n  Timezone: ${body.schedule.timezone}\n  Next Run: ${body.schedule.nextRunAt}`);
+    printResult(`Schedule created:\n  ID: ${body.schedule.id}\n  Expression: ${body.schedule.scheduleExpression}\n  Timezone: ${body.schedule.timezone}\n  Next Run: ${body.schedule.nextRunAt}`, body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -730,7 +758,7 @@ async function cmdScheduleUpdate(agentId: string, args: string[]) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ scheduleExpression: expression }),
     });
-    console.log(`Schedule updated:\n  ID: ${body.schedule.id}\n  Expression: ${body.schedule.scheduleExpression}\n  Next Run: ${body.schedule.nextRunAt}`);
+    printResult(`Schedule updated:\n  ID: ${body.schedule.id}\n  Expression: ${body.schedule.scheduleExpression}\n  Next Run: ${body.schedule.nextRunAt}`, body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -749,7 +777,7 @@ async function cmdSchedulePause(agentId: string, scheduleId: string) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    console.log(`Schedule paused:\n  ID: ${body.schedule.id}\n  Status: ${body.schedule.status}`);
+    printResult(`Schedule paused:\n  ID: ${body.schedule.id}\n  Status: ${body.schedule.status}`, body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -768,7 +796,7 @@ async function cmdScheduleResume(agentId: string, scheduleId: string) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    console.log(`Schedule resumed:\n  ID: ${body.schedule.id}\n  Status: ${body.schedule.status}`);
+    printResult(`Schedule resumed:\n  ID: ${body.schedule.id}\n  Status: ${body.schedule.status}`, body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -787,7 +815,7 @@ async function cmdScheduleDisable(agentId: string, scheduleId: string) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    console.log(`Schedule disabled:\n  ID: ${body.schedule.id}\n  Status: ${body.schedule.status}`);
+    printResult(`Schedule disabled:\n  ID: ${body.schedule.id}\n  Status: ${body.schedule.status}`, body);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -801,10 +829,10 @@ async function cmdScheduleDelete(agentId: string, scheduleId: string) {
     return 1;
   }
   try {
-    await request(`/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}`, {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}`, {
       method: "DELETE",
     });
-    console.log(`Schedule deleted: ${scheduleId}`);
+    printResult(`Schedule deleted: ${scheduleId}`, body ?? { success: true, scheduleId });
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -816,9 +844,19 @@ async function cmdScheduleDelete(agentId: string, scheduleId: string) {
 
 const argv = process.argv.slice(2);
 
+// Detect and strip --json / -j flag from argv so command routing works as expected
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === "--json" || argv[i] === "-j") {
+    jsonMode = true;
+    argv.splice(i, 1);
+    i--;
+  }
+}
+
 const COMMANDS_HELP = [
   "Commands:",
   "  --version, -v  Print the CLI package version",
+  "  --json, -j     Output raw API JSON response",
   "  health",
   "  agent list | get <id> | create <name> | pause <id> | resume <id> | disable <id>",
   "  approval list | approve <id> | reject <id>",

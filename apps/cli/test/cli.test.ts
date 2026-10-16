@@ -1556,3 +1556,131 @@ test("Handler error paths: non-2xx on schedule command, invalid JSON in contract
   assert.equal((await runHandlerWithMockFetch([], (m) => m.cmdIntentSubmit("", [], null))).code, 1);
 });
 
+test("--json flag and FOREGENT_OUTPUT=json output valid parseable JSON with expected keys", () => {
+  const healthPayload = { status: "ok", signerAccountId: "GHEALTHYACCOUNT" };
+  const agentListPayload = { agents: [{ id: "agent-1", displayName: "Treasury", status: "active" }] };
+  const agentGetPayload = { agent: { id: "agent-1", displayName: "Treasury", status: "active" } };
+  const execListPayload = { executions: [{ id: "exec-1", agentId: "agent-1", status: "succeeded" }] };
+  const execGetPayload = { execution: { id: "exec-1", agentId: "agent-1", status: "succeeded" } };
+  const approvalListPayload = { approvals: [{ id: "appr-1", agentId: "agent-1", status: "pending" }] };
+  const policyGetPayload = { agentId: "agent-1", version: 1, rules: [] };
+  const activityListPayload = { activity: [{ id: "act-1", agentId: "agent-1", status: "completed" }] };
+  const scheduleListPayload = { schedules: [{ id: "sch-1", agentId: "agent-1", status: "active" }] };
+
+  // 1. health --json
+  const healthRes = run(["health", "--json"], {
+    responses: [{ match: "/health", status: 200, body: healthPayload }],
+  });
+  assert.equal(healthRes.code, 0);
+  const healthJson = JSON.parse(healthRes.stdout);
+  assert.equal(healthJson.status, "ok");
+  assert.equal(healthJson.signerAccountId, "GHEALTHYACCOUNT");
+
+  // 2. agent list --json
+  const agentListRes = run(["agent", "list", "--json"], {
+    responses: [{ match: "/agents", status: 200, body: agentListPayload }],
+  });
+  assert.equal(agentListRes.code, 0);
+  const agentListJson = JSON.parse(agentListRes.stdout);
+  assert.equal(agentListJson.agents[0].id, "agent-1");
+
+  // 3. agent get --json (flag placed before subcommand)
+  const agentGetRes = run(["--json", "agent", "get", "agent-1"], {
+    responses: [{ match: "/agents/agent-1", status: 200, body: agentGetPayload }],
+  });
+  assert.equal(agentGetRes.code, 0);
+  const agentGetJson = JSON.parse(agentGetRes.stdout);
+  assert.equal(agentGetJson.agent.id, "agent-1");
+
+  // 4. execution list --json
+  const execListRes = run(["execution", "list", "--json"], {
+    responses: [{ match: "/executions", status: 200, body: execListPayload }],
+  });
+  assert.equal(execListRes.code, 0);
+  const execListJson = JSON.parse(execListRes.stdout);
+  assert.equal(execListJson.executions[0].id, "exec-1");
+
+  // 5. execution get --json
+  const execGetRes = run(["execution", "get", "exec-1", "--json"], {
+    responses: [{ match: "/executions/exec-1", status: 200, body: execGetPayload }],
+  });
+  assert.equal(execGetRes.code, 0);
+  const execGetJson = JSON.parse(execGetRes.stdout);
+  assert.equal(execGetJson.execution.id, "exec-1");
+
+  // 6. approval list --json
+  const approvalListRes = run(["approval", "list", "--json"], {
+    responses: [{ match: "/approvals", status: 200, body: approvalListPayload }],
+  });
+  assert.equal(approvalListRes.code, 0);
+  const approvalListJson = JSON.parse(approvalListRes.stdout);
+  assert.equal(approvalListJson.approvals[0].id, "appr-1");
+
+  // 7. policy get --json
+  const policyGetRes = run(["policy", "get", "agent-1", "--json"], {
+    responses: [{ match: "/agents/agent-1/policy", status: 200, body: policyGetPayload }],
+  });
+  assert.equal(policyGetRes.code, 0);
+  const policyGetJson = JSON.parse(policyGetRes.stdout);
+  assert.equal(policyGetJson.agentId, "agent-1");
+
+  // 8. activity list --json
+  const activityListRes = run(["activity", "list", "agent-1", "--json"], {
+    responses: [{ match: "/agents/agent-1/activity", status: 200, body: activityListPayload }],
+  });
+  assert.equal(activityListRes.code, 0);
+  const activityListJson = JSON.parse(activityListRes.stdout);
+  assert.equal(activityListJson.activity[0].id, "act-1");
+
+  // 9. schedule list --json
+  const scheduleListRes = run(["schedule", "list", "agent-1", "--json"], {
+    responses: [{ match: "/agents/agent-1/schedules", status: 200, body: scheduleListPayload }],
+  });
+  assert.equal(scheduleListRes.code, 0);
+  const scheduleListJson = JSON.parse(scheduleListRes.stdout);
+  assert.equal(scheduleListJson.schedules[0].id, "sch-1");
+
+  // 10. FOREGENT_OUTPUT=json environment variable equivalence
+  const envRes = run(["agent", "list"], {
+    env: { FOREGENT_OUTPUT: "json" },
+    responses: [{ match: "/agents", status: 200, body: agentListPayload }],
+  });
+  assert.equal(envRes.code, 0);
+  const envJson = JSON.parse(envRes.stdout);
+  assert.deepEqual(envJson, agentListPayload);
+  assert.equal(envRes.stdout, agentListRes.stdout);
+});
+
+test("Without --json flag, human output remains unchanged and byte-identical to standard formatting", () => {
+  const healthPayload = { status: "ok", signerAccountId: "GHEALTHYACCOUNT" };
+  const agentListPayload = {
+    agents: [
+      {
+        id: "agent-1",
+        displayName: "Treasury",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00Z",
+      },
+    ],
+  };
+
+  const healthRes = run(["health"], {
+    responses: [{ match: "/health", status: 200, body: healthPayload }],
+  });
+  assert.equal(healthRes.code, 0);
+  assert.equal(healthRes.stdout, "System healthy. Signer account: GHEALTHYACCOUNT\n");
+
+  const agentListRes = run(["agent", "list"], {
+    responses: [{ match: "/agents", status: 200, body: agentListPayload }],
+  });
+  assert.equal(agentListRes.code, 0);
+  assert.match(agentListRes.stdout, /^ID\t\tName\t\tStatus\tCreated/);
+  assert.match(agentListRes.stdout, /agent-1/);
+});
+
+test("--help documents the --json flag", () => {
+  const helpRes = run(["--help"]);
+  assert.equal(helpRes.code, 0);
+  assert.match(helpRes.stdout, /--json, -j\s+Output raw API JSON response/);
+});
+
