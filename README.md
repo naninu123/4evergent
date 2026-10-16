@@ -192,6 +192,20 @@ export STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
 
 The MVP is validated against the testnet Horizon API. See [docs/testnet.md](docs/testnet.md) for details.
 
+### Smoke test (offline / simulation pipeline verification)
+
+Run the one-command smoke test across both live test suites with built-in preflight checks:
+
+```bash
+# Offline preflight guidance (exits 0 with instructions when flags/keys are not set):
+pnpm smoke
+
+# Run full simulation pipeline with a funded Testnet keypair:
+LIVE_E2E=1 STELLAR_TESTNET_SECRET_KEY=S... pnpm smoke
+```
+
+See [docs/smoke.md](docs/smoke.md) for full details, preflight balance checks, and scenario breakdown.
+
 ## Adding a new agent capability
 
 1. Add the new intent type to `packages/shared/src/types.ts` (extend the `AgentIntent` union).
