@@ -525,3 +525,18 @@ The dashboard (`apps/web`) is a static Vite SPA. Set `VITE_API_BASE` at build
 time to the API's public origin, and set the API's `CORS_ORIGIN` to the
 frontend's origin. The two are configured independently — the frontend must not
 rely on same-origin `/api` proxying. See `.env.example`.
+### Data retention
+
+The server sweeps expired `auth_sessions` and old `daily_spending` reservations
+once per day by default. Expired session rows are retained for 30 days after
+`expires_at`; spending rows are retained for 90 UTC days. Rows are deleted in
+batches of at most 500 per table, using the expiry and day indexes, so each
+autocommit statement has bounded work and does not hold a long-running write
+transaction. A sweep logs the number removed from each table.
+
+Configure the policy with `AUTH_SESSION_RETENTION_DAYS`,
+`DAILY_SPENDING_RETENTION_DAYS`, and `DATA_RETENTION_INTERVAL_MS`. Set either
+table's day window to `0` to keep its rows forever, or set
+`DATA_RETENTION_ENABLED=0` to disable the worker. Session retention begins
+after expiration; a live session is never removed. Daily-spending rows for the
+cutoff UTC date or newer remain available, including the current day.

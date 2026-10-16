@@ -69,6 +69,7 @@ export class SQLiteActivityStore implements ActivityStore {
           total REAL NOT NULL DEFAULT 0,
           PRIMARY KEY (agent_id, asset, day)
         );
+      CREATE INDEX IF NOT EXISTS idx_daily_spending_day ON daily_spending(day);
       `);
     } catch {
       // Table already exists.
@@ -213,12 +214,11 @@ export class SQLiteActivityStore implements ActivityStore {
    * Concurrent calls are serialized by SQLite's row-level locking. The PRIMARY KEY
    * (agent_id, asset, day) ensures one row per asset per day.
    */
-  async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string): Promise<boolean> {
+  async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now = new Date()): Promise<boolean> {
     const amountNum = parseFloat(amount);
     const limitNum = parseFloat(limit);
     if (isNaN(amountNum) || isNaN(limitNum)) return false;
 
-    const now = new Date();
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
       .toISOString()
       .slice(0, 10); // YYYY-MM-DD
@@ -258,14 +258,24 @@ export class SQLiteActivityStore implements ActivityStore {
     }
   }
 
-  async getDailySpending(agentId: string, asset: string): Promise<number | null> {
-    const now = new Date();
+  async getDailySpending(agentId: string, asset: string, now = new Date()): Promise<number | null> {
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
       .toISOString().slice(0, 10);
     const row = this.db
       .prepare(`SELECT total FROM daily_spending WHERE agent_id = ? AND asset = ? AND day = ?`)
       .get(agentId, asset, day) as { total: number } | undefined;
     return row ? row.total : null;
+  }
+
+  async sweepDailySpending(cutoffDay: string, limit = 500): Promise<number> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoffDay) || !Number.isInteger(limit) || limit <= 0) return 0;
+    const result = this.db.prepare(`
+      DELETE FROM daily_spending
+      WHERE rowid IN (
+        SELECT rowid FROM daily_spending WHERE day < ? ORDER BY day ASC LIMIT ?
+      )
+    `).run(cutoffDay, limit);
+    return Number(result.changes);
   }
 
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {

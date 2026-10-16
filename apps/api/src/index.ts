@@ -49,6 +49,7 @@ import {
 } from "@4evergent/database";
 import type { PolicyRules, Agent, RequestContext, AuthorizationService, AuthProvider, AuthenticatedPrincipal } from "@4evergent/shared";
 import { createAuthModule, type PrincipalResolution } from "./auth.js";
+import { sweepRetainedData } from "./data-retention.js";
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 
@@ -114,6 +115,13 @@ export interface ServerOptions {
   };
   /** User authentication module (sessions: email / Google / Stellar wallet). */
   authModule?: ReturnType<typeof createAuthModule>;
+  /** Periodic cleanup of expired browser sessions and old daily-spending reservations. */
+  retention?: {
+    enabled?: boolean;
+    intervalMs?: number;
+    authSessionDays?: number;
+    dailySpendingDays?: number;
+  };
   /** Enable on-chain transaction status reconciliation (opt-in). */
   reconciliation?: {
     enabled?: boolean;
@@ -459,6 +467,42 @@ export async function createApiServer(options: ServerOptions) {
 
     scheduler.start();
     console.log("[scheduler] started, interval:", options.scheduler.intervalMs ?? 60_000, "ms");
+  }
+
+  let retentionTimer: ReturnType<typeof setInterval> | null = null;
+  let retentionRunning = false;
+  if (options.retention?.enabled !== false) {
+    const intervalMs = Number.isFinite(options.retention?.intervalMs) && options.retention!.intervalMs! > 0
+      ? options.retention!.intervalMs!
+      : 24 * 60 * 60_000;
+    const sessionDays = Number.isFinite(options.retention?.authSessionDays) && options.retention!.authSessionDays! >= 0
+      ? options.retention!.authSessionDays!
+      : 30;
+    const spendingDays = Number.isFinite(options.retention?.dailySpendingDays) && options.retention!.dailySpendingDays! >= 0
+      ? options.retention!.dailySpendingDays!
+      : 90;
+    const sweepRetention = async () => {
+      if (retentionRunning) return;
+      retentionRunning = true;
+      try {
+        const result = await sweepRetainedData({
+          store,
+          authModule,
+          now: Date.now(),
+          authSessionDays: sessionDays,
+          dailySpendingDays: spendingDays,
+          batchSize: 500,
+        });
+        console.log(`[retention] sweep complete: auth_sessions=${result.authSessionsRemoved}, daily_spending=${result.dailySpendingRemoved}`);
+      } catch (err) {
+        console.error("[retention] sweep failed:", err);
+      } finally {
+        retentionRunning = false;
+      }
+    };
+    void sweepRetention();
+    retentionTimer = setInterval(() => { void sweepRetention(); }, intervalMs);
+    retentionTimer.unref?.();
   }
 
   // CORS configuration — configurable via CORS_ORIGIN environment variable.
@@ -1504,6 +1548,10 @@ export async function createApiServer(options: ServerOptions) {
       if (reconciler) {
         reconciler.stop();
         console.log("[reconciler] stopped");
+      }
+      if (retentionTimer) {
+        clearInterval(retentionTimer);
+        retentionTimer = null;
       }
       // Abort lingering keep-alive connections so the server actually shuts
       // down (Node's http close() waits for active sockets otherwise).

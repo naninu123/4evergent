@@ -27,9 +27,11 @@ export interface ActivityStore {
   getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null>;
   recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }>;
   /** Atomically reserve daily spending. Returns true if reservation succeeded, false if limit would be exceeded. */
-  reserveDailySpending(agentId: string, asset: string, amount: string, limit: string): Promise<boolean>;
+  reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now?: Date): Promise<boolean>;
   /** Get current day's total spent for an agent. */
-  getDailySpending(agentId: string, asset: string): Promise<number | null>;
+  getDailySpending(agentId: string, asset: string, now?: Date): Promise<number | null>;
+  /** Remove at most `limit` rows with a UTC day earlier than cutoffDay. */
+  sweepDailySpending(cutoffDay: string, limit?: number): Promise<number>;
 }
 
 /**
@@ -171,12 +173,11 @@ export class InMemoryActivityStore implements ActivityStore {
     return result;
   }
 
-  async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string): Promise<boolean> {
+  async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now = new Date()): Promise<boolean> {
     const amountNum = parseFloat(amount);
     const limitNum = parseFloat(limit);
     if (isNaN(amountNum) || isNaN(limitNum)) return false;
 
-    const now = new Date();
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
       .toISOString()
       .slice(0, 10);
@@ -197,12 +198,25 @@ export class InMemoryActivityStore implements ActivityStore {
     return result;
   }
 
-  async getDailySpending(agentId: string, asset: string): Promise<number | null> {
-    const now = new Date();
+  async getDailySpending(agentId: string, asset: string, now = new Date()): Promise<number | null> {
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
       .toISOString().slice(0, 10);
     const mapKey = `${agentId}:${asset}:${day}`;
     return this.dailySpending.get(mapKey) ?? null;
+  }
+
+  async sweepDailySpending(cutoffDay: string, limit = 500): Promise<number> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoffDay) || !Number.isInteger(limit) || limit <= 0) return 0;
+    let removed = 0;
+    for (const key of this.dailySpending.keys()) {
+      const day = key.slice(key.lastIndexOf(":") + 1);
+      if (day < cutoffDay) {
+        this.dailySpending.delete(key);
+        removed++;
+        if (removed >= limit) break;
+      }
+    }
+    return removed;
   }
 
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
