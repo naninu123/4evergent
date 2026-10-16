@@ -457,6 +457,144 @@ test("GET /executions respects limit", async () => {
   }
 });
 
+// ===== GET /executions?status= (server-side status filtering) =====
+
+test("GET /executions?status=failed returns only failed executions", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    await executionStore.record(makeExecution({ id: "exec-ok", status: "confirmed", txHash: "a".repeat(64) }));
+    await executionStore.record(makeExecution({ id: "exec-fail-1", status: "failed", error: "boom" }));
+    await executionStore.record(makeExecution({ id: "exec-fail-2", status: "failed", error: "boom again" }));
+    await executionStore.record(makeExecution({ id: "exec-queued", status: "queued" }));
+
+    const res = await get(baseUrl, "/executions?status=failed");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.executions.length, 2);
+    for (const e of res.body.executions) {
+      assert.equal(e.status, "failed");
+    }
+  } finally {
+    await close();
+  }
+});
+
+test("GET /executions?status= returns empty array when no matches", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    await executionStore.record(makeExecution({ id: "exec-queued", status: "queued" }));
+    const res = await get(baseUrl, "/executions?status=dead_letter");
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.executions, []);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /executions?status=not_a_status returns 400 naming accepted values", async () => {
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await get(baseUrl, "/executions?status=not_a_status");
+    assert.equal(res.status, 400);
+    const msg = JSON.stringify(res.body);
+    assert.ok(/failed/.test(msg), "error must name accepted values");
+    assert.ok(/dead_letter/.test(msg), "error must name accepted values");
+  } finally {
+    await close();
+  }
+});
+
+test("GET /executions?status= is owner-scoped", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    await executionStore.record(makeExecution({ ownerId: "owner-b", id: "exec-other", status: "failed" }));
+    const res = await get(baseUrl, "/executions?status=failed");
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.executions, []);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /executions?status= filters in the store, not a clamped page", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    // 5 non-matching records first (would fill a clamped page), then 3 matching
+    for (let i = 0; i < 5; i++) {
+      await executionStore.record(makeExecution({ id: `exec-queued-${i}`, status: "queued" }));
+    }
+    for (let i = 0; i < 3; i++) {
+      await executionStore.record(makeExecution({ id: `exec-fail-${i}`, status: "failed", error: "x" }));
+    }
+    const res = await get(baseUrl, "/executions?status=failed");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.executions.length, 3);
+    for (const e of res.body.executions) {
+      assert.equal(e.status, "failed");
+    }
+  } finally {
+    await close();
+  }
+});
+
+test("GET /executions?status= composes with ?limit=", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    for (let i = 0; i < 5; i++) {
+      await executionStore.record(makeExecution({ id: `exec-fail-${i}`, status: "failed", error: "x" }));
+    }
+    await executionStore.record(makeExecution({ id: "exec-queued", status: "queued" }));
+    const res = await get(baseUrl, "/executions?status=failed&limit=2");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.executions.length, 2);
+    for (const e of res.body.executions) {
+      assert.equal(e.status, "failed");
+    }
+  } finally {
+    await close();
+  }
+});
+
+test("GET /agents/:id/executions?status= filters by status in the store", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    await executionStore.record(makeExecution({ id: "exec-dl-1", status: "dead_letter", error: "max retries", attempt: 3 }));
+    await executionStore.record(makeExecution({ id: "exec-dl-2", status: "dead_letter", error: "max retries", attempt: 3 }));
+    await executionStore.record(makeExecution({ id: "exec-queued", status: "queued" }));
+
+    const res = await get(baseUrl, "/agents/test-agent/executions?status=dead_letter");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.executions.length, 2);
+    for (const e of res.body.executions) {
+      assert.equal(e.status, "dead_letter");
+    }
+  } finally {
+    await close();
+  }
+});
+
+test("GET /agents/:id/executions?status=not_a_status returns 400", async () => {
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await get(baseUrl, "/agents/test-agent/executions?status=not_a_status");
+    assert.equal(res.status, 400);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /executions without ?status= returns all owner executions (shape unchanged)", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    await executionStore.record(makeExecution({ id: "exec-1", status: "queued" }));
+    await executionStore.record(makeExecution({ id: "exec-2", status: "failed", error: "x" }));
+    const res = await get(baseUrl, "/executions");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.executions.length, 2);
+  } finally {
+    await close();
+  }
+});
+
 // ===== GET /activity (global owner-scoped listing) =====
 
 test("GET /activity returns owner's activity in single request", async () => {

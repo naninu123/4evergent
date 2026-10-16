@@ -51,6 +51,20 @@ export class InMemoryExecutionStore implements ExecutionStore {
       .slice(0, Math.max(1, Math.min(limit, MAX_LIMIT)));
   }
 
+  async listByOwnerAndStatus(ownerId: string, status: ExecutionStatus, limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    return [...this.records.values()]
+      .filter((r) => r.ownerId === ownerId && r.status === status)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, Math.max(1, Math.min(limit, MAX_LIMIT)));
+  }
+
+  async listByAgentAndStatus(agentId: string, status: ExecutionStatus, limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    return [...this.records.values()]
+      .filter((r) => r.agentId === agentId && r.status === status)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, Math.max(1, Math.min(limit, MAX_LIMIT)));
+  }
+
   async listStuckExecuting(limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
     return [...this.records.values()]
       .filter((r) => r.status === "executing")
@@ -231,7 +245,7 @@ export class SQLiteExecutionStore implements ExecutionStore {
          WHERE (status = 'queued' OR status = 'failed')
            AND (next_retry_at IS NULL OR next_retry_at <= ?)
          ORDER BY next_retry_at ASC
-         LIMIT ?`
+         LIMIT P` 
       )
       .all(before, safeLimit) as unknown as ExecutionRow[];
     return rows.map(rowToExecutionRecord);
@@ -250,6 +264,26 @@ export class SQLiteExecutionStore implements ExecutionStore {
     const rows = this.db
       .prepare("SELECT * FROM executions WHERE agent_id = ? ORDER BY updated_at DESC LIMIT ?")
       .all(agentId, safeLimit) as unknown as ExecutionRow[];
+    return rows.map(rowToExecutionRecord);
+  }
+
+  async listByOwnerAndStatus(ownerId: string, status: ExecutionStatus, limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    const safeLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM executions WHERE owner_id = ? AND status = ? ORDER BY {b}updated_at{e} DESC LIMIT ?"
+      )
+      .all(ownerId, status, safeLimit) as unknown as ExecutionRow[];
+    return rows.map(rowToExecutionRecord);
+  }
+
+  async listByAgentAndStatus(agentId: string, status: ExecutionStatus, limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    const safeLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM executions WHERE agent_id = ? AND status = ? ORDER BY {b}updated_at{e} DESC LIMIT ?"
+      )
+      .all(agentId, status, safeLimit) as unknown as ExecutionRow[];
     return rows.map(rowToExecutionRecord);
   }
 
@@ -300,7 +334,7 @@ export class SQLiteExecutionStore implements ExecutionStore {
            next_retry_at = @next_retry_at,
            started_at = @started_at, completed_at = @completed_at, error_class = @error_class,
            updated_at = @updated_at
-         WHERE id = @id`
+         WHERE id = @id;`
       )
       .run({
         id: updated.id,
@@ -328,74 +362,37 @@ export class SQLiteExecutionStore implements ExecutionStore {
   async updateIfStatus(id: string, expectedStatus: ExecutionStatus, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null> {
     const existing = await this.get(id);
     if (!existing || existing.status !== expectedStatus) return null;
-    const updated: ExecutionRecord = { ...existing, ...patch, id: existing.id };
-    const result = this.db
-      .prepare(
-        `UPDATE executions SET
-           owner_id = @owner_id, agent_id = @agent_id, approval_id = @approval_id,
-           activity_id = @activity_id, intent_json = @intent_json, status = @status,
-           policy_decision_json = @policy_decision_json, simulation_result_json = @simulation_result_json,
-           tx_hash = @tx_hash, submitted_hash = @submitted_hash, error = @error, attempt = @attempt,
-           next_retry_at = @next_retry_at,
-           started_at = @started_at, completed_at = @completed_at, error_class = @error_class,
-           updated_at = @updated_at
-         WHERE id = @id AND status = @expected_status`
-      )
-      .run({
-        id: updated.id,
-        owner_id: updated.ownerId,
-        agent_id: updated.agentId,
-        approval_id: updated.approvalId,
-        activity_id: updated.activityId,
-        intent_json: JSON.stringify(updated.intent),
-        status: updated.status,
-        policy_decision_json: updated.policyDecision ? JSON.stringify(updated.policyDecision) : null,
-        simulation_result_json: updated.simulationResult ? JSON.stringify(updated.simulationResult) : null,
-        tx_hash: updated.txHash,
-        submitted_hash: updated.submittedHash ?? null,
-        error: updated.error,
-        attempt: updated.attempt,
-        next_retry_at: updated.nextRetryAt,
-        started_at: updated.startedAt,
-        completed_at: updated.completedAt,
-        error_class: updated.errorClass,
-        updated_at: updated.updatedAt,
-        expected_status: expectedStatus,
-      } as any);
-    if (result.changes === 0) return null;
-    return updated;
+    return this.update(id, patch);
   }
 
   async delete(id: string): Promise<boolean> {
-    const result = this.db.prepare("DELETE FROM executions WHERE id = ?").run(id);
+    const result = this.db
+      .prepare("DELETE FROM executions WHERE id = ?")
+      .run(id);
     return result.changes > 0;
-  }
-
-  close(): void {
-    // Shared connection — managed by closeSharedConnection() / closeAllSharedConnections()
   }
 }
 
-function rowToExecutionRecord(r: ExecutionRow): ExecutionRecord {
+function rowToExecutionRecord(row: ExecutionRow): ExecutionRecord {
   return {
-    id: r.id,
-    ownerId: r.owner_id,
-    agentId: r.agent_id,
-    approvalId: r.approval_id,
-    activityId: r.activity_id,
-    intent: JSON.parse(r.intent_json),
-    status: r.status as ExecutionRecord["status"],
-    policyDecision: r.policy_decision_json ? JSON.parse(r.policy_decision_json) : null,
-    simulationResult: r.simulation_result_json ? JSON.parse(r.simulation_result_json) : null,
-    txHash: r.tx_hash,
-    submittedHash: r.submitted_hash,
-    error: r.error,
-    attempt: r.attempt,
-    nextRetryAt: r.next_retry_at,
-    startedAt: r.started_at,
-    completedAt: r.completed_at,
-    errorClass: r.error_class,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
+    id: row.id,
+    ownerId: row.owner_id,
+    agentId: row.agent_id,
+    approvalId: row.approval_id,
+    activityId: row.activity_id,
+    intent: JSON.parse(row.intent_json),
+    status: row.status as ExecutionStatus,
+    policyDecision: row.policy_decision_json ? JSON.parse(row.policy_decision_json) : null,
+    simulationResult: row.simulation_result_json ? JSON.parse(row.simulation_result_json) : null,
+    txHash: row.tx_hash,
+    submittedHash: row.submitted_hash,
+    error: row.error,
+    attempt: row.attempt,
+    nextRetryAt: row.next_retry_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    errorClass: row.error_class,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }

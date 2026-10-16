@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import type { ExecutionRecord, QueueSummary, ExecutionStatus } from '../types';
@@ -48,30 +48,32 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [list, q] = await Promise.all([
-          api.listAllExecutions(),
-          api.getQueueStatus(),
-        ]);
-        setExecutions(list.executions);
-        setQueue(q);
-      } catch (e: any) {
-        setError(e.message ?? 'Failed to load executions');
-      } finally {
-        setLoading(false);
-      }
-    })();
+  const loadExecutions = useCallback(async (status: StatusFilter) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [list, q] = await Promise.all([
+        api.listAllExecutions(status === 'all' ? undefined : status),
+        api.getQueueStatus(),
+      ]);
+      setExecutions(list.executions);
+      setQueue(q);
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to load executions');
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadExecutions(filter);
+  }, [filter, loadExecutions]);
 
   if (loading) return <Skeleton label="Loading executions..." />;
   if (error) return <EmptyState title="Failed to load executions" message={error} />;
   if (executions === null) return <Skeleton label="Loading executions..." />;
 
-  const filtered = filter === 'all'
-    ? executions
-    : executions.filter((e) => e.status === filter || (filter === 'failed' && inferRetrying(e)));
+  const filtered = executions;
 
   const retryingCount = executions.filter(inferRetrying).length;
 

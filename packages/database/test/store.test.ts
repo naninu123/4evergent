@@ -8,12 +8,17 @@ import {
   SQLiteApprovalStore,
   InMemoryActivityStore,
   InMemoryApprovalStore,
+  InMemoryExecutionStore,
+  SQLiteExecutionStore,
   createActivity,
   createApproval,
+  createExecution,
   assertNoSecrets,
   validateApprovalTransition,
   type ActivityStore,
   type ApprovalStore,
+  type ExecutionStore,
+  type ExecutionStatus,
 } from "../src/index.js";
 import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
 
@@ -27,11 +32,160 @@ function makeIntent(amount: string, _agentId = "agent-a"): AgentIntent {
   };
 }
 
+function makeExecution(ownerId: string, agentId: string, status: ExecutionStatus = "queued") {
+  const rec = createExecution({
+    ownerId,
+    agentId,
+    intent: makeIntent("1", agentId),
+    decision: makeDecision(),
+  });
+  rec.status = status;
+  return rec;
+}
+
 function makeDecision(result: "allow" | "deny" | "requires_approval" = "allow"): PolicyDecision {
   return { result, reason: "test", rule: "test", intent: makeIntent("1") };
 }
 
 // ===== Interface-level tests: run against BOTH in-memory and SQLite =====
+
+function runExecutionStoreTests(
+  name: string,
+  makeStore: () => { execution: ExecutionStore; cleanup?: () => void }
+) {
+  test(`${name}: listByStatus filters by owner and status`, async () => {
+    const { execution, cleanup } = makeStore();
+    try {
+      const a = makeExecution("owner-a", "agent-a", "failed");
+      const b = makeExecution("owner-a", "agent-a", "queued");
+      const c = makeExecution("owner-b", "agent-b", "failed");
+      await execution.create(a);
+      await execution.create(b);
+      await execution.create(c);
+
+      const failed = await execution.listByStatus("owner-a", "failed");
+      assert.equal(failed.length, 1);
+      assert.equal(failed[0]!.id, a.id);
+      assert.equal(failed[0]!.status, "failed");
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: listByStatus returns empty when nothing matches`, async () => {
+    const { execution, cleanup } = makeStore();
+    try {
+      await execution.create(makeExecution("owner-a", "agent-a", "queued"));
+      const dead = await execution.listByStatus("owner-a", "dead_letter");
+      assert.deepEqual(dead, []);
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: listByStatus enforces owner isolation`, async () => {
+    const { execution, cleanup } = makeStore();
+    try {
+      const a = makeExecution("owner-a", "agent-a", "failed");
+      const b = makeExecution("owner-b", "agent-b", "failed");
+      await execution.create(a);
+      await execution.create(b);
+
+      const ownerA = await execution.listByStatus("owner-a", "failed");
+      assert.equal(ownerA.length, 1);
+      assert.equal(ownerA[0]!.ownerId, "owner-a");
+
+      const ownerB = await execution.listByStatus("owner-b", "failed");
+      assert.equal(ownerB.length, 1);
+      assert.equal(ownerB[0]!.ownerId, "owner-b");
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: listByStatus respects limit on the filtered set`, async () => {
+    const { execution, cleanup } = makeStore();
+    try {
+      for (let i = 0; i < 5; i++) {
+        await execution.create(makeExecution("owner-a", "agent-a", "failed"));
+      }
+      await execution.create(makeExecution("owner-a", "agent-a", "queued"));
+
+      const limited = await execution.listByStatus("owner-a", "failed", 2);
+      assert.equal(limited.length, 2);
+      assert.ok(limited.every((r) => r.status === "failed"));
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: listByStatus filters in the store, not a clamped page`, async () => {
+    const { execution, cleanup } = makeStore();
+    try {
+      // More matching records than the page size used by the API handler.
+      for (let i = 0; i < 150; i++) {
+        await execution.create(makeExecution("owner-a", "agent-a", "failed"));
+      }
+      // Non-matching records that would dominate a naive page-then-filter.
+      for (let i = 0; i < 150; i++) {
+        await execution.create(makeExecution("owner-a", "agent-a", "queued"));
+      }
+
+      const failed = await execution.listByStatus("owner-a", "failed", 100);
+      assert.equal(failed.length, 100);
+      assert.ok(failed.every((r) => r.status === "failed"));
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: listByStatusByAgent filters by agent and status`, async () => {
+    const { execution, cleanup } = makeStore();
+    try {
+      const a = makeExecution("owner-a", "agent-a", "dead_letter");
+      const b = makeExecution("owner-a", "agent-b", "dead_letter");
+      const c = makeExecution("owner-a", "agent-a", "queued");
+      await execution.create(a);
+      await execution.create(b);
+      await execution.create(c);
+
+      const list = await execution.listByStatusByAgent("agent-a", "dead_letter");
+      assert.equal(list.length, 1);
+      assert.equal(list[0]!.id, a.id);
+      assert.equal(list[0]!.agentId, "agent-a");
+      assert.equal(list[0]!.status, "dead_letter");
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: listByStatusByAgent respects limit`, async () => {
+    const { execution, cleanup } = makeStore();
+    try {
+      for (let i = 0; i < 5; i++) {
+        await execution.create(makeExecution("owner-a", "agent-a", "failed"));
+      }
+      const limited = await execution.listByStatusByAgent("agent-a", "failed", 3);
+      assert.equal(limited.length, 3);
+      assert.ok(limited.every((r) => r.status === "failed" && r.agentId === "agent-a"));
+    } finally {
+      cleanup?.();
+    }
+  });
+}
+
+runExecutionStoreTests("InMemory", () => ({
+  execution: new InMemoryExecutionStore(),
+}));
+
+runExecutionStoreTests("SQLite", () => {
+  const dir = mkdtempSync(join(tmpdir(), "4evergent-exec-test-"));
+  const path = join(dir, "exec.db");
+  return {
+    execution: new SQLiteExecutionStore(path),
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+});
 
 function runStoreTests(name: string, makeStores: () => { activity: ActivityStore; approval: ApprovalStore; cleanup?: () => void }) {
   test(`${name}: write/read activity round-trips`, async () => {

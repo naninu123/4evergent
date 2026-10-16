@@ -10,13 +10,21 @@ import type { AgentIntent, PolicyDecision, SimulationResult } from "@4evergent/s
  *   failed    → pipeline returned an error (eligible for retry if transient)
  *   dead_letter → exhausted retries / permanent failure
  */
-export type ExecutionStatus =
-  | "queued"
-  | "executing"
-  | "submitted"
-  | "confirmed"
-  | "failed"
-  | "dead_letter";
+export const EXECUTION_STATUSES = [
+  "queued",
+  "executing",
+  "submitted",
+  "confirmed",
+  "failed",
+  "dead_letter",
+] as const;
+
+export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];
+
+/** Runtime guard derived from the canonical status list. */
+export function isExecutionStatus(value: string): value is ExecutionStatus {
+  return (EXECUTION_STATUSES as readonly string[]).includes(value);
+}
 
 export interface ExecutionRecord {
   id: string;
@@ -60,6 +68,10 @@ export interface ExecutionStore {
   listDue(before: string, limit?: number): Promise<ExecutionRecord[]>;
   listByOwner(ownerId: string, limit?: number): Promise<ExecutionRecord[]>;
   listByAgent(agentId: string, limit?: number): Promise<ExecutionRecord[]>;
+  /** Owner-scoped list filtered by status in the store query. */
+  listByOwnerAndStatus(ownerId: string, status: ExecutionStatus, limit?: number): Promise<ExecutionRecord[]>;
+  /** Agent-scoped list filtered by status in the store query. */
+  listByAgentAndStatus(agentId: string, status: ExecutionStatus, limit?: number): Promise<ExecutionRecord[]>;
   listStuckExecuting(limit?: number): Promise<ExecutionRecord[]>;
   listSubmitted(limit?: number): Promise<ExecutionRecord[]>;
   /** Count executions grouped by status for an owner. */

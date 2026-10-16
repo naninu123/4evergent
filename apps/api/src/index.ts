@@ -1130,7 +1130,13 @@ export async function createApiServer(options: ServerOptions) {
   async function handleListExecutions(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const executions = await executionStore.listByOwner(ctx.ownerId!, limit);
+    const statusParam = urlObj.searchParams.get("status");
+    if (statusParam !== null && !EXECUTION_STATUSES.includes(statusParam as ExecutionStatus)) {
+      return json(res, { error: `invalid status; accepted values: ${EXECUTION_STATUSES.join(", ")}` }, 400);
+    }
+    const executions = statusParam
+      ? await executionStore.listByStatus(ctx.ownerId!, statusParam as ExecutionStatus, limit)
+      : await executionStore.listByOwner(ctx.ownerId!, limit);
     return json(res, { executions });
   }
 
