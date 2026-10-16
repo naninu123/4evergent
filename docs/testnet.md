@@ -29,6 +29,25 @@ precedence over `.env` values. `.env` is gitignored — never commit it.
 Note: the live smoke test and direct `node` invocations do NOT load `.env`;
 export variables in your shell for those (`export STELLAR_TESTNET_SECRET_KEY=...`).
 
+### 2b. Background workers
+
+The API server starts three background loops; tune them from `.env` (see the
+"Background workers" section of `.env.example`):
+
+- **Reconciliation** (`RECONCILIATION_INTERVAL_MS`, default 30000 ms) polls
+  Horizon for transaction status on every tick. This is the loop that most
+  affects Horizon load during a demo — lower it for faster status updates, raise
+  it to reduce external requests.
+- **Execution queue** (`EXECUTION_QUEUE_INTERVAL_MS`, default 10000 ms) drains
+  queued intents through the policy pipeline and may reach Horizon while
+  simulating or submitting.
+- **Scheduler** (`SCHEDULER_INTERVAL_MS`, default 60000 ms) executes due agent
+  schedules, enqueuing the work rather than submitting it directly.
+
+Each value must be a positive integer number of milliseconds; anything else
+(non-numeric, zero, negative, fractional) stops startup with a FATAL error. The
+server starts all three loops unconditionally.
+
 ### 3. Verify Horizon Testnet connectivity
 
 ```bash

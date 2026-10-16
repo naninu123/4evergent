@@ -12,6 +12,9 @@
  *   HOST                        — Bind host (default: 127.0.0.1; set 0.0.0.0 in a container)
  *   DATABASE_PATH               — SQLite file path (optional, in-memory if unset)
  *   DEV_OWNER_ID                — Development owner identity (default: "operator")
+ *   RECONCILIATION_INTERVAL_MS  — Reconciler cadence in ms (default: 30000)
+ *   EXECUTION_QUEUE_INTERVAL_MS — Execution queue cadence in ms (default: 10000)
+ *   SCHEDULER_INTERVAL_MS       — Scheduler cadence in ms (default: 60000)
  *
  * LIVE_SUBMIT must be explicitly set to "1" to enable real Testnet submission.
  *
@@ -55,6 +58,26 @@ function parseApiKeys(envVar: string | undefined): Record<string, { ownerId: str
   }
 
   return keys;
+}
+
+/**
+ * Parses a background-worker interval from the environment.
+ *
+ * Mirrors the fail-fast behaviour used for `PORT` and `API_KEYS`: an unset or
+ * empty value keeps the worker's default, while a non-numeric, zero, negative,
+ * or fractional value is rejected at startup rather than silently ignored.
+ */
+export function validateIntervalMs(
+  name: string,
+  raw: string | undefined,
+  fallback: number
+): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer number of milliseconds (got: "${raw}")`);
+  }
+  return value;
 }
 
 /** Loopback addresses that keep development ergonomics (no API_KEYS needed). */
@@ -105,6 +128,32 @@ async function main() {
   const host = process.env.HOST || "127.0.0.1";
   const dbPath = process.env.DATABASE_PATH || undefined;
   const devOwnerId = process.env.DEV_OWNER_ID || "operator";
+
+  // Background-worker intervals. Defaults match the worker defaults:
+  // reconciler 30s, execution queue 10s, scheduler 60s.
+  let reconciliationIntervalMs: number;
+  let executionQueueIntervalMs: number;
+  let schedulerIntervalMs: number;
+  try {
+    reconciliationIntervalMs = validateIntervalMs(
+      "RECONCILIATION_INTERVAL_MS",
+      process.env.RECONCILIATION_INTERVAL_MS,
+      30_000
+    );
+    executionQueueIntervalMs = validateIntervalMs(
+      "EXECUTION_QUEUE_INTERVAL_MS",
+      process.env.EXECUTION_QUEUE_INTERVAL_MS,
+      10_000
+    );
+    schedulerIntervalMs = validateIntervalMs(
+      "SCHEDULER_INTERVAL_MS",
+      process.env.SCHEDULER_INTERVAL_MS,
+      60_000
+    );
+  } catch (err: any) {
+    console.error(`FATAL: ${err.message}`);
+    process.exit(1);
+  }
 
   // Validate network configuration at startup
   if (!horizonUrl.includes("testnet")) {
@@ -192,8 +241,9 @@ async function main() {
       horizonUrl,
       signer,
       dbPath,
-      executionQueue: { enabled: true },
-      reconciliation: { enabled: true },
+      executionQueue: { enabled: true, intervalMs: executionQueueIntervalMs },
+      reconciliation: { enabled: true, intervalMs: reconciliationIntervalMs },
+      scheduler: { enabled: true, intervalMs: schedulerIntervalMs },
       authProvider,
       authModule,
       corsOrigin: webOrigin,
