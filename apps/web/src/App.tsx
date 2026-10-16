@@ -217,13 +217,13 @@ interface AppErrorBoundaryState {
 }
 
 export class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBoundaryState> {
-  state: AppErrorBoundaryState = { error: null, resetKey: 0 };
+  override state: AppErrorBoundaryState = { error: null, resetKey: 0 };
 
-  static getDerivedStateFromError(error: Error): Partial<AppErrorBoundaryState> {
+  static override getDerivedStateFromError(error: Error): Partial<AppErrorBoundaryState> {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo) {
+  override componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('[dashboard] render error:', error, info.componentStack);
   }
 
@@ -231,7 +231,7 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, AppErro
     this.setState((state) => ({ error: null, resetKey: state.resetKey + 1 }));
   };
 
-  render() {
+  override render() {
     if (this.state.error) {
       return (
         <div className="empty-state" role="alert">

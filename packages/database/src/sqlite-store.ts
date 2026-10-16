@@ -6,6 +6,7 @@ import type {
   PolicyDecision,
   SimulationResult,
 } from "@4evergent/shared";
+import { getSharedConnection } from "./shared-connection.js";
 import type {
   ActivityStore,
   ApprovalStore,
@@ -27,14 +28,13 @@ export class SQLiteActivityStore implements ActivityStore {
   private db: DatabaseSync;
 
   constructor(dbPath: string) {
-    this.db = new DatabaseSync(dbPath);
+    this.db = getSharedConnection(dbPath);
     this.initSchema();
   }
 
   private initSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);
-      INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '3');
 
       CREATE TABLE IF NOT EXISTS activities (
         id TEXT PRIMARY KEY,
@@ -277,7 +277,7 @@ export class SQLiteActivityStore implements ActivityStore {
   }
 
   close(): void {
-    this.db.close();
+    // Shared connection — managed by closeSharedConnection() / closeAllSharedConnections()
   }
 }
 
@@ -301,14 +301,13 @@ export class SQLiteApprovalStore implements ApprovalStore {
   private db: DatabaseSync;
 
   constructor(dbPath: string) {
-    this.db = new DatabaseSync(dbPath);
+    this.db = getSharedConnection(dbPath);
     this.initSchema();
   }
 
   private initSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);
-      INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '2');
 
       CREATE TABLE IF NOT EXISTS approvals (
         id TEXT PRIMARY KEY,
@@ -456,7 +455,7 @@ export class SQLiteApprovalStore implements ApprovalStore {
   }
 
   close(): void {
-    this.db.close();
+    // Shared connection — managed by closeSharedConnection() / closeAllSharedConnections()
   }
 }
 

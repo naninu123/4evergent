@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import type { ExecutionStore, ExecutionRecord, ExecutionStatus } from "./execution-types.js";
+import { getSharedConnection } from "./shared-connection.js";
 
 const MAX_LIMIT = 200;
 
@@ -133,14 +134,13 @@ export class SQLiteExecutionStore implements ExecutionStore {
   private db: DatabaseSync;
 
   constructor(dbPath: string) {
-    this.db = new DatabaseSync(dbPath);
+    this.db = getSharedConnection(dbPath);
     this.initSchema();
   }
 
   private initSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);
-      INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '1');
 
       CREATE TABLE IF NOT EXISTS executions (
         id TEXT PRIMARY KEY,
@@ -372,7 +372,7 @@ export class SQLiteExecutionStore implements ExecutionStore {
   }
 
   close(): void {
-    this.db.close();
+    // Shared connection — managed by closeSharedConnection() / closeAllSharedConnections()
   }
 }
 

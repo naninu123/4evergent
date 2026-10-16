@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import type { ActivityRecord, ExecutionRecord } from '../types';
@@ -11,33 +11,41 @@ export default function ActivityDetail() {
   const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const requestId = useRef(0);
 
-  const load = () => {
+  const load = useCallback(() => {
     if (!agentId || !activityId) return;
+    const currentRequest = ++requestId.current;
     setError(null);
     setActivity(null);
+    setExecutions([]);
     setLoading(true);
-    let cancelled = false;
     api.activityDetail(agentId, activityId)
       .then((r) => {
-        if (cancelled) return;
+        if (requestId.current !== currentRequest) return;
         setActivity(r.activity);
         if (r.activity) {
           api.listAgentExecutions(agentId)
-            .then((r2) => setExecutions(r2.executions.filter((e: ExecutionRecord) => e.activityId === activityId)))
+            .then((r2) => {
+              if (requestId.current === currentRequest) {
+                setExecutions(r2.executions.filter((e: ExecutionRecord) => e.activityId === activityId));
+              }
+            })
             .catch(() => {});
         }
       })
       .catch((e: any) => {
-        if (!cancelled) setError(e.message ?? 'Failed to load activity');
+        if (requestId.current === currentRequest) setError(e.message ?? 'Failed to load activity');
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (requestId.current === currentRequest) setLoading(false);
       });
-    return () => { cancelled = true; };
-  };
+  }, [agentId, activityId]);
 
-  useEffect(load, [agentId, activityId]);
+  useEffect(() => {
+    load();
+    return () => { requestId.current += 1; };
+  }, [load]);
 
   if (loading) return <Skeleton label="Loading activity..." />;
   if (error) return <EmptyState title="Failed to load activity" message={error} actionLabel="Retry" onAction={load} />;

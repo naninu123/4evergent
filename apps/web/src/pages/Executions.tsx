@@ -180,11 +180,21 @@ function Skeleton({ label }: { label: string }) {
   return <div className="skeleton">{label}</div>;
 }
 
-function EmptyState({ title, message }: { title: string; message: string }) {
+function EmptyState({ title, message, actionLabel, onAction }: {
+  title: string;
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
   return (
     <div className="empty-state">
       <h2>{title}</h2>
       <p>{message}</p>
+      {actionLabel && onAction && (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onAction}>
+          {actionLabel}
+        </button>
+      )}
     </div>
   );
 }

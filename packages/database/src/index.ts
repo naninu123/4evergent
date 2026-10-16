@@ -427,3 +427,12 @@ export type { RetryPolicy } from "./execution-policy.js";
 // Authorization service
 export { ResourceAuthorizationService } from "./authorization.js";
 export type { AuthorizationContext } from "./authorization.js";
+
+// Shared SQLite connection
+export {
+  getSharedConnection,
+  getSchemaVersion,
+  setSchemaVersion,
+  closeSharedConnection,
+  closeAllSharedConnections,
+} from "./shared-connection.js";
