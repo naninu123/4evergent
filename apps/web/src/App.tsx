@@ -219,7 +219,7 @@ interface AppErrorBoundaryState {
 export class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBoundaryState> {
   override state: AppErrorBoundaryState = { error: null, resetKey: 0 };
 
-  static override getDerivedStateFromError(error: Error): Partial<AppErrorBoundaryState> {
+  static getDerivedStateFromError(error: Error): Partial<AppErrorBoundaryState> {
     return { error };
   }
 
