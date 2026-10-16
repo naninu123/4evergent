@@ -22,7 +22,11 @@ export default function Overview() {
   const [attention, setAttention] = useState<AttentionCounts | null>(null);
   const [attentionError, setAttentionError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = () => {
+    setError(null);
+    setLoading(true);
+    setAttention(null);
+    setAttentionError(null);
     (async () => {
       try {
         const [h, a, ap, act] = await Promise.all([
@@ -48,10 +52,12 @@ export default function Overview() {
         setLoading(false);
       }
     })();
-  }, []);
+  };
+
+  useEffect(() => { load(); }, []);
 
   if (loading) return <Skeleton label="Connecting to API..." />;
-  if (error) return <EmptyState title="API Unavailable" message={error} />;
+  if (error) return <EmptyState title="API Unavailable" message={error} actionLabel="Retry" onAction={load} />;
 
   const activeAgents = agents.filter((a) => a.status === 'active').length;
   const pausedAgents = agents.filter((a) => a.status === 'paused').length;
@@ -90,7 +96,10 @@ export default function Overview() {
         {attention === null && !attentionError ? (
           <Skeleton label="Loading operational status..." />
         ) : attentionError ? (
-          <div className="error-banner">{attentionError}</div>
+          <div className="error-banner">
+            {attentionError}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={load}>Retry</button>
+          </div>
         ) : hasAttention ? (
           <table className="table">
             <thead>

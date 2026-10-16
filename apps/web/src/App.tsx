@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
-import { useState, useEffect, useCallback } from 'react';
+import { Component, useState, useEffect, useCallback, type ErrorInfo, type ReactNode } from 'react';
 import { getStoredToken, clearAuth } from './auth';
 import { api, ApiError } from './api';
 import Login from './pages/Login';
@@ -211,9 +211,43 @@ function OperatorBadge() {
    Main App Router
    ========================================================================== */
 
+interface AppErrorBoundaryState {
+  error: Error | null;
+  resetKey: number;
+}
+
+export class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBoundaryState> {
+  state: AppErrorBoundaryState = { error: null, resetKey: 0 };
+
+  static getDerivedStateFromError(error: Error): Partial<AppErrorBoundaryState> {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[dashboard] render error:', error, info.componentStack);
+  }
+
+  private retry = () => {
+    this.setState((state) => ({ error: null, resetKey: state.resetKey + 1 }));
+  };
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="empty-state" role="alert">
+          <h3>Something went wrong</h3>
+          <p>{this.state.error.message || 'The dashboard could not render this page.'}</p>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={this.retry}>Try again</button>
+        </div>
+      );
+    }
+    return <div key={this.state.resetKey}>{this.props.children}</div>;
+  }
+}
+
 export default function App() {
   return (
-    <BrowserRouter>
+    <AppErrorBoundary><BrowserRouter>
       <Routes>
         {/* Public landing page */}
         <Route path="/" element={<Landing />} />
@@ -243,6 +277,6 @@ export default function App() {
           }
         />
       </Routes>
-    </BrowserRouter>
+    </BrowserRouter></AppErrorBoundary>
   );
 }

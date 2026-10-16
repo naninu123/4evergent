@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { MemoryRouter } from 'react-router-dom';
 import Activity from '../Activity';
@@ -41,6 +41,17 @@ describe('Activity page', () => {
     await waitFor(() => {
       expect(screen.getByText('Failed to load activity')).toBeInTheDocument();
     });
+  });
+
+  it('retries the activity request and clears the error after recovery', async () => {
+    mockListActivity
+      .mockRejectedValueOnce(new Error('temporary API error'))
+      .mockResolvedValueOnce({ activity: [] });
+    render(<MemoryRouter><Activity /></MemoryRouter>);
+    await screen.findByText('temporary API error');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('No activity');
+    expect(mockListActivity).toHaveBeenCalledTimes(2);
   });
 
   it('renders loading state', async () => {

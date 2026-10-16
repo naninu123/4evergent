@@ -206,8 +206,10 @@ function PolicySettings({ agentId }: { agentId: string }) {
   const [success, setSuccess] = useState<string | null>(null);
   const [form, setForm] = useState<PolicyRules | null>(null);
 
-  useEffect(() => {
+  const load = () => {
     let cancelled = false;
+    setLoading(true);
+    setError(null);
     (async () => {
       try {
         setLoading(true);
@@ -225,7 +227,9 @@ function PolicySettings({ agentId }: { agentId: string }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [agentId]);
+  };
+
+  useEffect(load, [agentId]);
 
   const updateForm = (patch: Partial<PolicyRules>) => {
     setForm((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -285,7 +289,7 @@ function PolicySettings({ agentId }: { agentId: string }) {
   };
 
   if (loading) return <Skeleton label="Loading policy..." />;
-  if (error && !form) return <div className="error">{error}</div>;
+  if (error && !form) return <div className="error">{error} <button type="button" className="btn btn-ghost btn-sm" onClick={load}>Retry</button></div>;
   if (!form) return <div className="error">Unable to load policy</div>;
 
   const isDirty =
@@ -466,39 +470,38 @@ export default function AgentDetail() {
   const [spending, setSpending] = useState<SpendingData | null>(null);
   const [spendingError, setSpendingError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = () => {
+    setError(null);
+    setAgent(null);
+    setActivity(null);
+    setSpendingError(null);
+    setLoading(true);
     (async () => {
       try {
-        const res = await api.getAgentSpending(agentId);
-        setSpending(res.spending);
-      } catch (e: any) {
-        setSpendingError(e.message ?? 'Failed to load spending');
-      }
-    })();
-  }, [agentId]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const [a, act] = await Promise.all([
+        const [agentResult, activityResult, spendingResult] = await Promise.all([
           api.getAgent(agentId),
           api.agentActivity(agentId, 20),
+          api.getAgentSpending(agentId),
         ]);
-        setAgent(a);
-        setActivity(act.activity);
+        setAgent(agentResult);
+        setActivity(activityResult.activity);
+        setSpending(spendingResult.spending);
       } catch (e: any) {
-        setError(e.message);
-      } finally {
+        setError(e.message ?? 'Failed to load agent');
+      }
+      finally {
         setLoading(false);
       }
     })();
-  }, [agentId]);
+  };
+
+  useEffect(() => { load(); }, [agentId]);
 
   if (loading) {
     return <Skeleton label="Loading agent..." />;
   }
   if (error) {
-    return <EmptyState title="Failed to load agent" message={error} />;
+    return <EmptyState title="Failed to load agent" message={error} actionLabel="Retry" onAction={load} />;
   }
   if (!agent) {
     return (

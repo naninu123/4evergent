@@ -12,8 +12,11 @@ export default function ActivityDetail() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = () => {
     if (!agentId || !activityId) return;
+    setError(null);
+    setActivity(null);
+    setLoading(true);
     let cancelled = false;
     api.activityDetail(agentId, activityId)
       .then((r) => {
@@ -32,10 +35,12 @@ export default function ActivityDetail() {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [agentId, activityId]);
+  };
+
+  useEffect(load, [agentId, activityId]);
 
   if (loading) return <Skeleton label="Loading activity..." />;
-  if (error) return <div className="error-banner">{error}</div>;
+  if (error) return <EmptyState title="Failed to load activity" message={error} actionLabel="Retry" onAction={load} />;
   if (!activity) return (
     <EmptyState title="Activity not found" message="This activity does not exist or you do not have access." />
   );

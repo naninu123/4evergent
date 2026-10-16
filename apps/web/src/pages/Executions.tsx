@@ -48,7 +48,10 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = () => {
+    setError(null);
+    setLoading(true);
+    setExecutions(null);
     (async () => {
       try {
         const [list, q] = await Promise.all([
@@ -63,10 +66,12 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
         setLoading(false);
       }
     })();
-  }, []);
+  };
+
+  useEffect(() => { load(); }, []);
 
   if (loading) return <Skeleton label="Loading executions..." />;
-  if (error) return <EmptyState title="Failed to load executions" message={error} />;
+  if (error) return <EmptyState title="Failed to load executions" message={error} actionLabel="Retry" onAction={load} />;
   if (executions === null) return <Skeleton label="Loading executions..." />;
 
   const filtered = filter === 'all'

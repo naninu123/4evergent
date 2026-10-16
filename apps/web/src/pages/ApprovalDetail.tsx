@@ -12,13 +12,18 @@ export default function ApprovalDetail() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = () => {
     if (!approvalId) return;
+    setError(null);
+    setApproval(null);
+    setLoading(true);
     api.approvalDetail(approvalId)
       .then((r) => setApproval(r.approval))
       .catch((e: any) => setError(e.message ?? 'Failed to load approval'))
       .finally(() => setLoading(false));
-  }, [approvalId]);
+  };
+
+  useEffect(() => { load(); }, [approvalId]);
 
   const handleApprove = async () => {
     if (!approval || actionLoading) return;
@@ -61,7 +66,7 @@ export default function ApprovalDetail() {
   };
 
   if (loading) return <Skeleton label="Loading approval..." />;
-  if (error) return <EmptyState title="Failed to load approval" message={error} />;
+  if (error) return <EmptyState title="Failed to load approval" message={error} actionLabel="Retry" onAction={load} />;
   if (!approval) return (
     <EmptyState title="Approval not found" message="This approval does not exist or you do not have access." />
   );

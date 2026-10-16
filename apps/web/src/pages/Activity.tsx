@@ -9,13 +9,17 @@ export default function Activity() {
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  useEffect(() => {
+  const load = () => {
+    setError(null);
+    setActivity(null);
     api.listActivity()
       .then((r) => setActivity(r.activity))
       .catch((e: any) => setError(e.message));
-  }, []);
+  };
 
-  if (error) return <EmptyState title="Failed to load activity" message={error} />;
+  useEffect(() => { load(); }, []);
+
+  if (error) return <EmptyState title="Failed to load activity" message={error} actionLabel="Retry" onAction={load} />;
   if (activity === null) return <Skeleton label="Loading activity..." />;
   if (activity.length === 0) {
     return (

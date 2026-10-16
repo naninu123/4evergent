@@ -10,6 +10,8 @@ export default function Approvals() {
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
   const load = () => {
+    setError(null);
+    setApprovals(null);
     api.listApprovals('pending_approval')
       .then((r) => setApprovals(r.approvals))
       .catch((e: any) => setError(e.message));
@@ -26,7 +28,7 @@ export default function Approvals() {
       .finally(() => setLoadingId(null));
   };
 
-  if (error) return <EmptyState title="Failed to load approvals" message={error} />;
+  if (error) return <EmptyState title="Failed to load approvals" message={error} actionLabel="Retry" onAction={load} />;
   if (approvals === null) return <Skeleton label="Loading approvals..." />;
   if (approvals.length === 0) return (
     <EmptyState title="No pending approvals" message="Approvals requiring action will appear here." />
