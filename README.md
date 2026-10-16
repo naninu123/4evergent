@@ -51,11 +51,11 @@ This lets agents act autonomously within a bounded envelope, while the owner ret
 
 Stellar is purpose-built for asset issuance and payments with native low-fee, fast-finality design. Its architecture is ideal for an agent economy:
 
-- **Native asset**: XLM settles any action without wrapping.
-- **Federated consensus**: no proof-of-stake staking requirements.
-- **Soroban smart contracts**: WASM-based, memory-safe, with native support for complex contracts.
-- **Built-in token standard**: no Solidity-style approval race conditions for basic payments.
-- **Low, predictable fees**: cents or less per operation.
+- `Native asset`: XLM settles any action without wrapping.
+- `Federated consensus`: no proof-of-stake staking requirements.
+- `Soroban smart contracts`: WASM-based, memory-safe, with native support for complex contracts.
+- `Built-in token standard`: no Solidity-style approval race conditions for basic payments.
+- `Low, predictable fees`: cents or less per operation.
 
 ## Architecture
 
@@ -64,7 +64,7 @@ Stellar is purpose-built for asset issuance and payments with native low-fee, fa
 ├── apps/
 │   ├── web/              # React + TS frontend (agent dashboard)
 │   ├── api/              # Express-style backend API
-│   └── cli/              # Operator CLI (HTTP client) — see [docs/cli.md](docs/cli.md)
+│   └── cli/             # Operator CLI ( HTTP client) — see [docs/cli.md](docs/cli.md)
 ├── packages/
 │   ├── agent-core/      # Agent runtime, intent validation, Stellar adapter
 │   ├── policy/           # Deterministic authorization engine
@@ -161,6 +161,25 @@ pnpm --filter @4evergent/web dev
 ```
 
 The dashboard connects to `http://localhost:3000`. Set `VITE_API_BASE` env var to point to a different API URL. The dashboard is a local development tool — it provides read-only views of agents/activity/approvals and an XLM payment intent submission form. All policy enforcement, signing, and submission remain server-side.
+
+### Watch mode (dev workflow)
+
+For the edit → rebuild → restart loop, use the watch script instead of building and starting manually. It runs the API directly from source with `tsx watch` and restarts on any source change — no prior `pnpm build` is required:
+
+```bash
+# terminal 1: API server with watch/mode reload
+pnpm --filter @4evergent/api dev
+
+# terminal 2: web dashboard (Vite HMR)
+pnpm --filter @4evergent/web dev
+
+# or run both from the root
+
+pnpm dev        # runs every package's dev script in parallel
+pnpm dev:watch  # convenience alias for the API watch script only
+```
+
+The watch script loads `.env` via `tsx watch --env-file-if-exists=../../.env`, so `STELLAR_TESTNET_SECRET_KEY` and other variables from the repo-root `.env` are picked up automatically. The live smoke test and direct `node` invocations do not load `.env`, so export variables in your shell when running those.
 
 Each package has its own `package.json` with `build`, `dev`, `test`, and `typecheck` scripts.
 
