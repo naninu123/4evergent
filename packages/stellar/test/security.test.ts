@@ -10,6 +10,7 @@ import {
 } from "@4evergent/database";
 import type { PolicyRules, AgentIntent, PolicyDecision } from "@4evergent/shared";
 import { Keypair } from "@stellar/stellar-sdk";
+import { DEFAULT_RULES } from "@4evergent/policy";
 
 const TESTNET = "https://horizon-testnet.stellar.org";
 const PASSPHRASE = "Test SDF Network ; September 2015";
@@ -38,6 +39,7 @@ function makePipeline(opts: {
   signer?: Signer;
   activity?: InMemoryActivityStore;
   approval?: InMemoryApprovalStore;
+  policyResolver?: (agentId: string) => Promise<PolicyRules>;
 }) {
   const activity = opts.activity ?? new InMemoryActivityStore();
   const approval = opts.approval ?? new InMemoryApprovalStore();
@@ -49,6 +51,7 @@ function makePipeline(opts: {
     activityStore: activity,
     approvalStore: approval,
     policyRules: opts.rules,
+    policyResolver: opts.policyResolver,
   });
   return { pipeline, activity, approval, signer };
 }
@@ -235,6 +238,64 @@ test("SEC: executeApproved rejects expired approval", async () => {
 
   const updated = await approval.get(appr.id);
   assert.equal(updated!.status, "expired");
+});
+
+test("SEC: tightened asset policy denies before construction, simulation, or signing", async () => {
+  const activity = new InMemoryActivityStore();
+  const approval = new InMemoryApprovalStore();
+  const signer = new RecordingSigner();
+  const intent = paymentIntent("50");
+  const decision: PolicyDecision = {
+    result: "requires_approval",
+    reason: "Amount 50 XLM requires human approval (>= 10)",
+    rule: "approvalThreshold",
+    intent,
+  };
+  const act = createActivity("agent-a", "owner-a", intent, decision);
+  await activity.record(act);
+  const appr = createApproval(act.id, "agent-a", "owner-a", intent, decision, null);
+  appr.status = "approved";
+  await approval.record(appr);
+
+  const currentRules: PolicyRules = {
+    ...DEFAULT_RULES,
+    allowedAssets: ["USDC"],
+    requireHumanApprovalForAmountAbove: "10",
+  };
+  const pipeline = new TransactionPipeline({
+    horizonUrl: TESTNET,
+    networkPassphrase: PASSPHRASE,
+    signer,
+    activityStore: activity,
+    approvalStore: approval,
+    policyResolver: async () => currentRules,
+  });
+  let constructions = 0;
+  let simulations = 0;
+  let accountFetches = 0;
+  (pipeline as any).builder = {
+    buildPayment: async () => { constructions++; return {}; },
+    buildAccountSettings: async () => { constructions++; return {}; },
+  };
+  (pipeline as any).simulator = { simulate: async () => { simulations++; return { success: true }; } };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    accountFetches++;
+    return new Response("{}", { status: 400 });
+  };
+  try {
+    const result = await pipeline.executeApproved(appr.id);
+    assert.equal(result.status, "rejected");
+    assert.match(result.message, /Policy re-evaluation denied/);
+    assert.match(result.message, /allowed_assets/);
+    assert.equal(accountFetches, 0, "policy denial must happen before fetching the source account");
+    assert.equal(constructions, 0, "denied approval must not construct a transaction");
+    assert.equal(simulations, 0, "denied approval must not simulate a transaction");
+    assert.equal((signer as RecordingSigner).calls, 0, "denied approval must not sign a transaction");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 // ===== 8. Double approval / idempotency =====

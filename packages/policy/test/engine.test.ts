@@ -47,6 +47,16 @@ test("requires approval at threshold", async () => {
   assert.equal(decision.result, "requires_approval");
 });
 
+test("hard asset denial takes precedence over the approval threshold", async () => {
+  const engine = new PolicyEngine({
+    requireHumanApprovalForAmountAbove: "10",
+    allowedAssets: ["USDC"],
+  });
+  const decision = await engine.evaluate(baseIntent({ asset: "XLM", amount: "50" }), "GAGENT");
+  assert.equal(decision.result, "deny");
+  assert.equal(decision.rule, "allowedAssets");
+});
+
 test("denies disallowed asset", async () => {
   const engine = new PolicyEngine({ allowedAssets: ["XLM"] });
   const decision = await engine.evaluate(baseIntent({ asset: "USDC" }), "GAGENT");

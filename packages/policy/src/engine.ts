@@ -168,30 +168,31 @@ export class PolicyEngine {
       }
     }
 
-    // 4. Approval threshold
-    if (amount !== null) {
-      const threshold = rules.requireHumanApprovalForAmountAbove;
-      if (threshold && compareAmounts(amount, threshold) >= 0) {
-        return decide("requires_approval", `Amount ${amount} ${asset} requires human approval (>= ${threshold})`, "approvalThreshold");
-      }
-    }
-
-    // 5. Asset allowlist
+    // 4. Asset allowlist
     if (rules.allowedAssets.length > 0 && !rules.allowedAssets.includes(asset)) {
       return decide("deny", `Asset '${asset}' is not in allowed_assets`, "allowedAssets");
     }
 
-    // 6. Destination allowlist (payments only)
+    // 5. Destination allowlist (payments only)
     if (intent.type === "payment" && rules.allowedDestinations.length > 0) {
       if (!rules.allowedDestinations.includes(intent.destination)) {
         return decide("deny", `Destination '${intent.destination}' not in allowed_destinations`, "allowedDestinations");
       }
     }
 
-    // 7. Contract ID allowlist (contract calls only)
+    // 6. Contract ID allowlist (contract calls only)
     if (intent.type === "contract_call" && rules.allowedContractIds.length > 0) {
       if (!rules.allowedContractIds.includes(intent.contractId)) {
         return decide("deny", `Contract '${intent.contractId}' not in allowed list`, "allowedContractIds");
+      }
+    }
+
+    // 7. Approval threshold. Approval is only relevant after every hard deny
+    // rule passes, so it cannot mask a tightened allowlist or destination rule.
+    if (amount !== null) {
+      const threshold = rules.requireHumanApprovalForAmountAbove;
+      if (threshold && compareAmounts(amount, threshold) >= 0) {
+        return decide("requires_approval", `Amount ${amount} ${asset} requires human approval (>= ${threshold})`, "approvalThreshold");
       }
     }
 
