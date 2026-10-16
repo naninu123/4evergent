@@ -4,7 +4,7 @@ Current API surface of `apps/api`, accurate to the source at
 `apps/api/src/index.ts`. All examples use placeholders — never real
 credentials.
 
-## Authentication
+## Authentication (API keys)
 
 All endpoints except `GET /health` require authentication.
 
@@ -19,7 +19,7 @@ All endpoints except `GET /health` require authentication.
 Unauthenticated requests to protected endpoints return
 `{"error":"unauthorized"}` with status `401`.
 
-## User Authentication (Browser Sessions)
+## Authentication (Browser Sessions)
 
 In addition to API-key auth for machine clients, the API supports
 browser-based user sessions for humans. Sessions live in an HttpOnly,
@@ -28,6 +28,11 @@ supported: email+password, Google OAuth, and Stellar wallet signature.
 
 CSRF protection: cookie-authenticated state-changing requests must carry
 the `X-Requested-With` header. Bearer/API-key requests are unaffected.
+
+The session cookie is HttpOnly and SameSite=Lax. Browser clients must send
+requests with `credentials: 'include'` so the cookie is attached; browser
+login does not use bearer tokens. Machine clients continue to use
+`Authorization: Bearer <key>` and are unaffected by the CSRF guard.
 
 ### GET /auth/config
 
@@ -42,6 +47,9 @@ Public. Returns which login methods the server has enabled:
 }
 ```
 
+This is the client's capability probe: it tells the client which login
+methods the server has enabled before rendering the login UI.
+
 ### POST /auth/register
 
 Create a new email+password account. Only available when
@@ -53,6 +61,8 @@ Body: `{ "email": string (required), "password": string (required, min 8 chars),
 - `400` → invalid JSON / missing fields / password too short
 - `409` → email already registered
 - `403` → registration disabled
+- `403` → CSRF failure (missing/invalid `X-Requested-With` on a
+  cookie-authenticated state-changing request)
 
 ### POST /auth/login/email
 
@@ -62,6 +72,8 @@ Body: `{ "email": string (required), "password": string (required) }`
 
 - `200` → `{ "user": { "id", "email", "displayName" } }` — session cookie is set
 - `401` → invalid email or password
+- `400` → invalid JSON / missing fields
+- `403` → CSRF failure
 
 ### GET /auth/me
 
@@ -69,21 +81,30 @@ Get the current logged-in user (from session cookie).
 
 - `200` → `{ "user": { "id", "email", "displayName", "stellarPublicKey" } }`
 - `401` → not logged in
+- `403` → CSRF failure (on state-changing methods)
 
 ### POST /auth/logout
 
 Invalidate the current session.
 
 - `200` → `{ "ok": true }` — session cookie is cleared
+- `401` → not logged in
+- `403` → CSRF failure
 
 ### GET /auth/google/start
 
 Start Google OAuth flow. Redirects to Google's authorization endpoint.
 
+- `302` → redirect to the provider's authorization endpoint
+
 ### GET /auth/google/callback
 
 Google OAuth callback. Exchanges the authorization code for a token,
 creates/fetches the user, and sets the session cookie.
+
+- `302` → redirect back to the app; the `four_eg_session` cookie is set
+- `400` → invalid/missing authorization code or state
+- `401` → provider rejected the exchange
 
 ### POST /auth/stellar/challenge
 
@@ -93,6 +114,7 @@ Body: `{ "publicKey": string (required, Stellar address) }`
 
 - `200` → `{ "challenge": string }` — the user signs this with their wallet
 - `400` → invalid Stellar address
+- `403` → CSRF failure
 
 ### POST /auth/stellar/verify
 
@@ -102,6 +124,8 @@ Body: `{ "publicKey": string (required), "signature": string (required), "challe
 
 - `200` → `{ "user": { "id", "stellarPublicKey", "displayName" } }` — session cookie is set
 - `400` → invalid signature / expired challenge
+- `401` → challenge not found or already consumed
+- `403` → CSRF failure
 
 ## Ownership
 

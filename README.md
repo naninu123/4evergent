@@ -51,11 +51,11 @@ This lets agents act autonomously within a bounded envelope, while the owner ret
 
 Stellar is purpose-built for asset issuance and payments with native low-fee, fast-finality design. Its architecture is ideal for an agent economy:
 
-- **Native asset**: XLM settles any action without wrapping.
-- **Federated consensus**: no proof-of-stake staking requirements.
-- **Soroban smart contracts**: WASM-based, memory-safe, with native support for complex contracts.
-- **Built-in token standard**: no Solidity-style approval race conditions for basic payments.
-- **Low, predictable fees**: cents or less per operation.
+- `Native asset`: XLM settles any action without wrapping.
+- `Federated consensus`: no proof-of-stake staking requirements.
+- `Soroban smart contracts`: WASM-based, memory-safe, with native support for complex contracts.
+- `Built-in token standard`: no Solidity-style approval race conditions for basic payments.
+- `Low, predictable fees`: cents or less per operation.
 
 ## Architecture
 
@@ -108,6 +108,7 @@ Key guarantees:
 - **Key management**: private keys never in source, env examples, logs, or tests.
 - **Frontend/backend trust boundary**: the frontend never receives secret material; all signing happens server-side through a hardened path.
 - **API authentication**: development mode auto-authenticates a single owner; production mode requires `Authorization: Bearer <key>` with keys configured server-side via `API_KEYS` (format `key:ownerId[:subject]`, comma-separated). See [docs/security-model.md](docs/security-model.md) — API Authentication.
+- **End-user authentication**: the auth module exposes email/password, Google OAuth, and Stellar wallet-signature login. Sessions are HttpOnly cookies (`four_eg_session`), not bearer tokens. See [docs/api.md](docs/api.md) — Authentication for the full route contract.
 
 ## Local development
 
@@ -146,6 +147,7 @@ pnpm --filter @4evergent/api start
 
 # Or run directly
 node apps/api/dist/server.js
+
 ```
 
 The server starts on `http://localhost:3000`. See [docs/testnet.md](docs/testnet.md) for the full Testnet workflow including funding, simulation, and live submission (`LIVE_SUBMIT=1`).
@@ -154,10 +156,10 @@ The server starts on `http://localhost:3000`. See [docs/testnet.md](docs/testnet
 
 ```bash
 # terminal 1: start the API server
-pnpm --filter @4evergent/api dev
+pnpm --filter @evergent/api dev
 
 # terminal 2: start the web dashboard
-pnpm --filter @4evergent/web dev
+pnpm --filter @evergent/web dev
 ```
 
 The dashboard connects to `http://localhost:3000`. Set `VITE_API_BASE` env var to point to a different API URL. The dashboard is a local development tool — it provides read-only views of agents/activity/approvals and an XLM payment intent submission form. All policy enforcement, signing, and submission remain server-side.
@@ -271,7 +273,7 @@ See [docs/cli.md](docs/cli.md) for full command reference.
 | 10 | Execution queue crash recovery | ✅ Shipped |
 | 11 | Agent self-serve creation | ✅ Shipped |
 | 12 | Trustline & non-XLM asset support | ✅ Shipped |
-| 13-18 | Reliability hardening (atomic claim, idempotency, ambiguous submission, pre-check, docs) | ✅ Shipped |
+| 13-18 | Reliability hardening (atomic claim, idompotency, ambiguous submission, pre-check, docs) | ✅ Shipped |
 | 19 | Operator CLI v1 (health, agent lifecycle, approval, execution) | ✅ Shipped |
 
 ---
