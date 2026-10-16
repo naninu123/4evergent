@@ -177,6 +177,8 @@ before submission (simulation gate verified, no real transaction sent).
 | Upload tx | https://stellar.expert/explorer/testnet/tx/baebfc6bddb46e406fd5cd6d202798983c733498fc9952ba1e14f141071a2d1c |
 | Create tx | https://stellar.expert/explorer/testnet/tx/bd88d3b35cbd02eb00056d9169848093e7ade2d6f3f2e4069c00f09d7fa9247f |
 
+See [`docs/contract-upgrades.md`](contract-upgrades.md) for the documented wasm replacement (upgrade) pattern against this contract ID, the storage-schema versioning policy, and the migration note template.
+
 `contracts/permissions` is **not deployed** on any network: it is excluded from
 the contracts workspace, is not compiled or tested, and lacks authorization
 checks. See `contracts/permissions/README.md`.
@@ -253,6 +255,8 @@ sha256sum /tmp/fetched.wasm
 Verified on 2026-09-28: `query` on an unknown id returned `null`; after
 `register`, `query` returned the record with `"active": true`; the fetched wasm
 sha256 equalled `83656ffddd08a22e1977b6cf129af4d6515be7e8494d843ded1aa1c0ef3f8445`.
+
+For redeploying a new wasm over this existing contract ID (preserving storage), see the upgrade walkthrough in [`docs/contract-upgrades.md`](contract-upgrades.md).
 
 ## Safety Guards (Phase 21)
 

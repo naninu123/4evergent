@@ -32,15 +32,13 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 
 ## ADR-005: Testnet-first, no mainnet assumptions in MVP
 
-**Status:** Accepted  
-**Context:** MVP must be safe to deploy and iterate on without risking real value.  
+**Status:** Accepted  **Context:** MVP must be safe to deploy and iterate on without risking real value.  
 **Decision:** All Stellar interactions default to testnet (`https://horizon-testnet.stellar.org`). Mainnet config is a deploy-time environment variable, never a code assumption.  
 **Consequences:** Contributors can run the full pipeline locally without real XLM.
 
 ## ADR-006: No project token in MVP
 
-**Status:** Accepted  
-**Context:** Tokenomics distracts from the core agent-permission problem and introduces speculative risk.  
+**Status:** Accepted  **Context:** Tokenomics distracts from the core agent-permission problem and introduces speculative risk.  
 **Decision:** MVP contains no token, no token sale, no bonding curve, no speculative mechanics. All actions use XLM or native testnet assets.  
 **Consequences:** Avoids regulatory surface and keeps focus on the permissioned-execution layer.
 
@@ -53,15 +51,13 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 
 ## ADR-008: Signer abstraction, never LLM-held keys
 
-**Status:** Accepted  
-**Context:** A server-held private key that the LLM can ask to sign anything defeats the purpose of the policy engine. The backend must NEVER give the LLM direct signing authority.  
+**Status:** Accepted  **Context:** A server-held private key that the LLM can ask to sign anything defeats the purpose of the policy engine. The backend must NEVER give the LLM direct signing authority.  
 **Decision:** The `Signer` interface abstracts signing authority. The pipeline holds a `Signer` reference; callers never receive one. Initial implementation is `TestnetLocalSigner` (testnet-only, env-loaded, never exposed to LLM). Future implementations (user-wallet, permissioned-agent, hardware/KMS) plug in via the same interface.  
 **Consequences:** The LLM can propose intents but cannot sign. Signing is a capability, not a function the LLM can call. Production wallets are swappable without touching the pipeline.
 
 ## ADR-009: Transaction pipeline as a single ordered gate chain
 
-**Status:** Accepted  
-**Context:** Multiple gates (validation → policy → authorization → construction → simulation → signing → submission) must run in order. Any shortcut (e.g., allowing callers to invoke the signer directly) creates a bypass.  
+**Status:** Accepted  **Context:** Multiple gates (validation → policy → authorization → construction → simulation → signing → submission) must run in order. Any shortcut (e.g., allowing callers to invoke the signer directly) creates a bypass.  
 **Decision:** `TransactionPipeline.execute()` is the ONLY public entry point. It runs each gate in sequence and stops at the first failure. No individual step is exposed as a public method that callers can chain arbitrarily.  
 **Consequences:** The gate order is structural, not conventional. Tests can prove that a policy DENY, a failed simulation, or an approval-required state cannot reach the signer.
 
@@ -109,7 +105,7 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 
 **Context:** Users could not create agents from the web UI. Agents had to be registered programmatically via `registerAgent()` on the API server instance, which required backend-only bootstrap. The `agents` Map was in-memory only and lost on restart.
 
-**Decision:** Introduce `AgentStore` abstraction (InMemory + SQLite via `node:sqlite`) and `POST /agents` endpoint. The endpoint validates input, binds the agent to `requestCtx.ownerId`, persists via `AgentStore`, and returns the created record. Existing `registerAgent()` now syncs to both the in-memory Map (for backward compatibility with scheduler and authorization) and the persistent store. `handleListAgents` and `handleGetAgent` now read from `AgentStore` instead of the in-memory Map.
+**Decision:** Introduce `AgentStore` abstraction (InMemory + SQLite via `node:sqlite`) and `POST /agents` endpoint. The endpoint validates input, binds the agent to `requestCtxt.ownerId`, persists via `AgentStore`, and returns the created record. Existing `registerAgent()` now syncs to both the in-memory Map (for backward compatibility with scheduler and authorization) and the persistent store. `handleListAgents` and `handleGetAgent` now read from `AgentStore` instead of the in-memory Map.
 
 **Consequences:**
 - Users can create agents from the Agents page without backend bootstrap
@@ -118,3 +114,28 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 - Backward compatible: existing test helpers using `registerAgent()` still work
 - No production authentication — `requestContext.ownerId` is set server-side (existing limitation)
 - `AgentRecord` has no secret fields by construction
+
+## ADR-014: Bounded retention sweeps for transient data
+
+**Status:** Accepted
+
+**Context:** Expired authentication sessions and historical daily-spending reservations accumulated indefinitely. The former exposed stale tokens in storage; the latter had no readers once its UTC day passed. Cleanup must not starve request traffic.
+
+**Decision:** Sweep sessions 30 days after `expires_at` and daily-spending rows older than 90 UTC days, once per day. Each indexed delete is limited to 500 rows per table and runs as a short autocommit statement. Operators can set the two retention-day environment variables, change the interval, disable the worker, or set either day window to zero to retain that table forever. The idempotency table remains outside this policy and belongs to #109.
+
+**Consequences:** Transient storage is bounded over repeated sweeps without a schema migration or a long-held write transaction. A large backlog drains in batches. Recent expired sessions and the current spending day remain available; setting a zero window explicitly keeps all rows.
+
+## ADR-015: Wasm replacement as the agent-registry upgrade pattern
+
+**Status:** Accepted
+
+**Context:** `contracts/agent-registry` is deployed on Stellar Testnet (contract ID `CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7`) and holds durable owner-scoped agent identity state. Issues #4, #5, #8, and #19 all propose contract changes while the deployed instance already holds state. Without a stated upgrade policy, each change becomes an implicit decision about testnet state. The contract exposes no upgrade hook and no version field, and no upgrade documentation existed at baseline `274437ce`.
+
+**Decision:** Use Soroban wasm replacement via `stellar contract install` + `stellar contract upgrade` against the existing contract ID as the upgrade pattern. The contract keeps its existing four entrypoints and adds one minimal read-only `version()` entrypoint returning a storage schema version constant. The upgrade is authorized by the admin that installed the wasm (the deployer identity); the contract itself does not gate the replacement beyond the protocol-level authorization on the invoke. Storage keys and values are preserved across a replacement; only the executable code changes. The documented policy is Testnet-only and the doc marks executed vs. unverified steps explicitly.
+
+**Consequences:**
+- Upgrades are a single wasm replacement against a stable contract ID; no proxy or governance layer is introduced.
+- Existing storage entries survive the replacement, but their TTLs are not refreshed by the upgrade itself — the TTL policy is tracked in #19.
+- Consumers detect old records by calling `version()` and comparing against the version they were built against; a future migration entrypoint would rewrite records lazily on read or eagerly via an admin-gated batch call.
+- Mainnet would additionally require a multi-sig or governance approval for the upgrade authorizer, a formal release/version record, and a rollback plan; none of these are implemented here.
+- The full procedure, CLI commands, storage observations, and migration note template live in `docs/contract-upgrades.md`.

@@ -80,9 +80,10 @@ Stellar is purpose-built for asset issuance and payments with native low-fee, fa
 │   ├── capabilities.md
 │   ├── roadmap.md
 │   ├── testnet.md
+│   ├── contract-upgrades.md
 │   └── cli.md
 └── README.md
-```
+`h``
 
 **MVP vertical slice** (verified, runnable):
 
@@ -146,6 +147,7 @@ pnpm --filter @4evergent/api start
 
 # Or run directly
 node apps/api/dist/server.js
+
 ```
 
 The server starts on `http://localhost:3000`. See [docs/testnet.md](docs/testnet.md) for the full Testnet workflow including funding, simulation, and live submission (`LIVE_SUBMIT=1`).
@@ -193,9 +195,9 @@ Agents can have persistent schedules that automatically execute typed intents on
 
 ```bash
 # Create a schedule
-curl -X POST http://localhost:3000/agents/<agent-id>/schedules \
+curl  -X POST http://localhost:3000/agents/<agent-id>/schedules \
   -H "Content-Type: application/json" \
-  -d '{
+  -d {
     "intent": { "type": "payment", "asset": "XLM", "destination": "G...", "amount": "10", "reason": "daily payout" },
     "scheduleExpression": "0 * * * *",
     "timezone": "UTC"
@@ -218,16 +220,22 @@ The `4evergent` CLI is an operator client that talks HTTP to the API server.
 It does NOT sign, build, or submit Stellar transactions — all transaction
 work stays server-side.
 
-```bash
-# Build and run (from repo root)
-pnpm --filter @4evergent/cli build
-npx tsx apps/cli/src/cli.ts health
+Install the published command with:
 
-# Configure
+```bash
+npm install --global @4evergent/cli
+```
+
+Configure `FOREGENT_API_URL` and, when using production authentication,
+`FOREGENT_API_KEY` in the shell where you run the command. See
+[the CLI guide](docs/cli.md) for configuration and available commands.
+
+```bash
+# Configure the API connection in the shell where you run the CLI
 export FOREGENT_API_URL=http://localhost:3000
 export FOREGENT_API_KEY=your-api-key
 
-# Usage
+# Use the installed command
 4evergent health
 4evergent agent list
 4evergent agent pause <id>
@@ -240,7 +248,18 @@ export FOREGENT_API_KEY=your-api-key
 4evergent intent submit <agent-id> <type> [args...]
 ```
 
+To run the source version from a repository checkout:
+
+```bash
+pnpm --filter @4evergent/cli build
+npx tsx apps/cli/src/cli.ts health
+```
+
 See [docs/cli.md](docs/cli.md) for full command reference.
+
+## Contract upgrades
+
+The deployed `agent-registry` Soroban contract can be upgraded in place without changing its contract ID, and existing storage entries survive the wasm replacement. The full procedure, the storage-schema version policy, and the migration-note template are documented in [docs/contract-upgrades.md](docs/contract-upgrades.md). The chosen policy is recorded as an ADR in [docs/architecture.md](docs/architecture.md).
 
 ## Roadmap
 
@@ -258,7 +277,7 @@ See [docs/cli.md](docs/cli.md) for full command reference.
 | 10 | Execution queue crash recovery | ✅ Shipped |
 | 11 | Agent self-serve creation | ✅ Shipped |
 | 12 | Trustline & non-XLM asset support | ✅ Shipped |
-| 13-18 | Reliability hardening (atomic claim, idempotency, ambiguous submission, pre-check, docs) | ✅ Shipped |
+| 13-18 | Reliability hardening (atomic claim, idompotency, ambiguous submission, pre-check, docs) | ✅ Shipped |
 | 19 | Operator CLI v1 (health, agent lifecycle, approval, execution) | ✅ Shipped |
 
 ---
