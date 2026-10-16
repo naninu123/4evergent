@@ -9,7 +9,7 @@ Thank you for contributing. This document covers development setup, repository s
 git clone https://github.com/naninu123/4evergent
 cd 4evergent
 
-# install (Node 22+, pnpm 10+)
+# install (Node 22+ via .nvmrc, pnpm 10+)
 pnpm install
 
 # optional: local environment (loaded automatically by the API server)
@@ -18,6 +18,8 @@ cp .env.example .env
 # build all packages
 pnpm build
 ```
+
+The Node version is pinned in [`.nvmrc`](.nvmrc) (currently `22`). Run `nvm use` or `fnm use` to pick it up automatically; other version managers read `.nvmrc` too. The pnpm version is pinned by the `"packageManager"` field in `root package.json` (currently `pnpm@10.34.5`), which Corepack respects automatically. `scripts/dev.sh` runs a preflight that fails fast if your `node -v` major does not match `.nvmrc`.
 
 > **On a fresh checkout, run `pnpm build` before `pnpm typecheck`.**
 > Workspace packages resolve each other through their build output: e.g.
@@ -95,7 +97,7 @@ Run cargo from inside `contracts/` (`cd contracts && cargo test`) so `contracts/
 - Use `Exact Optional Property Types` — no implicit `undefined`.
 - Prefer pure functions for policy/engine logic.
 - Run `pnpm lint` (ESLint flat config at the repo root). `@typescript-eslint/no-unused-vars`
-  is an error and ignores names prefixed with `_`; `@typescript-eslint/no-explicit-any` is
+  is an error and ignores names prefixed with `_`; `@typescript-eslint/no-explicit-any`  is
   off on purpose. Keep lint fixes mechanical and in-scope for the PR.
 
 ## PR expectations
@@ -113,7 +115,7 @@ Run cargo from inside `contracts/` (`cd contracts && cargo test`) so `contracts/
 Use these labels when filing issues:
 
 | Label | Use for |
-|-------|---------|
+|-------|--------|
 | `bug` | Something that isn't working |
 | `enhancement` | New capability or improvement |
 | `security` | Vulnerability or hardening need |

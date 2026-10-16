@@ -111,7 +111,7 @@ Key guarantees:
 
 ## Local development
 
-```bash
+```
 # clone
 git clone https://github.com/naninu123/4evergent
 cd 4evergent
@@ -128,12 +128,12 @@ pnpm test
 
 ### Prerequisites
 
-- **Node.js >= 22** (required for `node:sqlite` built-in module)
-- **pnpm >= 10** (workspace package manager; matches CI)
+- **Node.js >= 22** (required for `node:sqlite` built-in module). The exact pin lives in [`.nvmrc`](.nvmrc) (currently `22`); run `nvm use` or `fnm use` to pick it up automatically (other version managers read `.nvmrc` too).
+- **pnpm >= 10** (workspace package manager; matches CI). The exact version is pinned by the `"packageManager"` field in `root package.json` (currently `pnpm@10.34.5`); Corepack respects it automatically.
 
 ### Run the API server (Testnet)
 
-```bash
+```
 # Option A: put STELLAR_TESTNET_SECRET_KEY in .env (loaded automatically)
 cp .env.example .env   # then edit .env
 
@@ -152,7 +152,7 @@ The server starts on `http://localhost:3000`. See [docs/testnet.md](docs/testnet
 
 ### Run the dashboard
 
-```bash
+```
 # terminal 1: start the API server
 pnpm --filter @4evergent/api dev
 
@@ -166,7 +166,7 @@ Each package has its own `package.json` with `build`, `dev`, `test`, and `typech
 
 ## Testnet setup
 
-```bash
+```
 # The Stellar adapter defaults to testnet
 export STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
 
