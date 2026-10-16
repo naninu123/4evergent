@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { log, generateRequestId, runRequestIdContext } from "./logging.js";
+import { ScheduleRecoveryService } from "./schedule-recovery.js";
 import type {
   AgentIntent,
   AuthorizationStatus,
@@ -253,6 +254,24 @@ export async function createApiServer(options: ServerOptions) {
       }
     } catch (err) {
       console.error("[execution-recovery] recovery failed:", err);
+    }
+  }
+
+  // --- Schedule recovery setup ---
+  // Mirrors ExecutionRecoveryService: reconcile schedules whose run was
+  // interrupted before its bookkeeping landed. Runs BEFORE the scheduler's
+  // first tick so a stale in-progress marker is resolved before listDue.
+  const scheduleRecoveryService = new ScheduleRecoveryService(schedules);
+  if (options.scheduler?.enabled) {
+    try {
+      const scheduleRecoveryResult = await scheduleRecoveryService.recover();
+      if (scheduleRecoveryResult.found > 0) {
+        console.log(
+          `[schedule-recovery] reconciled ${scheduleRecoveryResult.reconciled}/${scheduleRecoveryResult.found} interrupted schedule runs`
+        );
+      }
+    } catch (err) {
+      console.error("[schedule-recovery] recovery failed:", err);
     }
   }
 
@@ -1635,6 +1654,7 @@ export async function createApiServer(options: ServerOptions) {
     scheduler,
     executionQueue,
     recoveryService,
+    scheduleRecoveryService,
   };
 }
 

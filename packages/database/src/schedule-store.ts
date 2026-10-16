@@ -44,6 +44,12 @@ export class InMemoryScheduleStore implements ScheduleStore {
       .slice(0, limit);
   }
 
+  async listInterrupted(): Promise<ScheduleRecord[]> {
+    return [...this.records.values()]
+      .filter((r) => r.attemptedAt != null)
+      .sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt));
+  }
+
   async update(id: string, patch: Partial<ScheduleRecord>): Promise<ScheduleRecord | null> {
     const existing = this.records.get(id);
     if (!existing) return null;
@@ -67,6 +73,7 @@ interface ScheduleRow {
   timezone: string;
   next_run_at: string;
   last_run_at: string | null;
+  attempted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -74,7 +81,7 @@ interface ScheduleRow {
 /**
  * SQLiteScheduleStore — persistent ScheduleStore backed by SQLite.
  *
- * Uses Node.js built-in node:sqlite (Node 22+, stable in Node 26). No external
+ * Uses Node.js built-in node:sqlite (Node 22+ stable in Node 26). No external
  * database server required. Data persists across process restarts in a file
  * at the path provided to the constructor.
  *
@@ -103,6 +110,7 @@ export class SQLiteScheduleStore implements ScheduleStore {
         timezone TEXT NOT NULL,
         next_run_at TEXT NOT NULL,
         last_run_at TEXT,
+        attempted_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -112,14 +120,20 @@ export class SQLiteScheduleStore implements ScheduleStore {
       CREATE INDEX IF NOT EXISTS idx_schedules_status ON schedules(status);
       CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON schedules(next_run_at);
     `);
+
+    // Add the attempted_at column to pre-existing databases.
+    const cols = this.db.prepare("PRAGMA table_info(schedules)").all() as unknown as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "attempted_at")) {
+      this.db.exec("ALTER TABLE schedules ADD COLUMN attempted_at TEXT");
+    }
   }
 
   async create(record: ScheduleRecord): Promise<ScheduleRecord> {
     this.db
       .prepare(
         `INSERT INTO schedules
-         (id, agent_id, owner_id, status, intent_json, schedule_expression, timezone, next_run_at, last_run_at, created_at, updated_at)
-         VALUES (@id, @agent_id, @owner_id, @status, @intent_json, @schedule_expression, @timezone, @next_run_at, @last_run_at, @created_at, @updated_at)`
+         (id, agent_id, owner_id, status, intent_json, schedule_expression, timezone, next_run_at, last_run_at, attempted_at, created_at, updated_at)
+         VALUES (@id, @agent_id, @owner_id, @status, @intent_json, @schedule_expression, @timezone, @next_run_at, @last_run_at, @attempted_at, @created_at, @updated_at)`
       )
       .run({
         id: record.id,
@@ -131,6 +145,7 @@ export class SQLiteScheduleStore implements ScheduleStore {
         timezone: record.timezone,
         next_run_at: record.nextRunAt,
         last_run_at: record.lastRunAt,
+        attempted_at: record.attemptedAt ?? null,
         created_at: record.createdAt,
         updated_at: record.updatedAt,
       });
@@ -144,7 +159,7 @@ export class SQLiteScheduleStore implements ScheduleStore {
 
   async listByAgent(agentId: string, limit = 50, offset = 0): Promise<ScheduleRecord[]> {
     const rows = this.db
-      .prepare("SELECT * FROM schedules WHERE agent_id = ? ORDER BY next_run_at ASC LIMIT ? OFFSET ?")
+      .prepare("SELECT * FROM schedules WHERE agent_id = ? ORDER BY next_run_at ASC LIMIT ] OFFSET ]")
       .all(agentId, clampLimit(limit), clampOffset(offset)) as unknown as ScheduleRow[];
     return rows.map((r) => rowToScheduleRecord(r));
   }
@@ -163,6 +178,13 @@ export class SQLiteScheduleStore implements ScheduleStore {
     return rows.map((r) => rowToScheduleRecord(r));
   }
 
+  async listInterrupted(): Promise<ScheduleRecord[]> {
+    const rows = this.db
+      .prepare("SELECT * FROM schedules WHERE attempted_at IS NOT NULL ORDER BY next_run_at ASC")
+      .all() as unknown as ScheduleRow[];
+    return rows.map((r) => rowToScheduleRecord(r));
+  }
+
   async update(id: string, patch: Partial<ScheduleRecord>): Promise<ScheduleRecord | null> {
     const existing = await this.get(id);
     if (!existing) return null;
@@ -176,7 +198,8 @@ export class SQLiteScheduleStore implements ScheduleStore {
       .prepare(
         `UPDATE schedules SET
            status = @status, intent_json = @intent_json, schedule_expression = @schedule_expression,
-           timezone = @timezone, next_run_at = @next_run_at, last_run_at = @last_run_at, updated_at = @updated_at
+           timezone = @timezone, next_run_at = @next_run_at, last_run_at = @last_run_at,
+           attempted_at = @attempted_at, updated_at = @updated_at
          WHERE id = @id`
       )
       .run({
@@ -187,6 +210,7 @@ export class SQLiteScheduleStore implements ScheduleStore {
         timezone: updated.timezone,
         next_run_at: updated.nextRunAt,
         last_run_at: updated.lastRunAt,
+        attempted_at: updated.attemptedAt ?? null,
         updated_at: updated.updatedAt,
       });
     return updated;
@@ -207,12 +231,13 @@ function rowToScheduleRecord(r: ScheduleRow): ScheduleRecord {
     id: r.id,
     agentId: r.agent_id,
     ownerId: r.owner_id,
-    status: r.status as ScheduleRecord["status"],
+    status: r.status as ScheduleRecord['status'],
     intent: JSON.parse(r.intent_json) as AgentIntent,
     scheduleExpression: r.schedule_expression,
     timezone: r.timezone,
     nextRunAt: r.next_run_at,
     lastRunAt: r.last_run_at,
+    attemptedAt: r.attempted_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };

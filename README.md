@@ -60,11 +60,10 @@ Stellar is purpose-built for asset issuance and payments with native low-fee, fa
 ## Architecture
 
 ```
-4evergent/
-├── apps/
+“── apps/
 │   ├── web/              # React + TS frontend (agent dashboard)
 │   ├── api/              # Express-style backend API
-│   └── cli/              # Operator CLI (HTTP client) — see [docs/cli.md](docs/cli.md)
+│   └── cli/              # Operator CLI ( HTTP client) — see [docs/cli.md](docs/cli.md)
 ├── packages/
 │   ├── agent-core/      # Agent runtime, intent validation, Stellar adapter
 │   ├── policy/           # Deterministic authorization engine
@@ -145,7 +144,7 @@ pnpm build
 pnpm --filter @4evergent/api start
 
 # Or run directly
-node apps/api/dist/server.js
+node apps/api/dist/server.js`
 ```
 
 The server starts on `http://localhost:3000`. See [docs/testnet.md](docs/testnet.md) for the full Testnet workflow including funding, simulation, and live submission (`LIVE_SUBMIT=1`).
@@ -202,7 +201,7 @@ curl -X POST http://localhost:3000/agents/<agent-id>/schedules \
   }'
 
 # List schedules
-curl http://localhost:3000/agents/<agent-id>/schedules
+ curl http://localhost:3000/agents/<agent-id>/schedules
 
 # Pause/resume/disable
 curl -X POST http://localhost:3000/agents/<agent-id>/schedules/<schedule-id>/pause
@@ -211,6 +210,13 @@ curl -X POST http://localhost:3000/agents/<agent-id>/schedules/<schedule-id>/dis
 ```
 
 Schedules are stored in SQLite (when `dbPath` is configured) or in-memory. The scheduler polls every 60 seconds by default. Failed schedules do not stop the scheduler.
+
+### Scheduler failure contract
+
+- **In-tick failure**: a schedule whose callback throws records its `lastRunAt`, clears its attempted marker, and does not stop the scheduler. The error is logged and the next schedule is processed.
+- **Interrupted run**: the scheduler writes an `attemptedAt` marker before invoking a schedule's callback and clears it once bookkeeping lands. If the process dies in between, `ScheduleRecoveryService` detects the stale marker on startup and advances the schedule to its next valid occurrence. The interrupted run is treated as already-attempted rather than silently repeated, so a scheduled payment is never double-spent.
+- **No false positive**: a normally completed run clears the marker in the same write that records its bookkeeping, so reconciliation never skips a legitimate run.
+- **Policy and approval gate**: recovery never executes transactions and never bypasses the policy engine or approval gate; every future run still flows through `ScheduleExecutionService`.
 
 ## Operator CLI
 
@@ -221,7 +227,7 @@ work stays server-side.
 Install the published command with:
 
 ```bash
-npm install --global @4evergent/cli
+npm install --global @devergent/cli
 ```
 
 Configure `FOREGENT_API_URL` and, when using production authentication,
