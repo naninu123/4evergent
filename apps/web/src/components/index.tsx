@@ -88,11 +88,21 @@ export function Skeleton({ label }: { label: string }) {
    EmptyState
    ========================================================================== */
 
-export function EmptyState({ title, message }: { title: string; message: string }) {
+export function EmptyState({ title, message, actionLabel, onAction }: {
+  title: string;
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
   return (
     <div className="empty-state">
       <h3>{title}</h3>
       <p>{message}</p>
+      {actionLabel && onAction && (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onAction}>
+          {actionLabel}
+        </button>
+      )}
     </div>
   );
 }

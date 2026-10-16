@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import type { ActivityRecord } from '../types';
@@ -13,28 +13,43 @@ export default function Activity() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const requestId = useRef(0);
 
   const loadPage = useCallback(async (offset: number, replace: boolean) => {
+    const request = ++requestId.current;
+    if (replace) {
+      setError(null);
+    } else {
+      setLoadingMore(true);
+    }
     try {
       const r = await api.listActivity(PAGE_SIZE, offset);
+      if (request !== requestId.current) return;
       setActivity(replace ? r.activity : (prev) => (prev ?? []).concat(r.activity));
       setHasMore(r.hasMore);
       setNextOffset(offset + r.activity.length);
     } catch (e: any) {
-      setError(e.message);
+      if (request === requestId.current) setError(e.message);
+    } finally {
+      if (!replace && request === requestId.current) setLoadingMore(false);
     }
   }, []);
 
   useEffect(() => {
-    loadPage(0, true).catch(() => {});
+    void loadPage(0, true);
+    return () => { requestId.current += 1; };
   }, [loadPage]);
 
-  const loadMore = () => {
-    setLoadingMore(true);
-    loadPage(nextOffset, false).finally(() => setLoadingMore(false));
+  const load = () => {
+    setActivity(null);
+    void loadPage(0, true);
   };
 
-  if (error) return <EmptyState title="Failed to load activity" message={error} />;
+  const loadMore = () => { void loadPage(nextOffset, false); };
+
+  if (error) {
+    return <EmptyState title="Failed to load activity" message={error} actionLabel="Retry" onAction={load} />;
+  }
   if (activity === null) return <Skeleton label="Loading activity..." />;
   if (activity.length === 0) {
     return (

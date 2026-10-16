@@ -16,6 +16,8 @@ export default function Agents() {
   const navigate = useNavigate();
 
   const load = () => {
+    setError(null);
+    setAgents(null);
     api.listAgents()
       .then((a) => setAgents(a.agents))
       .catch((e: any) => setError(e.message));
@@ -44,7 +46,7 @@ export default function Agents() {
     }
   };
 
-  if (error) return <EmptyState title="Failed to load agents" message={error} />;
+  if (error) return <EmptyState title="Failed to load agents" message={error} actionLabel="Retry" onAction={load} />;
   if (agents === null) return <Skeleton label="Loading agents..." />;
 
   return (

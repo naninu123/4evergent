@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../api';
 import type { AgentRecord, ActivityRecord, PolicyRules } from '../types';
@@ -205,27 +205,32 @@ function PolicySettings({ agentId }: { agentId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [form, setForm] = useState<PolicyRules | null>(null);
+  const requestId = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = useCallback(() => {
+    const currentRequest = ++requestId.current;
+    setLoading(true);
+    setError(null);
     (async () => {
       try {
-        setLoading(true);
-        setError(null);
         const res = await api.getPolicy(agentId);
-        if (cancelled) return;
+        if (requestId.current !== currentRequest) return;
         setPolicy(deepClonePolicy(res.policy));
         setForm(deepClonePolicy(res.policy));
         setVersion(res.version);
         setUpdatedAt(res.updatedAt);
       } catch (e: any) {
-        if (!cancelled) setError(e.message ?? 'Failed to load policy');
+        if (requestId.current === currentRequest) setError(e.message ?? 'Failed to load policy');
       } finally {
-        if (!cancelled) setLoading(false);
+        if (requestId.current === currentRequest) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
   }, [agentId]);
+
+  useEffect(() => {
+    load();
+    return () => { requestId.current += 1; };
+  }, [load]);
 
   const updateForm = (patch: Partial<PolicyRules>) => {
     setForm((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -285,7 +290,7 @@ function PolicySettings({ agentId }: { agentId: string }) {
   };
 
   if (loading) return <Skeleton label="Loading policy..." />;
-  if (error && !form) return <div className="error">{error}</div>;
+  if (error && !form) return <div className="error">{error} <button type="button" className="btn btn-ghost btn-sm" onClick={load}>Retry</button></div>;
   if (!form) return <div className="error">Unable to load policy</div>;
 
   const isDirty =
@@ -465,40 +470,57 @@ export default function AgentDetail() {
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [spending, setSpending] = useState<SpendingData | null>(null);
   const [spendingError, setSpendingError] = useState<string | null>(null);
+  const requestId = useRef(0);
+  const spendingRequestId = useRef(0);
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    const currentRequest = ++requestId.current;
+    const currentSpendingRequest = ++spendingRequestId.current;
+    setError(null);
+    setAgent(null);
+    setActivity(null);
+    setSpending(null);
+    setSpendingError(null);
+    setLoading(true);
     (async () => {
       try {
-        const res = await api.getAgentSpending(agentId);
-        setSpending(res.spending);
-      } catch (e: any) {
-        setSpendingError(e.message ?? 'Failed to load spending');
-      }
-    })();
-  }, [agentId]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const [a, act] = await Promise.all([
+        const [agentResult, activityResult] = await Promise.all([
           api.getAgent(agentId),
           api.agentActivity(agentId, 20),
         ]);
-        setAgent(a);
-        setActivity(act.activity);
+        if (requestId.current !== currentRequest) return;
+        setAgent(agentResult);
+        setActivity(activityResult.activity);
       } catch (e: any) {
-        setError(e.message);
+        if (requestId.current === currentRequest) setError(e.message ?? 'Failed to load agent');
       } finally {
-        setLoading(false);
+        if (requestId.current === currentRequest) setLoading(false);
       }
     })();
+    api.getAgentSpending(agentId).then((spendingResult) => {
+      if (spendingRequestId.current !== currentSpendingRequest) return;
+      setSpending(spendingResult.spending);
+      setSpendingError(null);
+    }).catch((e: any) => {
+      if (spendingRequestId.current === currentSpendingRequest) {
+        setSpendingError(e.message ?? 'Failed to load spending');
+      }
+    });
   }, [agentId]);
+
+  useEffect(() => {
+    load();
+    return () => {
+      requestId.current += 1;
+      spendingRequestId.current += 1;
+    };
+  }, [load]);
 
   if (loading) {
     return <Skeleton label="Loading agent..." />;
   }
   if (error) {
-    return <EmptyState title="Failed to load agent" message={error} />;
+    return <EmptyState title="Failed to load agent" message={error} actionLabel="Retry" onAction={load} />;
   }
   if (!agent) {
     return (

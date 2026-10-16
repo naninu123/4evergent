@@ -1,8 +1,8 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import type { ExecutionRecord, QueueSummary, ExecutionStatus } from '../types';
-import { PaginationFooter } from '../components';
+import { EmptyState, PaginationFooter, Skeleton } from '../components';
 
 type StatusFilter = 'all' | ExecutionStatus;
 
@@ -53,47 +53,65 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const requestId = useRef(0);
 
   const loadPage = useCallback(async (offset: number, replace: boolean) => {
+    const request = ++requestId.current;
+    if (replace) {
+      setError(null);
+      setLoading(true);
+    } else {
+      setLoadingMore(true);
+    }
     try {
       const r = await api.listAllExecutions(PAGE_SIZE, offset);
+      if (request !== requestId.current) return;
       setExecutions(replace ? r.executions : (prev) => (prev ?? []).concat(r.executions));
       setHasMore(r.hasMore);
       setNextOffset(offset + r.executions.length);
     } catch (e: any) {
-      setError(e.message ?? 'Failed to load executions');
+      if (request === requestId.current) setError(e.message ?? 'Failed to load executions');
+    } finally {
+      if (request === requestId.current) {
+        if (replace) setLoading(false);
+        else setLoadingMore(false);
+      }
     }
   }, []);
 
-  const loadInitial = useCallback(async () => {
+  const load = useCallback(async () => {
+    const request = ++requestId.current;
+    setError(null);
     setLoading(true);
+    setExecutions(null);
     try {
       const [r, q] = await Promise.all([
         api.listAllExecutions(PAGE_SIZE, 0),
         api.getQueueStatus(),
       ]);
+      if (request !== requestId.current) return;
       setExecutions(r.executions);
       setHasMore(r.hasMore);
       setNextOffset(r.executions.length);
       setQueue(q);
     } catch (e: any) {
-      setError(e.message ?? 'Failed to load executions');
+      if (request === requestId.current) setError(e.message ?? 'Failed to load executions');
     } finally {
-      setLoading(false);
+      if (request === requestId.current) setLoading(false);
     }
   }, []);
 
-  const loadMore = () => {
-    setLoadingMore(true);
-    loadPage(nextOffset, false).finally(() => setLoadingMore(false));
-  };
+  const loadMore = () => { void loadPage(nextOffset, false); };
 
   useEffect(() => {
-    loadInitial();
-  }, [loadInitial]);
+    void load();
+    return () => { requestId.current += 1; };
+  }, [load]);
 
   if (loading) return <Skeleton label="Loading executions..." />;
-  if (error) return <EmptyState title="Failed to load executions" message={error} />;
+  if (error) {
+    return <EmptyState title="Failed to load executions" message={error} actionLabel="Retry" onAction={load} />;
+  }
   if (executions === null) return <Skeleton label="Loading executions..." />;
 
   const filtered = filter === 'all'
@@ -204,11 +222,21 @@ function Skeleton({ label }: { label: string }) {
   return <div className="skeleton">{label}</div>;
 }
 
-function EmptyState({ title, message }: { title: string; message: string }) {
+function EmptyState({ title, message, actionLabel, onAction }: {
+  title: string;
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
   return (
     <div className="empty-state">
       <h2>{title}</h2>
       <p>{message}</p>
+      {actionLabel && onAction && (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onAction}>
+          {actionLabel}
+        </button>
+      )}
     </div>
   );
 }

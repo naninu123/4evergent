@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import type { ApprovalRecord } from '../types';
@@ -13,26 +13,38 @@ export default function Approvals() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const requestId = useRef(0);
 
   const loadPage = useCallback(async (offset: number, replace: boolean) => {
+    const request = ++requestId.current;
+    if (replace) {
+      setError(null);
+    } else {
+      setLoadingMore(true);
+    }
     try {
       const r = await api.listApprovals('pending_approval', PAGE_SIZE, offset);
+      if (request !== requestId.current) return;
       setApprovals(replace ? r.approvals : (prev) => (prev ?? []).concat(r.approvals));
       setHasMore(r.hasMore);
       setNextOffset(offset + r.approvals.length);
     } catch (e: any) {
-      setError(e.message);
+      if (request === requestId.current) setError(e.message);
+    } finally {
+      if (!replace && request === requestId.current) setLoadingMore(false);
     }
   }, []);
 
   useEffect(() => {
-    loadPage(0, true).catch(() => {});
+    void loadPage(0, true);
+    return () => { requestId.current += 1; };
   }, [loadPage]);
 
-  const loadMore = () => {
-    setLoadingMore(true);
-    loadPage(nextOffset, false).finally(() => setLoadingMore(false));
+  const load = () => {
+    setApprovals(null);
+    void loadPage(0, true);
   };
+  const loadMore = () => { void loadPage(nextOffset, false); };
 
   const handleAction = (id: string, action: 'approve' | 'reject') => {
     setLoadingId(id);
@@ -43,7 +55,9 @@ export default function Approvals() {
       .finally(() => setLoadingId(null));
   };
 
-  if (error) return <EmptyState title="Failed to load approvals" message={error} />;
+  if (error) {
+    return <EmptyState title="Failed to load approvals" message={error} actionLabel="Retry" onAction={load} />;
+  }
   if (approvals === null) return <Skeleton label="Loading approvals..." />;
   if (approvals.length === 0) {
     return (
