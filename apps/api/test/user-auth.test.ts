@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { Keypair } from "@stellar/stellar-sdk";
 import type { AddressInfo } from "node:net";
 import type { Signer } from "@4evergent/stellar";
@@ -548,7 +550,7 @@ test("owner isolation: two email accounts see only their own agents", async () =
 /* ========================= sqlite persistence =========================== */
 
 test("sqlite mode: sessions persist to disk; users round-trip", async () => {
-  const path = `/tmp/authtest-${process.pid}-${Date.now()}.db`;
+  const path = join(tmpdir(), `authtest-${process.pid}-${Date.now()}.db`);
   const { server, baseUrl } = await createAuthTestServer({ dbPath: path });
   try {
     const reg = await j(baseUrl, "/auth/register", {

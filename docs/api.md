@@ -374,7 +374,18 @@ Delete a schedule. `200` → `{ "deleted": true }`.
 ### POST /agents/:id/schedules/:scheduleId/pause | /resume | /disable
 
 Transition schedule status (`paused` / `active` / `disabled`).
-`200` → `{ "schedule" }`.
+The legal transitions are:
+
+| Current status | `pause` | `resume` | `disable` |
+| --- | --- | --- | --- |
+| `active` | `paused` | `409` | `disabled` |
+| `paused` | `409` | `active` | `disabled` |
+| `disabled` | `409` | `active` | `409` |
+
+`200` → `{ "schedule" }`. Invalid transitions, including actions that
+would leave the status unchanged, return `409` with an error naming the
+action and current status. Disabled schedules remain resumable, matching
+the dashboard's Resume action; they cannot be paused or disabled again.
 
 ---
 

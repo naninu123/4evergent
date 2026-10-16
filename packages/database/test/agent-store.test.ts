@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { InMemoryAgentStore, SQLiteAgentStore } from "../src/agent-store.js";
 import type { CreateAgentInput } from "../src/agent-types.js";
+import { closeSharedConnection } from "../src/shared-connection.js";
 
 function testStores(name: string, makeStore: () => InMemoryAgentStore | SQLiteAgentStore) {
   test(`${name}: create and get`, async () => {
@@ -82,7 +85,8 @@ function testStores(name: string, makeStore: () => InMemoryAgentStore | SQLiteAg
 testStores("InMemoryAgentStore", () => new InMemoryAgentStore());
 
 test("SQLiteAgentStore: persistence across instances", async () => {
-  const dbPath = `/tmp/4evergent-agent-store-${crypto.randomUUID()}.db`;
+  const dir = mkdtempSync(join(tmpdir(), "4evergent-agent-store-"));
+  const dbPath = join(dir, `${crypto.randomUUID()}.db`);
   try {
     const store1 = new SQLiteAgentStore(dbPath);
     const created = await store1.create({ displayName: "Persisted", ownerId: "owner-a" });
@@ -96,6 +100,7 @@ test("SQLiteAgentStore: persistence across instances", async () => {
     assert.equal(fetched.status, "active");
     store2.close();
   } finally {
-    try { new DatabaseSync(dbPath).close(); } catch { /* ignore */ }
+    closeSharedConnection(dbPath);
+    rmSync(dir, { recursive: true, force: true });
   }
 });

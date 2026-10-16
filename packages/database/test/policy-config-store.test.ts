@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import {
   SQLitePolicyConfigStore,
   InMemoryPolicyConfigStore,
+  closeAllSharedConnections,
 } from "../src/index.js";
 import type { PolicyRules } from "@4evergent/shared";
 
@@ -32,6 +33,7 @@ test("POLICY STORE (SQLite): initial get returns null for unknown agent", async 
     assert.equal(result, null);
   } finally {
     store.close();
+    closeAllSharedConnections();
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -45,6 +47,7 @@ test("POLICY STORE (SQLite): upsert returns version=1 for new agent", async () =
     assert.deepEqual(result.rules.maxTxAmount, { XLM: "100" });
   } finally {
     store.close();
+    closeAllSharedConnections();
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -68,6 +71,7 @@ test("POLICY STORE (SQLite): version increments on each upsert", async () => {
     assert.equal(metadata?.rules.maxTxAmount.XLM, "300");
   } finally {
     store.close();
+    closeAllSharedConnections();
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -91,6 +95,7 @@ test("POLICY STORE (SQLite): persistence survives store restart", async () => {
     assert.equal(metadata?.version, 1);
   } finally {
     store2.close();
+    closeAllSharedConnections();
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -114,6 +119,7 @@ test("POLICY STORE (SQLite): different agents have independent versions", async 
     assert.equal(metaB?.version, 1);
   } finally {
     store.close();
+    closeAllSharedConnections();
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -133,6 +139,7 @@ test("POLICY STORE (SQLite): getForOwner enforces ownership", async () => {
     assert.equal(ownerBPolicy, null);
   } finally {
     store.close();
+    closeAllSharedConnections();
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -148,6 +155,7 @@ test("POLICY STORE (SQLite): delete removes policy", async () => {
     assert.equal(result, null);
   } finally {
     store.close();
+    closeAllSharedConnections();
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -166,6 +174,7 @@ test("POLICY STORE (SQLite): listByOwner returns only owned policies", async () 
     assert.deepEqual(agentIds, ["agent-a", "agent-b"]);
   } finally {
     store.close();
+    closeAllSharedConnections();
     rmSync(tmp, { recursive: true, force: true });
   }
 });

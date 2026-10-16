@@ -8,6 +8,7 @@ import type { AgentIntent } from "@4evergent/shared";
 import {
   InMemoryActivityStore,
   SQLiteActivityStore,
+  closeSharedConnection,
   type ActivityStore,
 } from "../../database/src/index.js";
 
@@ -135,18 +136,21 @@ test("RESERVATION: skipReservation does not increase daily spending total", asyn
 
 test("RESERVATION: SQLite direct execution reserves exactly once", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "res-test-"));
-  const store = new SQLiteActivityStore(join(tmp, "test.db"));
+  const dbPath = join(tmp, "test.db");
+  const store = new SQLiteActivityStore(dbPath);
   const engine = new PolicyEngine(makeApprovalRequiredPolicy(), store as any);
   const d = await engine.evaluate(makePaymentIntent("75"), "agent-sqlite-1");
   assert.equal(d.result, "allow");
   assert.equal(await getDailySpent(store, "agent-sqlite-1", "XLM"), 75);
   store.close();
+  closeSharedConnection(dbPath);
   rmSync(tmp, { recursive: true, force: true });
 });
 
 test("RESERVATION: SQLite approve path reserves once, not twice", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "res-test-"));
-  const store = new SQLiteActivityStore(join(tmp, "test.db"));
+  const dbPath = join(tmp, "test.db");
+  const store = new SQLiteActivityStore(dbPath);
   const engine = new PolicyEngine(makeApprovalRequiredPolicy(), store as any);
   const d1 = await engine.evaluate(makePaymentIntent("200"), "agent-sqlite-1");
   assert.equal(d1.result, "requires_approval");
@@ -155,12 +159,14 @@ test("RESERVATION: SQLite approve path reserves once, not twice", async () => {
   assert.notEqual(d2.result, "deny");
   assert.equal(await getDailySpent(store, "agent-sqlite-1", "XLM"), 200, "SQLite: no double-reserve");
   store.close();
+  closeSharedConnection(dbPath);
   rmSync(tmp, { recursive: true, force: true });
 });
 
 test("RESERVATION: SQLite tightened policy denies at approval time", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "res-test-"));
-  const store = new SQLiteActivityStore(join(tmp, "test.db"));
+  const dbPath = join(tmp, "test.db");
+  const store = new SQLiteActivityStore(dbPath);
   const engineLenient = new PolicyEngine({ ...makeApprovalRequiredPolicy(), maxTxAmount: { XLM: "10000" }, dailySpendingLimit: { XLM: "5000" } }, store as any);
   const d1 = await engineLenient.evaluate(makePaymentIntent("500"), "agent-sqlite-1");
   assert.equal(d1.result, "requires_approval");
@@ -170,6 +176,7 @@ test("RESERVATION: SQLite tightened policy denies at approval time", async () =>
   assert.equal(d2.result, "deny");
   assert.equal(await getDailySpent(store, "agent-sqlite-1", "XLM"), 500);
   store.close();
+  closeSharedConnection(dbPath);
   rmSync(tmp, { recursive: true, force: true });
 });
 

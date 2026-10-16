@@ -5,6 +5,7 @@ import type {
   AgentIntent,
   AuthorizationStatus,
   PolicyDecision,
+  ScheduleStatus,
   SimulationResult,
 } from "@4evergent/shared";
 import { IntentValidator } from "@4evergent/agent-core";
@@ -52,6 +53,14 @@ import { createAuthModule, type PrincipalResolution } from "./auth.js";
 import { sweepRetainedData } from "./data-retention.js";
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
+
+type ScheduleAction = "pause" | "resume" | "disable";
+
+const SCHEDULE_TRANSITIONS: Record<ScheduleStatus, readonly ScheduleAction[]> = {
+  active: ["pause", "disable"],
+  paused: ["resume", "disable"],
+  disabled: ["resume"],
+};
 
 interface IntentResponse {
   activityId: string;
@@ -1092,7 +1101,7 @@ export async function createApiServer(options: ServerOptions) {
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)\/(pause|resume|disable)$/);
     const agentId = match?.[1];
     const scheduleId = match?.[2];
-    const action = match?.[3] as "pause" | "resume" | "disable";
+    const action = match?.[3] as ScheduleAction;
     if (!agentId || !scheduleId || !action) return json(res, { error: "invalid path" }, 400);
 
     let allowed: boolean;
@@ -1107,6 +1116,10 @@ export async function createApiServer(options: ServerOptions) {
 
     const schedule = await schedules.get(scheduleId);
     if (!schedule) return json(res, { error: "not found" }, 404);
+
+    if (!SCHEDULE_TRANSITIONS[schedule.status].includes(action)) {
+      return json(res, { error: `cannot ${action} schedule in status '${schedule.status}'` }, 409);
+    }
 
     const status = action === "pause" ? "paused" : action === "resume" ? "active" : "disabled";
     const updated = await schedules.update(scheduleId, { status });
@@ -1553,6 +1566,7 @@ export async function createApiServer(options: ServerOptions) {
         clearInterval(retentionTimer);
         retentionTimer = null;
       }
+      authModule?.close();
       // Abort lingering keep-alive connections so the server actually shuts
       // down (Node's http close() waits for active sockets otherwise).
       server.closeAllConnections?.();
