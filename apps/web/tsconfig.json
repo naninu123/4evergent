@@ -12,11 +12,15 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "forceConsistentCasingInFileNames": true,
+    "forceConsistentCasingInFilenames": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@4evergent/shared": ["../../packages/shared/src/index.ts"]
+    }
   },
   "include": ["src"],
   "references": [
