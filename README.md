@@ -150,6 +150,24 @@ node apps/api/dist/server.js
 
 The server starts on `http://localhost:3000`. See [docs/testnet.md](docs/testnet.md) for the full Testnet workflow including funding, simulation, and live submission (`LIVE_SUBMIT=1`).
 
+### Background workers
+
+The API server runs three background loops. Their intervals are configurable and
+documented in `.env.example` under "Background workers":
+
+| Worker | Default | Env var | Contacts Horizon |
+| --- | --- | --- | --- |
+| Reconciliation | 30s | `RECONCILIATION_INTERVAL_MS` | Yes, every tick |
+| Execution queue | 10s | `EXECUTION_QUEUE_INTERVAL_MS` | Yes, while simulating/submitting |
+| Scheduler | 60s | `SCHEDULER_INTERVAL_MS` | No — it enqueues work for the queue |
+
+Lowering an interval makes the loop more responsive but increases Horizon load
+and local wake-ups; raising it trades responsiveness for less load. Values must
+be positive integers — a non-numeric, zero, negative, or fractional value stops
+startup with a FATAL error. The server starts all three unconditionally; to run
+without one, start the API through `createApiServer` directly and omit that
+option.
+
 ### Run the dashboard
 
 ```bash
