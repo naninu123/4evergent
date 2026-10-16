@@ -8,6 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import net from "node:net";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
@@ -30,19 +31,47 @@ interface RunResult {
 
 function run(
   args: string[],
-  opts: { env?: Record<string, string>; responses?: Array<{ match: string; status: number; body: any }>; networkFail?: boolean } = {}
+  opts: {
+    env?: Record<string, string>;
+    responses?: Array<{ match: string; status: number; body: any }>;
+    networkFail?: boolean;
+    hang?: boolean;
+    real?: boolean;
+  } = {}
 ): RunResult {
   const responses = opts.responses ?? [];
   // Inline mock server: intercepts fetch inside the child process before CLI runs.
-  const prelude = opts.networkFail
-    ? `
+  let prelude: string;
+  if (opts.real) {
+    // No interception at all: the CLI uses Node's real fetch, so it can be
+    // pointed at an actual TCP listener (used by the real-socket timeout test).
+    prelude = "";
+  } else if (opts.networkFail) {
+    prelude = `
     globalThis.fetch = async () => {
       const err = new Error("connect ECONNREFUSED 127.0.0.1:9");
       (err as any).code = "ECONNREFUSED";
       throw err;
     };
-  `
-    : `
+  `;
+  } else if (opts.hang) {
+    // A stub that accepts the connection and never responds. Like real fetch,
+    // the mock honours the caller's AbortSignal, so the CLI's own deadline is
+    // what ends the wait. A real open socket keeps the event loop alive; the
+    // ref'd interval emulates that so the process cannot exit before the
+    // (unref'd) timeout fires.
+    prelude = `
+    globalThis.fetch = (url, init) => new Promise((_resolve, reject) => {
+      const keepAlive = setInterval(() => {}, 1000);
+      const settle = (reason) => { clearInterval(keepAlive); reject(reason); };
+      const signal = init?.signal;
+      if (!signal) return; // no deadline -> would hang forever
+      if (signal.aborted) { settle(signal.reason); return; }
+      signal.addEventListener("abort", () => settle(signal.reason), { once: true });
+    });
+  `;
+  } else {
+    prelude = `
     const responses = ${JSON.stringify(responses)};
     const realFetch = globalThis.fetch;
     globalThis.fetch = async (url, init) => {
@@ -52,12 +81,18 @@ function run(
       return new Response(JSON.stringify(hit.body), { status: hit.status });
     };
   `;
-  const env = {
+  }
+  const env: Record<string, string | undefined> = {
     ...process.env,
     FOREGENT_API_URL: "http://mock:3000",
     ...opts.env,
     TSX_CLI_MOCK_PRELUDE: prelude,
   };
+  // The request timeout must be explicit per test: never inherit it from the
+  // outer environment, so "unset" really means the CLI default.
+  if (!(opts.env && "FOREGENT_API_TIMEOUT_MS" in opts.env)) {
+    delete env.FOREGENT_API_TIMEOUT_MS;
+  }
 
   // tsx doesn't support --require preambles; use a wrapper instead.
   // On Windows, Node's ESM loader requires file:// URLs for absolute paths
@@ -866,4 +901,94 @@ test("CLI: no command → usage lists all eight top-level commands", () => {
   assert.match(r.stderr, /activity/);
   assert.match(r.stderr, /schedule/);
   assert.match(r.stderr, /intent/);
+});
+
+// ===== #125 Request timeout =====
+
+test("CLI timeout: a stub that never responds exits 3 with the timeout message", () => {
+  const r = run(["health"], { hang: true, env: { FOREGENT_API_TIMEOUT_MS: "300" } });
+  assert.equal(r.code, 3);
+  assert.match(r.stderr, /Request timed out after 300ms/);
+  assert.match(r.stderr, /did not respond/);
+  // Distinct from the connection-refused and HTTP-error failure modes.
+  assert.doesNotMatch(r.stderr, /Cannot connect/);
+});
+
+test("CLI timeout: the default (5000ms) applies when the override is unset", () => {
+  const r = run(["health"], { hang: true });
+  assert.equal(r.code, 3);
+  assert.match(r.stderr, /Request timed out after 5000ms/);
+});
+
+test("CLI timeout: exit code 3 is distinguishable from connection-refused and HTTP errors", () => {
+  const refused = run(["health"], { networkFail: true });
+  assert.equal(refused.code, 1);
+  assert.doesNotMatch(refused.stderr, /timed out/);
+
+  const httpError = run(["health"], {
+    responses: [{ match: "/health", status: 500, body: { error: "server error" } }],
+  });
+  assert.equal(httpError.code, 1);
+  assert.doesNotMatch(httpError.stderr, /timed out/);
+});
+
+test("CLI timeout: a normal response is unaffected by the deadline", () => {
+  const r = run(["health"], {
+    env: { FOREGENT_API_TIMEOUT_MS: "1234" },
+    responses: [
+      { match: "/health", status: 200, body: { status: "ok", signerAccountId: "GTEST" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /healthy/);
+});
+
+test("CLI timeout: a timed-out intent submit keeps the UNKNOWN / idempotency warning", () => {
+  const r = run(
+    ["intent", "submit", "agent-1", "payment", "XLM", "10", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "x", "--idempotency-key", "key-timeout"],
+    { hang: true, env: { FOREGENT_API_TIMEOUT_MS: "300" } }
+  );
+  assert.equal(r.code, 3);
+  assert.match(r.stderr, /timed out/);
+  assert.match(r.stderr, /UNKNOWN/);
+  assert.match(r.stderr, /SAME --idempotency-key/);
+});
+
+test("CLI timeout: an invalid override warns and falls back to the default", () => {
+  const r = run(["health"], {
+    env: { FOREGENT_API_TIMEOUT_MS: "not-a-number" },
+    responses: [
+      { match: "/health", status: 200, body: { status: "ok", signerAccountId: "GTEST" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stderr, /Ignoring invalid FOREGENT_API_TIMEOUT_MS/);
+  assert.match(r.stderr, /using default 5000ms/);
+});
+
+test("CLI timeout: a real listener that accepts but never responds exits 3", async () => {
+  // Mirrors the acceptance scenario with a real socket, so Node's own fetch
+  // (not the mock) is what trips the deadline.
+  const server = net.createServer(() => {
+    /* accept the connection, never write a response */
+  });
+  // Do not let the listener keep the test runner alive; the closing below is
+  // best-effort and not awaited (a queued, never-accepted connection can make
+  // close() linger on some platforms).
+  server.unref();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as net.AddressInfo).port;
+  try {
+    const r = run(["health"], {
+      real: true,
+      env: {
+        FOREGENT_API_URL: `http://127.0.0.1:${port}`,
+        FOREGENT_API_TIMEOUT_MS: "400",
+      },
+    });
+    assert.equal(r.code, 3, `code=${r.code} stderr=${JSON.stringify(r.stderr)} stdout=${JSON.stringify(r.stdout)}`);
+    assert.match(r.stderr, /Request timed out after 400ms/);
+  } finally {
+    server.close();
+  }
 });

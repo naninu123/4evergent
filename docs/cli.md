@@ -28,10 +28,12 @@ same package metadata.
 |---|---|---|
 | `FOREGENT_API_URL` | `http://127.0.0.1:3000` | API base URL |
 | `FOREGENT_API_KEY` | - | Bearer API key (production auth mode) |
+| `FOREGENT_API_TIMEOUT_MS` | `5000` | Per-request timeout in milliseconds (positive integer) |
 
 ```bash
 export FOREGENT_API_URL=http://localhost:3000
 export FOREGENT_API_KEY=your-api-key-here
+export FOREGENT_API_TIMEOUT_MS=5000
 ```
 
 ## Commands
@@ -88,6 +90,28 @@ the request may have reached the server. Retry manually with the SAME
 `--idempotency-key`. The CLI never retries automatically and never
 submits twice silently.
 
+### Request timeout
+
+Every request has a finite deadline, so a server that accepts the connection
+but never responds cannot hang the CLI. CI jobs, cron wrappers, and shell
+pipelines inherit no hang.
+
+- **Default:** `5000` ms, applied to every command through the shared HTTP
+  path — no command has its own request path.
+- **Override:** set `FOREGENT_API_TIMEOUT_MS` to a positive integer number of
+  milliseconds. An invalid value is reported on stderr and the default is used.
+- **On timeout:** the CLI prints a distinct message and exits `3`:
+
+  ```
+  Request timed out after 5000ms: GET http://127.0.0.1:3000/health. The server accepted the connection but did not respond in time. Set FOREGENT_API_TIMEOUT_MS to change the deadline; the CLI does not retry automatically.
+  ```
+
+The deadline bounds the HTTP request, not the process: once a response has
+been received, the CLI takes as long as it needs to print it. A timeout is a
+network failure of the kind described above, so the outcome is UNKNOWN and the
+CLI does not retry automatically — retry manually, using the SAME
+`--idempotency-key` for intent submissions.
+
 ## Examples
 
 ```bash
@@ -115,8 +139,21 @@ submits twice silently.
 ## Output
 
 Default output is human-readable. Every command exits `0` on success,
-non-zero on failure (network error, HTTP 4xx/5xx). The `--json` flag is
-not yet supported — planned for a future CLI phase.
+non-zero on failure. The `--json` flag is not yet supported — planned for a
+future CLI phase.
+
+### Exit codes
+
+| Code | Meaning | Failure message |
+|---|---|---|
+| `0` | Success | — |
+| `1` | Usage error, connection failure, or server rejected the request | `Usage: ...`, `Cannot connect to API at <url>. Is the server running?` (`ECONNREFUSED` / `ENOTFOUND`), `HTTP <status>: <message>` |
+| `3` | Request timed out — the server accepted the connection but did not respond within the deadline | `Request timed out after <ms>ms: <method> <url>...` |
+
+The three failure modes are therefore distinguishable by script: **server
+down** is `1` with `Cannot connect ...`, **server too slow** is `3` with
+`Request timed out ...`, and **server said no** is `1` with
+`HTTP <status>: ...`.
 
 ## Security
 
