@@ -219,6 +219,79 @@ Behavior:
 See `packages/shared/src/production-auth.ts` and
 `apps/api/src/server.ts` for the implementation.
 
+## Credential Endpoint Rate Limiting
+
+### Threat
+
+The browser authentication endpoints are reachable before the API-key gate, so
+an attacker who can reach the API can try passwords on `POST /auth/login/email`
+without bound. The endpoint deliberately returns an identical
+`401 invalid_credentials` for an unknown email and a wrong password (no user
+enumeration) and verifies the password with scrypt using a timing-safe
+comparison. That care prevents enumeration but does not slow down **credential
+stuffing** or **password guessing**: without a counter, an attacker can test
+candidates as fast as the server will answer.
+
+`POST /auth/register` and `POST /auth/stellar/challenge` are equally exposed:
+registration can be spammed (account/email abuse) and challenge issuance grows
+the in-memory challenge map.
+
+### Mitigation
+
+`apps/api/src/rate-limit.ts` provides a dependency-free, in-memory
+**sliding-window** limiter. Each request to `/auth/login/email`,
+`/auth/register`, `/auth/stellar/challenge`, and `/auth/stellar/verify` is
+counted per source; once `AUTH_RATE_LIMIT_MAX` attempts land within
+`AUTH_RATE_LIMIT_WINDOW_SECONDS`, the endpoint returns:
+
+```
+429 Too Many Requests
+Retry-After: <seconds>
+{ "error": "rate_limited" }
+```
+
+The `429`/`rate_limited` response is deliberately distinct from
+`401 invalid_credentials`, so a client can tell "slow down" from "wrong
+password". A **successful email sign-in clears the source's counter**, so a
+legitimate user who mistypes a few times is not locked out. Each endpoint has
+its own budget, so heavy Stellar traffic cannot lock a source out of email
+login.
+
+**Key:** the client IP (`req.socket.remoteAddress`), tracked per endpoint. The
+TCP peer address is used by default because `X-Forwarded-For` is
+client-spoofable; behind a reverse proxy you control, set
+`AUTH_TRUST_PROXY=1` to key on the first `X-Forwarded-For` hop instead.
+
+**Memory bounding:** only timestamps inside the active window are kept per key,
+the per-key history is capped at the limit, expired keys are pruned, and the key
+map is capped at `AUTH_RATE_LIMIT_MAX_KEYS` (oldest sources evicted first). The
+limiter therefore cannot grow without bound — an unbounded per-source map would
+itself be a denial-of-service vector.
+
+Configuration (see `.env.example`), with conservative defaults:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `AUTH_RATE_LIMIT_MAX` | `10` | Attempts per window, per source, per endpoint |
+| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | `60` | Sliding window length |
+| `AUTH_RATE_LIMIT_MAX_KEYS` | `10000` | Maximum tracked sources before eviction |
+| `AUTH_TRUST_PROXY` | unset | Trust the first `X-Forwarded-For` hop |
+
+### Limits and non-goals
+
+- **Per-process, in-memory.** State is not shared across instances. With more
+  than one API process (or behind a load balancer without sticky sessions), each
+  process limits independently and the effective rate is `max × processes`. A
+  shared/persistent store is a larger change and intentionally out of scope.
+- **Not a substitute for CAPTCHA, MFA, or account lockout.** The limiter slows
+  guessing; it does not make weak passwords safe and it cannot stop a
+  distributed attack from many source addresses.
+- **IP-based keys.** Shared NAT egress and proxies can cause legitimate users to
+  share a bucket; conversely, an attacker rotating source IPs evades the key.
+- It does **not** change the `401 invalid_credentials` response and does not
+  rate-limit the `API_KEYS` machine-client endpoints (those are already gated by
+  the fail-closed public-bind check in `apps/api/src/server.ts`).
+
 ## Emergency Disable Mechanism
 
 (Future work in MVP, but planned as a core primitive)
