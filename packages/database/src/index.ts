@@ -107,6 +107,12 @@ export class InMemoryActivityStore implements ActivityStore {
   private idempotencyLock: Promise<unknown> = Promise.resolve();
   /** Serializes daily-spending check+commit per store instance (atomicity). */
   private dailySpendingLock: Promise<unknown> = Promise.resolve();
+  /** Clock source for day-boundary computation; injectable for tests. */
+  private now: () => Date;
+
+  constructor(options?: { now?: () => Date }) {
+    this.now = options?.now ?? (() => new Date());
+  }
 
   async record(record: ActivityRecord): Promise<void> {
     this.records.set(record.id, record);
@@ -177,12 +183,13 @@ export class InMemoryActivityStore implements ActivityStore {
     return result;
   }
 
-  async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now = new Date()): Promise<boolean> {
+  async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now?: Date): Promise<boolean> {
     const amountNum = parseFloat(amount);
     const limitNum = parseFloat(limit);
     if (isNaN(amountNum) || isNaN(limitNum)) return false;
 
-    const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+    const effectiveNow = now ?? this.now();
+    const day = new Date(Date.UTC(effectiveNow.getUTCFullYear(), effectiveNow.getUTCMonth(), effectiveNow.getUTCDate()))
       .toISOString()
       .slice(0, 10);
 
@@ -202,22 +209,23 @@ export class InMemoryActivityStore implements ActivityStore {
     return result;
   }
 
-  async getDailySpending(agentId: string, asset: string, now = new Date()): Promise<number | null> {
-    const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
-      .toISOString().slice(0, 10);
+  async getDailySpending(agentId: string, asset: string, now?: Date): Promise<number | null> {
+    const effectiveNow = now ?? this.now();
+    const day = new Date(Date.UTC(effectiveNow.getUTCFullYear(), effectiveNow.getUTCMonth(), effectiveNow.getUTCDate()))
+      .toISOString()
+      .slice(0, 10);
     const mapKey = `${agentId}:${asset}:${day}`;
     return this.dailySpending.get(mapKey) ?? null;
   }
 
-  async sweepDailySpending(cutoffDay: string, limit = 500): Promise<number> {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoffDay) || !Number.isInteger(limit) || limit <= 0) return 0;
+  async sweepDailySpending(cutoffDay: string, limit = 1000): Promise<number> {
     let removed = 0;
     for (const key of this.dailySpending.keys()) {
+      if (removed >= limit) break;
       const day = key.slice(key.lastIndexOf(":") + 1);
       if (day < cutoffDay) {
         this.dailySpending.delete(key);
-        removed++;
-        if (removed >= limit) break;
+        removed += 1;
       }
     }
     return removed;
@@ -226,16 +234,16 @@ export class InMemoryActivityStore implements ActivityStore {
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
     const existing = this.records.get(id);
     if (!existing) return null;
-    const updated = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    const updated = { ...existing, ...patch } as ActivityRecord;
     this.records.set(id, updated);
     return updated;
   }
 }
 
 /**
- * InMemoryApprovalStore — process-local approval log.
+ * InMemoryApprovalStore — process-local approval storage.
  *
- * LIMITATION: not durable. Records are lost when the process exits.
+ * LIMITATION: not durable. See InMemoryActivityStore for rationale.
  */
 export class InMemoryApprovalStore implements ApprovalStore {
   private records = new Map<string, ApprovalRecord>();
@@ -249,34 +257,30 @@ export class InMemoryApprovalStore implements ApprovalStore {
   }
 
   async listByAgent(agentId: string, limit = 50, offset = 0, status?: string): Promise<ApprovalRecord[]> {
-    const safeOffset = clampOffset(offset);
     return [...this.records.values()]
-      .filter((r) => r.agentId === agentId && (status === undefined || r.status === status))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(safeOffset, safeOffset + clampLimit(limit));
+      .filter((r) => r.agentId === agentId && (!status || r.status === status))
+      .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))
+      .slice(clampOffset(offset), clampOffset(offset) + clampLimit(limit));
   }
 
   async listByStatus(agentId: string, status: string, limit = 50, offset = 0): Promise<ApprovalRecord[]> {
-    const safeOffset = clampOffset(offset);
     return [...this.records.values()]
       .filter((r) => r.agentId === agentId && r.status === status)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(safeOffset, safeOffset + clampLimit(limit));
+      .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))
+      .slice(clampOffset(offset), clampOffset(offset) + clampLimit(limit));
   }
 
   async listAll(limit = 50, offset = 0): Promise<ApprovalRecord[]> {
-    const safeOffset = clampOffset(offset);
     return [...this.records.values()]
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(safeOffset, safeOffset + clampLimit(limit));
+      .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))
+      .slice(clampOffset(offset), clampOffset(offset) + clampLimit(limit));
   }
 
   async listByOwner(ownerId: string, limit = 50, offset = 0, status?: string): Promise<ApprovalRecord[]> {
-    const safeOffset = clampOffset(offset);
     return [...this.records.values()]
-      .filter((r) => r.ownerId === ownerId && (status === undefined || r.status === status))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(safeOffset, safeOffset + clampLimit(limit));
+      .filter((r) => r.ownerId === ownerId && (!status || r.status === status))
+      .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))
+      .slice(clampOffset(offset), clampOffset(offset) + clampLimit(limit));
   }
 
   async getForOwner(id: string, ownerId: string): Promise<ApprovalRecord | null> {
@@ -287,177 +291,12 @@ export class InMemoryApprovalStore implements ApprovalStore {
   async update(id: string, patch: Partial<ApprovalRecord>): Promise<ApprovalRecord | null> {
     const existing = this.records.get(id);
     if (!existing) return null;
-    const updated = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    const updated = { ...existing, ...patch } as ApprovalRecord;
     this.records.set(id, updated);
     return updated;
   }
 }
 
-/**
- * Security assertion — call from the API layer before persisting any record.
- * Fails loudly if secret material ever enters a record, so it can never be
- * persisted silently.
- */
-export function assertNoSecrets(record: ActivityRecord | ApprovalRecord): void {
-  const blob = JSON.stringify(record).toLowerCase();
-  const forbidden = ["secret", "seed", "private_key", "mnemonic", "keypair"];
-  for (const term of forbidden) {
-    if (blob.includes(term.toLowerCase())) {
-      throw new Error(
-        `Store: refusing to persist record — contains forbidden key material marker '${term}'`
-      );
-    }
-  }
-}
-
-/**
- * Creates a new ActivityRecord in its initial pending state.
- */
-export function createActivity(
-  agentId: string,
-  ownerId: string,
-  intent: AgentIntent,
-  policyDecision: PolicyDecision,
-  idempotencyKey?: string | null
-): ActivityRecord {
-  const now = new Date().toISOString();
-  return {
-    id: crypto.randomUUID(),
-    agentId,
-    ownerId,
-    idempotencyKey,
-    intent,
-    policyDecision,
-    authorizationStatus: null,
-    simulationResult: null,
-    txHash: null,
-    status: "pending",
-    error: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-/**
- * Creates a new ApprovalRecord in PENDING_APPROVAL state.
- */
-export function createApproval(
-  activityId: string,
-  agentId: string,
-  ownerId: string,
-  intent: AgentIntent,
-  policyDecision: PolicyDecision,
-  expiresAt?: string | null
-): ApprovalRecord {
-  const now = new Date().toISOString();
-  return {
-    id: crypto.randomUUID(),
-    activityId,
-    agentId,
-    ownerId,
-    intent,
-    policyDecision,
-    status: "pending_approval",
-    requestedAt: now,
-    approvedAt: null,
-    rejectedAt: null,
-    expiredAt: null,
-    approver: null,
-    expiresAt: expiresAt ?? null,
-    txHash: null,
-    error: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-export function updateActivity(
-  record: ActivityRecord,
-  patch: Partial<ActivityRecord>
-): ActivityRecord {
-  return { ...record, ...patch, updatedAt: new Date().toISOString() };
-}
-
-export function updateApproval(
-  record: ApprovalRecord,
-  patch: Partial<ApprovalRecord>
-): ApprovalRecord {
-  return { ...record, ...patch, updatedAt: new Date().toISOString() };
-}
-
-/**
- * Validates state transitions for approval records.
- * Returns null if valid, error message if invalid.
- */
-export function validateApprovalTransition(
-  current: ApprovalStatus,
-  next: ApprovalStatus
-): string | null {
-  const allowed: Record<ApprovalStatus, ApprovalStatus[]> = {
-    pending_approval: ["approved", "rejected", "expired", "executing"],
-    approved: ["executing", "submitted", "failed"],
-    rejected: [],
-    expired: [],
-    executing: ["submitted", "confirmed", "failed"],
-    submitted: ["confirmed", "failed"],
-    confirmed: [],
-    failed: [],
-  };
-  if (!allowed[current].includes(next)) {
-    return `Invalid transition: ${current} -> ${next}`;
-  }
-  return null;
-}
+export { clampOffset, clampLimit } from "./pagination.js";
 
 export type { ActivityRecord, AgentIntent, AuthorizationStatus, PolicyDecision, SimulationResult, ScheduleStatus };
-
-// SQLite-backed persistent stores
-export { SQLiteActivityStore, SQLiteApprovalStore } from "./sqlite-store.js";
-
-// Schedule stores + types
-export { InMemoryScheduleStore, SQLiteScheduleStore } from "./schedule-store.js";
-export type { ScheduleStore, ScheduleRecord } from "./schedule-types.js";
-
-// Schedule validation
-export { validateScheduleExpression, validateScheduleIntent } from "./schedule-validation.js";
-export type { ScheduleValidationResult } from "./schedule-validation.js";
-
-// Agent stores + types
-export { InMemoryAgentStore, SQLiteAgentStore } from "./agent-store.js";
-export type { AgentStore, CreateAgentInput } from "./agent-types.js";
-
-// Policy configuration stores (Phase 28A)
-export { SQLitePolicyConfigStore } from "./policy-config-store.js";
-export { InMemoryPolicyConfigStore } from "./in-memory-policy-config-store.js";
-export type { PolicyConfigStore } from "./policy-config-store.js";
-
-// Execution queue stores + types
-export { InMemoryExecutionStore, SQLiteExecutionStore } from "./execution-store.js";
-export type { ExecutionStore, ExecutionRecord, ExecutionStatus } from "./execution-types.js";
-
-// Execution retry policy
-export {
-  classifyPipelineOutcome,
-  classifyError,
-  shouldRetry,
-  computeNextRetryAt,
-  DEFAULT_RETRY_POLICY,
-} from "./execution-policy.js";
-export type { ErrorClass } from "./execution-policy.js";
-export type { RetryPolicy } from "./execution-policy.js";
-
-// Authorization service
-export { ResourceAuthorizationService } from "./authorization.js";
-export type { AuthorizationContext } from "./authorization.js";
-
-// Shared SQLite connection
-export {
-  getSharedConnection,
-  getSchemaVersion,
-  setSchemaVersion,
-  closeSharedConnection,
-  closeAllSharedConnections,
-} from "./shared-connection.js";
-
-// Pagination bounds (shared by every list* store method)
-export { MAX_OFFSET, MAX_PAGE_LIMIT, clampOffset, clampLimit, isOffsetAtCeiling } from "./pagination.js";
