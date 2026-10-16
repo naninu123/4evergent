@@ -1,180 +1,37 @@
-// Client-side types mirroring the API responses.
-// These intentionally omit all secret, XDR, and transaction-blob fields.
-// The API is the source of truth — types here are for frontend ergonomics.
+// Client-side types. This file is the web app's single import
+// surface for API response types. Types that are shared with the API
+// are re-exported from @4evergent/shared so they cannot drift. Only
+// genuinely web-only view models are declared locally.
 
-export interface PolicyRules {
-  maxTxAmount: Record<string, string>;
-  dailySpendingLimit: Record<string, string>;
-  allowedAssets: string[];
-  allowedDestinations: string[];
-  allowedContractIds: string[];
-  txTypeRestrictions: Record<string, boolean>;
-  approvalThreshold: string;
-  requireHumanApprovalForAmountAbove: string;
-}
+// --- Shared API types (source of truth: @4evergent/shared) ---
+export type {
+  PolicyRules,
+  ActivityStatus,
+  ScheduleStatus,
+  ScheduleRecord,
+  AuthorizationStatus,
+  ApprovalStatus,
+  AgentStatus,
+  IntentType,
+  AgentIntent,
+  PolicyDecision,
+  SimulationResult,
+  ActivityRecord,
+  ApprovalRecord,
+  ExecutionStatus,
+  ExecutionRecord,
+  QueueSummary,
+  ApiError,
+} from "@4evergent/shared";
 
-export type ActivityStatus =
-  | "pending"
-  | "rejected"
-  | "requires_approval"
-  | "approved"
-  | "signed"
-  | "submitted"
-  | "failed";
+// The shared package names the agent record `Agent`; the dashboard has
+// historically called it `AgentRecord`. Alias it here so page imports
+// do not all change.
+export type AgentRecord = import("@4evergent/shared").Agent;
 
-export type ScheduleStatus = "active" | "paused" | "disabled";
-
-export interface ScheduleRecord {
-  id: string;
-  agentId: string;
-  ownerId: string;
-  status: ScheduleStatus;
-  intent: {
-    type: string;
-    asset?: string;
-    amount?: string;
-    destination?: string;
-    reason?: string;
-  };
-  scheduleExpression: string;
-  timezone: string;
-  nextRunAt: string;
-  lastRunAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export type AuthorizationStatus =
-  | "not_required"
-  | "pending_approval"
-  | "approved"
-  | "denied_by_policy"
-  | "denied_by_simulation";
-
-export type ApprovalStatus =
-  | "pending_approval"
-  | "approved"
-  | "rejected"
-  | "expired"
-  | "executing"
-  | "submitted"
-  | "confirmed"
-  | "failed";
-
-export type AgentStatus = "active" | "paused" | "disabled";
-
-export type IntentType = "payment" | "trustline" | "contract_call" | "account_settings";
-
-export interface AgentIntent {
-  type: IntentType;
-  asset?: string;
-  amount?: string;
-  destination?: string;
-  reason?: string;
-  memo?: string;
-  [key: string]: unknown;
-}
-
-export interface PolicyDecision {
-  result: "allow" | "deny" | "requires_approval";
-  reason: string;
-  rule: string;
-  intent: AgentIntent;
-}
-
-export interface SimulationResult {
-  success: boolean;
-  fee: string;
-  operations: number;
-  warnings: string[];
-  error?: string;
-}
-
-export interface AgentRecord {
-  id: string;
-  displayName: string;
-  description: string;
-  ownerId: string;
-  stellarAddress: string;
-  capabilities: string[];
-  status: AgentStatus;
-  active: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ActivityRecord {
-  id: string;
-  agentId: string;
-  ownerId: string;
-  intent: AgentIntent;
-  policyDecision: PolicyDecision;
-  authorizationStatus: AuthorizationStatus | null;
-  simulationResult: SimulationResult | null;
-  txHash: string | null;
-  status: ActivityStatus;
-  error: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ApprovalRecord {
-  id: string;
-  activityId: string;
-  agentId: string;
-  ownerId: string;
-  intent: AgentIntent;
-  policyDecision: PolicyDecision;
-  status: ApprovalStatus;
-  requestedAt: string;
-  approvedAt: string | null;
-  rejectedAt: string | null;
-  expiredAt: string | null;
-  approver: string | null;
-  expiresAt: string | null;
-  txHash: string | null;
-  error: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export type ExecutionStatus =
-  | "queued"
-  | "executing"
-  | "submitted"
-  | "confirmed"
-  | "failed"
-  | "dead_letter";
-
-export interface ExecutionRecord {
-  id: string;
-  ownerId: string;
-  agentId: string;
-  approvalId: string | null;
-  activityId: string | null;
-  intent: AgentIntent & { assetDetails?: { code?: string; issuer?: string | null } };
-  status: ExecutionStatus;
-  policyDecision: PolicyDecision | null;
-  simulationResult: SimulationResult | null;
-  txHash: string | null;
-  error: string | null;
-  attempt: number;
-  nextRetryAt: string | null;
-  startedAt: string | null;
-  completedAt: string | null;
-  errorClass: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface QueueSummary {
-  running: boolean;
-  byStatus: Record<string, number>;
-}
-
-export interface ApiError {
-  error: string;
-}
+// --- Web-only view models ---
+// The API does not expose a dedicated request body type for these
+// form submissions, so they stay local to the dashboard.
 
 export interface SubmitPaymentIntent {
   type: "payment";
