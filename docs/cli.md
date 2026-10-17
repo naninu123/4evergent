@@ -168,3 +168,20 @@ down** is `1` with `Cannot connect ...`, **server too slow** is `3` with
 - **No direct Stellar access.** The CLI only makes HTTP calls to the configured API.
 - **No mainnet support.** The API itself rejects non-testnet Horizon URLs.
 - The API key is sent as `Authorization: Bearer <key>` on every request when set.
+
+## Shell completion
+
+The CLI can print Bash or Zsh completion setup code. Add the matching command
+below to your shell startup file (`~/.bashrc` or `~/.zshrc`):
+
+```bash
+eval "$(4evergent completion bash)"
+```
+
+```zsh
+eval "$(4evergent completion zsh)"
+```
+
+The completions are generated from the same command registry as CLI dispatch
+and help. They suggest commands and subcommands as you type; argument values
+such as IDs and cron expressions are left to shell history or other tooling.

@@ -172,6 +172,34 @@ test("CLI: help documents both version flags", () => {
   assert.equal(r.code, 0);
   assert.match(r.stdout, /--version/);
   assert.match(r.stdout, /-v/);
+  assert.match(r.stdout, /completion <bash\|zsh>/);
+});
+
+test("CLI: bash and zsh completion commands print setup scripts", () => {
+  const bash = run(["completion", "bash"]);
+  assert.equal(bash.code, 0);
+  assert.match(bash.stdout, /complete -F _4evergent_complete 4evergent/);
+  assert.match(bash.stdout, /__complete/);
+
+  const zsh = run(["completion", "zsh"]);
+  assert.equal(zsh.code, 0);
+  assert.match(zsh.stdout, /compdef _4evergent 4evergent/);
+  assert.match(zsh.stdout, /__complete/);
+});
+
+test("CLI: internal completion follows the declared command tree and prefix", () => {
+  const root = run(["__complete", "--", "", ""]);
+  assert.equal(root.code, 0);
+  assert.match(root.stdout, /health/);
+  assert.match(root.stdout, /agent/);
+
+  const agent = run(["__complete", "--", "agent", "pa"]);
+  assert.equal(agent.code, 0);
+  assert.deepEqual(agent.stdout.trim().split("\n"), ["pause"]);
+
+  const intent = run(["__complete", "--", "intent", ""]);
+  assert.equal(intent.code, 0);
+  assert.deepEqual(intent.stdout.trim().split("\n"), ["submit"]);
 });
 
 test("CLI: health success → exit 0, prints status", () => {
@@ -1083,6 +1111,10 @@ test("CLI timeout: a real listener that accepts but never responds exits 3", asy
 
 interface CliHandlersModule {
   buildIntentArgs: (args: string[]) => { intent: any; error?: string };
+  COMMAND_TREE: TestCommandNode[];
+  dispatch: (args: string[]) => Promise<number>;
+  formatCommandHelp: () => string;
+  getCompletionCandidates: (args: string[], prefix?: string) => string[];
   cmdPolicyGet: (agentId: string) => Promise<number>;
   cmdActivityList: (agentId: string, limit: string) => Promise<number>;
   cmdScheduleList: (agentId: string, limit: string) => Promise<number>;
@@ -1099,15 +1131,113 @@ interface CliHandlersModule {
   cmdApprovalGet: (id: string) => Promise<number>;
 }
 
+interface TestCommandNode {
+  name: string;
+  children?: TestCommandNode[];
+}
+
 let cachedHandlersPromise: Promise<CliHandlersModule> | null = null;
+
+test("CLI completion candidates come from command registry", async () => {
+  const mod = await loadCliHandlers();
+  assert.ok(mod.getCompletionCandidates([], "hea").includes("health"));
+  assert.deepEqual(mod.getCompletionCandidates(["agent"], "pa"), ["pause"]);
+  assert.deepEqual(mod.getCompletionCandidates(["schedule"], "re"), ["resume"]);
+  assert.deepEqual(mod.getCompletionCandidates(["agent", "get"], "anything"), []);
+});
+
+test("every declared command path appears in help/completion and dispatches safely", async () => {
+  const mod = await loadCliHandlers();
+  const commandPaths: string[][] = [];
+  const collectPaths = (nodes: TestCommandNode[], prefix: string[] = []) => {
+    for (const node of nodes) {
+      const path = [...prefix, node.name];
+      if (node.children) collectPaths(node.children, path);
+      else commandPaths.push(path);
+    }
+  };
+  collectPaths(mod.COMMAND_TREE);
+
+  const help = mod.formatCommandHelp();
+  const exampleArgs: Record<string, string[]> = {
+    "agent get": ["agent-1"],
+    "agent create": ["example-agent"],
+    "agent pause": ["agent-1"],
+    "agent resume": ["agent-1"],
+    "agent disable": ["agent-1"],
+    "approval get": ["approval-1"],
+    "approval approve": ["approval-1"],
+    "approval reject": ["approval-1"],
+    "execution get": ["execution-1"],
+    "execution retry": ["execution-1"],
+    "execution cancel": ["execution-1"],
+    "policy get": ["agent-1"],
+    "policy update": ["agent-1", "--rules", "{}"],
+    "activity list": ["agent-1"],
+    "activity get": ["agent-1", "activity-1"],
+    "schedule list": ["agent-1"],
+    "schedule get": ["agent-1", "schedule-1"],
+    "schedule create": ["agent-1", "0 * * * *", "payment", "XLM", "1", "GDEST", "test"],
+    "schedule update": ["agent-1", "schedule-1", "0 * * * *"],
+    "schedule pause": ["agent-1", "schedule-1"],
+    "schedule resume": ["agent-1", "schedule-1"],
+    "schedule disable": ["agent-1", "schedule-1"],
+    "schedule delete": ["agent-1", "schedule-1"],
+    "intent submit": ["agent-1", "payment", "XLM", "1", "GDEST", "test"],
+    completion: ["bash"],
+  };
+  const localOnlyCommands = new Set(["--version", "-v", "--help", "-h", "help", "completion"]);
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const originalError = console.error;
+  let mockFetchCalls = 0;
+  globalThis.fetch = (async () => {
+    mockFetchCalls++;
+    return new Response(JSON.stringify({ error: "mocked API response" }), { status: 500 });
+  }) as typeof fetch;
+  console.log = () => {};
+  console.error = () => {};
+
+  try {
+    for (const path of commandPaths) {
+      const label = path.join(" ");
+      assert.ok(help.includes(`  ${label}`), `${label} should be represented in help`);
+      for (let depth = 0; depth < path.length; depth++) {
+        assert.ok(
+          mod.getCompletionCandidates(path.slice(0, depth), path[depth]).includes(path[depth]),
+          `${path[depth]} at ${path.slice(0, depth).join(" ") || "root"} should be completable`,
+        );
+      }
+
+      mockFetchCalls = 0;
+      const dispatchArgs = [...path, ...(exampleArgs[label] ?? [])];
+      const result = await mod.dispatch(dispatchArgs);
+      if (localOnlyCommands.has(path[0]!)) {
+        assert.equal(result, 0, `${label} should dispatch locally`);
+        assert.equal(mockFetchCalls, 0, `${label} must not make an API request`);
+      } else {
+        assert.equal(result, 1, `${label} should reach the mocked API and report its error`);
+        assert.equal(mockFetchCalls, 1, `${label} should dispatch exactly one mocked API request`);
+      }
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    console.error = originalError;
+  }
+});
 
 function loadCliHandlers(): Promise<CliHandlersModule> {
   if (!cachedHandlersPromise) {
     cachedHandlersPromise = (async () => {
       const cliSource = readFileSync(CLI, "utf-8").replace(
-        /main\(\)\.then\([\s\S]*$/,
+        /dispatch\(process\.argv\.slice\(2\)\)\.then\([\s\S]*$/,
         `export {
   buildIntentArgs,
+  COMMAND_TREE,
+  dispatch,
+  formatCommandHelp,
+  getCompletionCandidates,
   cmdPolicyGet,
   cmdActivityList,
   cmdScheduleList,
