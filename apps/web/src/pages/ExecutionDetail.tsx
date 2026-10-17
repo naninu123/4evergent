@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { api } from '../api';
+import { api, ApiError, API_ERROR_CODES } from '../api';
 import type { ExecutionRecord, ExecutionStatus } from '../types';
 import { Skeleton, EmptyState, DetailCard, IntentAmount } from '../components';
 
@@ -37,6 +37,26 @@ function statusDescription(status: ExecutionStatus): string | null {
   }
 }
 
+/**
+ * Map a structured error code to a context-appropriate message for the
+ * execution detail page.
+ */
+function executionErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case API_ERROR_CODES.EXECUTION_NOT_FOUND:
+        return 'This execution does not exist or you do not have access.';
+      case API_ERROR_CODES.CONFLICT:
+        return 'Execution state changed; please refresh and try again.';
+      case API_ERROR_CODES.FORBIDDEN:
+        return 'You do not have permission to act on this execution.';
+      default:
+        break;
+    }
+  }
+  return (err as any)?.message ?? fallback;
+}
+
 export default function ExecutionDetail() {
   const { executionId } = useParams<{ executionId: string }>();
   const [execution, setExecution] = useState<ExecutionRecord | null>(null);
@@ -49,7 +69,7 @@ export default function ExecutionDetail() {
     if (!executionId) return;
     api.getExecution(executionId)
       .then((r) => setExecution(r.execution))
-      .catch((e: any) => setError(e.message ?? 'Failed to load execution'))
+      .catch((e: any) => setError(executionErrorMessage(e, 'Failed to load execution')))
       .finally(() => setLoading(false));
   }, [executionId]);
 
@@ -66,20 +86,20 @@ export default function ExecutionDetail() {
 
   const handleRetry = async () => {
     if (!executionId || actionLoading !== null) return;
-    setActionLoading('retry');
+    setActionLoading('hretry');
     setActionError(null);
     try {
       const r = await api.retryExecution(executionId);
       setExecution(r.execution);
     } catch (e: any) {
-      if (e.status === 409) {
-        setActionError(e.message ?? 'Conflict: execution state changed');
+      if (e instanceof ApiError && e.code === API_ERROR_CODES.CONFLICT) {
+        setActionError(executionErrorMessage(e, 'Conflict: execution state changed'));
         try {
           const r = await api.getExecution(executionId);
           setExecution(r.execution);
         } catch { /* ignore refresh failure */ }
       } else {
-        setActionError(e.message ?? 'Retry failed');
+        setActionError(executionErrorMessage(e, 'Retry failed'));
       }
     } finally {
       setActionLoading(null);
@@ -94,14 +114,14 @@ export default function ExecutionDetail() {
       const r = await api.cancelExecution(executionId);
       setExecution(r.execution);
     } catch (e: any) {
-      if (e.status === 409) {
-        setActionError(e.message ?? 'Conflict: execution state changed');
+      if (e instanceof ApiError && e.code === API_ERROR_CODES.CONFLICT) {
+        setActionError(executionErrorMessage(e, 'Conflict: execution state changed'));
         try {
           const r = await api.getExecution(executionId);
           setExecution(r.execution);
         } catch { /* ignore refresh failure */ }
       } else {
-        setActionError(e.message ?? 'Cancel failed');
+        setActionError(executionErrorMessage(e, 'Cancel failed'));
       }
     } finally {
       setActionLoading(null);
@@ -122,16 +142,16 @@ export default function ExecutionDetail() {
 
       <div className="detail-grid">
         <DetailCard title="Status">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-xs)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var--space-xs' }}>
             <span className={`badge ${statusClass(execution.status)}`}>{statusLabel(execution.status)}</span>
-            {desc && <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>{desc}</span>}
+            {desc && <span className="muted" style={{ fontSize: 'var--text-xs' }}>{desc}</span>}
           </div>
         </DetailCard>
         <DetailCard title="Agent"><code>{execution.agentId.slice(0, 8)}</code></DetailCard>
         <DetailCard title="Intent">{execution.intent.type}</DetailCard>
         <DetailCard title="Amount"><IntentAmount intent={execution.intent} /></DetailCard>
         <DetailCard title="Transaction Hash">
-          {execution.txHash ? <code className="address">{execution.txHash.slice(0, 12)}…{execution.txHash.slice(-8)}</code> : '-'}
+          {execution.txHash ? <code className="address">{execution.txHash.slice(0, 12)}… {execution.txHash.slice(-8)}</code> : '-'}
         </DetailCard>
         <DetailCard title="Attempt">{execution.attempt > 0 ? String(execution.attempt) : '-'}</DetailCard>
         <DetailCard title="Created">{new Date(execution.createdAt).toLocaleString()}</DetailCard>
@@ -149,8 +169,8 @@ export default function ExecutionDetail() {
 
       {/* Cross-link to originating activity */}
       {execution.activityId && (
-        <div style={{ marginTop: 'var(--space-md)', padding: 'var(--space-sm)', background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
-          <span className="muted" style={{ fontSize: 'var(--text-sm)' }}>
+        <div style={{ marginTop: 'var--space-md', padding: 'var--space-sm', background: 'var--color-surface', border: '1px solid var--color-border', borderRadius: 'var--radius-sm' }}>
+          <span className="muted" style={{ fontSize: 'var--text-sm' }}>
             Activity: <code>{execution.activityId.slice(0, 8)}</code>
           </span>
           {' '}
@@ -161,7 +181,7 @@ export default function ExecutionDetail() {
       )}
 
       {/* Operator Recovery Actions */}
-      <div style={{ marginTop: 'var(--space-lg)', display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div style={{ marginTop: 'var--space-lg', display: 'flex', gap: 'var--space-sm', flexWrap: 'wrap', alignItems: 'center' }}>
         {canRetry && (
           <button className="btn btn-primary" disabled={isProcessing || actionLoading === 'retry'} onClick={handleRetry}>
             {actionLoading === 'retry' ? 'Retrying...' : 'Retry Execution'}

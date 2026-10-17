@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { log, generateRequestId, runRequestIdContext } from "./logging.js";
 import type {
   AgentIntent,
@@ -53,6 +54,45 @@ import { createAuthModule, type PrincipalResolution } from "./auth.js";
 import { sweepRetainedData } from "./data-retention.js";
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
+
+/**
+ * Structured error codes returned alongside the human-readable `error`
+ * string in every API error response. The code is the stable contract;
+ * the message may change without breaking clients.
+ *
+ * See docs/api.md for the HTTP status and description of each code.
+ */
+export const ErrorCode = {
+  UNAUTHORIZED: "UNAUTHORIZED",
+  CSRF_FAILED: "CSRF_FAILED",
+  NOT_FOUND: "NOT_FOUND",
+  AGENT_NOT_FOUND: "AGENT_NOT_FOUND",
+  APPROVAL_NOT_FOUND: "APPROVAL_NOT_FOUND",
+  EXECUTION_NOT_FOUND: "EXECUTION_NOT_FOUND",
+  SCHEDULE_NOT_FOUND: "SCHEDULE_NOT_FOUND",
+  INVALID_PATH_PARAM: "INVALID_PATH_PARAM",
+  INVALID_JSON: "INVALID_JSON",
+  VALIDATION_ERROR: "VALIDATION_ERROR",
+  AGENT_NOT_ACTIVE: "AGENT_NOT_ACTIVE",
+  APPROVAL_EXPIRED: "APPROVAL_EXPIRED",
+  INVALID_STATE: "INVALID_STATE",
+  CONFLICT: "CONFLICT",
+  IDEMPOTENCY_CONFLICT: "IDEMPOTENCY_CONFLICT",
+  MAX_RETRIES_REACHED: "MAX_RETRIES_REACHED",
+  QUEUE_NOT_ENABLED: "QUEUE_NOT_ENABLED",
+  EXECUTION_FAILED: "EXECUTION_FAILED",
+  SIMULATION_FAILED: "SIMULATION_FAILED",
+  POLICY_DENIED: "POLICY_DENIED",
+  RAW_TRANSACTION_REJECTED: "RAW_TRANSACTION_REJECTED",
+} as const;
+
+export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
+
+export interface ErrorBody {
+  code: ErrorCodeValue;
+  error: string;
+  details?: unknown;
+}
 
 interface IntentResponse {
   activityId: string;
@@ -616,12 +656,12 @@ export async function createApiServer(options: ServerOptions) {
       // 401 gate so forged (cross-site) writes surface as 403, while an
       // unauthenticated request still gets 401.
       if (resolution.csrfFail) {
-        return json(res, { error: "csrf_failed" }, 403);
+        return json(res, { code: ErrorCode.CSRF_FAILED, error: "csrf_failed" }, 403);
       }
 
       // Protected endpoints require authentication
       if (!requestScopedCtx.ownerId) {
-        return json(res, { error: "unauthorized" }, 401);
+        return json(res, { code: ErrorCode.UNAUTHORIZED, error: "unauthorized" }, 401);
       }
 
       if (method === "POST" && url === "/agents") {
@@ -713,7 +753,7 @@ export async function createApiServer(options: ServerOptions) {
     if (method === "POST" && /^\/executions\/[^/]+\/cancel$/.test(url)) {
       return handleCancelExecution(requestScopedCtx, req, res);
     }
-    json(res, { error: "not found" }, 404);
+    json(res, { code: ErrorCode.NOT_FOUND, error: "not found" }, 404);
     }); // End als.run
     }); // End runRequestIdContext
   });
@@ -740,25 +780,25 @@ export async function createApiServer(options: ServerOptions) {
       const text = await readBody(req);
       body = text ? JSON.parse(text) : {};
     } catch {
-      return json(res, { error: "invalid JSON body" }, 400);
+      return json(res, { code: ErrorCode.INVALID_JSON, error: "invalid JSON body" }, 400);
     }
 
     const b = body as Record<string, unknown>;
     const displayName = b.displayName;
     if (typeof displayName !== "string" || displayName.trim().length === 0) {
-      return json(res, { error: "displayName is required" }, 400);
+      return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "displayName is required", details: { field: "displayName" } }, 400);
     }
     if (displayName.trim().length > 100) {
-      return json(res, { error: "displayName must be 100 characters or fewer" }, 400);
+      return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "displayName must be 100 characters or fewer", details: { field: "displayName" } }, 400);
     }
 
     let description = "";
     if (b.description !== undefined) {
       if (typeof b.description !== "string") {
-        return json(res, { error: "description must be a string" }, 400);
+        return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "description must be a string", details: { field: "description" } }, 400);
       }
       if (b.description.length > 500) {
-        return json(res, { error: "description must be 500 characters or fewer" }, 400);
+        return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "description must be 500 characters or fewer", details: { field: "description" } }, 400);
       }
       description = b.description;
     }
@@ -766,23 +806,23 @@ export async function createApiServer(options: ServerOptions) {
     let capabilities: string[] = [];
     if (b.capabilities !== undefined) {
       if (!Array.isArray(b.capabilities) || !b.capabilities.every((c) => typeof c === "string")) {
-        return json(res, { error: "capabilities must be an array of strings" }, 400);
+        return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "capabilities must be an array of strings", details: { field: "capabilities" } }, 400);
       }
       if (b.capabilities.length > 32) {
-        return json(res, { error: "capabilities must be 32 entries or fewer" }, 400);
+        return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "capabilities must be 32 entries or fewer", details: { field: "capabilities" } }, 400);
       }
       const trimmedCaps: string[] = [];
       const seen = new Set<string>();
       for (const cap of b.capabilities) {
         const trimmed = cap.trim();
         if (trimmed.length === 0) {
-          return json(res, { error: "capability entries cannot be empty" }, 400);
+          return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "capability entries cannot be empty", details: { field: "capabilities" } }, 400);
         }
         if (trimmed.length > 32) {
-          return json(res, { error: "capability entries must be 32 characters or fewer" }, 400);
+          return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "capability entries must be 32 characters or fewer", details: { field: "capabilities" } }, 400);
         }
         if (seen.has(trimmed)) {
-          return json(res, { error: "capabilities must not contain duplicate entries" }, 400);
+          return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "capabilities must not contain duplicate entries", details: { field: "capabilities" } }, 400);
         }
         seen.add(trimmed);
         trimmedCaps.push(trimmed);
@@ -793,7 +833,7 @@ export async function createApiServer(options: ServerOptions) {
     let stellarAddress = "";
     if (b.stellarAddress !== undefined) {
       if (typeof b.stellarAddress !== "string") {
-        return json(res, { error: "stellarAddress must be a string" }, 400);
+        return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "stellarAddress must be a string", details: { field: "stellarAddress" } }, 400);
       }
       stellarAddress = b.stellarAddress;
     }
@@ -816,9 +856,9 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/activity$/);
     const agentId = match?.[1];
-    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    if (!agentId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid agent id in path", details: { param: "agentId" } }, 400);
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
-    if (!allowed) return json(res, { error: "not found" }, 404);
+    if (!allowed) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
     const all = await store.listByAgent(agentId, limit + 1, offset);
@@ -845,22 +885,22 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/approvals\/([^/]+)$/);
     const approvalId = match?.[1];
-    if (!approvalId) return json(res, { error: "invalid approval id in path" }, 400);
+    if (!approvalId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid approval id in path", details: { param: "approvalId" } }, 400);
     const canAccess = await authorizationService.canAccessApproval(ctx, approvalId);
-    if (!canAccess) return json(res, { error: "not found" }, 404);
+    if (!canAccess) return json(res, { code: ErrorCode.APPROVAL_NOT_FOUND, error: "Approval not found" }, 404);
     const approval = await approvals.get(approvalId);
-    if (!approval) return json(res, { error: "not found" }, 404);
+    if (!approval) return json(res, { code: ErrorCode.APPROVAL_NOT_FOUND, error: "Approval not found" }, 404);
     return json(res, { approval });
   }
 
 
   async function handleGetPolicy(ctx: RequestContext, req: any, res: any) {
     const agentId = extractAgentIdFromPolicyUrl(req.url);
-    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    if (!agentId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid agent id in path", details: { param: "agentId" } }, 400);
 
-    if (!(await agentExists(agentId))) return json(res, { error: "agent not found" }, 404);
+    if (!(await agentExists(agentId))) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     const canAccess = await authorizationService.canAccessAgent(ctx, agentId);
-    if (!canAccess) return json(res, { error: "not found" }, 404);
+    if (!canAccess) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
 
     const metadata = await policyConfigStore.getWithMetadata(agentId);
     if (metadata) {
@@ -877,27 +917,27 @@ export async function createApiServer(options: ServerOptions) {
 
   async function handlePutPolicy(ctx: RequestContext, req: any, res: any) {
     const agentId = extractAgentIdFromPolicyUrl(req.url);
-    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    if (!agentId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid agent id in path", details: { param: "agentId" } }, 400);
 
-    if (!(await agentExists(agentId))) return json(res, { error: "agent not found" }, 404);
+    if (!(await agentExists(agentId))) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     const canAccess = await authorizationService.canAccessAgent(ctx, agentId);
-    if (!canAccess) return json(res, { error: "not found" }, 404);
+    if (!canAccess) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
 
     let body: unknown;
     try {
       const text = await readBody(req);
       body = JSON.parse(text);
     } catch {
-      return json(res, { error: "invalid JSON body" }, 400);
+      return json(res, { code: ErrorCode.INVALID_JSON, error: "invalid JSON body" }, 400);
     }
 
     if (typeof body !== "object" || body === null) {
-      return json(res, { error: "policy must be an object" }, 400);
+      return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "policy must be an object", details: { field: "policy" } }, 400);
     }
 
     const validation = validatePolicyRules(body);
     if (!validation.valid) {
-      return json(res, { error: "invalid policy", details: validation.errors }, 400);
+      return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "invalid policy", details: validation.errors }, 400);
     }
 
     const normalized = normalizePolicyRules(body as Partial<PolicyRules>);
@@ -915,11 +955,11 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)$/);
     const agentId = match?.[1];
-    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    if (!agentId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid agent id in path", details: { param: "agentId" } }, 400);
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
-    if (!allowed) return json(res, { error: "not found" }, 404);
+    if (!allowed) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     const agent = await agentStore.getForOwner(agentId, ctx.ownerId!);
-    if (!agent) return json(res, { error: "not found" }, 404);
+    if (!agent) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     return json(res, {
       id: agent.id,
       displayName: agent.displayName,
@@ -938,9 +978,9 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/spending$/);
     const agentId = match?.[1];
-    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    if (!agentId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid agent id in path", details: { param: "agentId" } }, 400);
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
-    if (!allowed) return json(res, { error: "not found" }, 404);
+    if (!allowed) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     const rules = await getRules(agentId);
     const spending: Record<string, { used: number; limit: string; remaining: number }> = {};
     for (const asset of Object.keys(rules.dailySpendingLimit)) {
@@ -962,11 +1002,11 @@ export async function createApiServer(options: ServerOptions) {
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/activity\/([^/]+)$/);
     const agentId = match?.[1];
     const activityId = match?.[2];
-    if (!agentId || !activityId) return json(res, { error: "invalid path" }, 400);
+    if (!agentId || !activityId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid path" }, 400);
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
-    if (!allowed) return json(res, { error: "not found" }, 404);
+    if (!allowed) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     const activity = await store.getForOwner(activityId, ctx.ownerId!);
-    if (!activity) return json(res, { error: "not found" }, 404);
+    if (!activity) return json(res, { code: ErrorCode.NOT_FOUND, error: "not found" }, 404);
     return json(res, { activity });
   }
 
@@ -974,9 +1014,9 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/approvals$/);
     const agentId = match?.[1];
-    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    if (!agentId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid agent id in path", details: { param: "agentId" } }, 400);
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
-    if (!allowed) return json(res, { error: "not found" }, 404);
+    if (!allowed) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     const statusFilter = urlObj.searchParams.get("status") ?? undefined;
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
@@ -990,22 +1030,22 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/status$/);
     const agentId = match?.[1];
-    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    if (!agentId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid agent id in path", details: { param: "agentId" } }, 400);
     const canChange = await authorizationService.canChangeAgentStatus(ctx, agentId);
-    if (!canChange) return json(res, { error: "not found" }, 404);
+    if (!canChange) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     let body: unknown;
     try {
       const text = await readBody(req);
       body = text ? JSON.parse(text) : {};
     } catch {
-      return json(res, { error: "invalid JSON body" }, 400);
+      return json(res, { code: ErrorCode.INVALID_JSON, error: "invalid JSON body" }, 400);
     }
     const status = (body as any)?.status;
     if (!["active", "paused", "disabled"].includes(status)) {
-      return json(res, { error: "invalid status" }, 400);
+      return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "invalid status", details: { field: "status" } }, 400);
     }
     const agent = await agentStore.update(agentId, { status: status as any });
-    if (!agent) return json(res, { error: "not found" }, 404);
+    if (!agent) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     return json(res, { id: agent.id, status: agent.status });
   }
 
@@ -1013,9 +1053,9 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules$/);
     const agentId = match?.[1];
-    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    if (!agentId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid agent id in path", details: { param: "agentId" } }, 400);
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
-    if (!allowed) return json(res, { error: "not found" }, 404);
+    if (!allowed) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
     const all = await schedules.listByAgent(agentId, limit + 1, offset);
@@ -1029,12 +1069,12 @@ export async function createApiServer(options: ServerOptions) {
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)$/);
     const agentId = match?.[1];
     const scheduleId = match?.[2];
-    if (!agentId || !scheduleId) return json(res, { error: "invalid path" }, 400);
+    if (!agentId || !scheduleId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid path" }, 400);
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
-    if (!allowed) return json(res, { error: "not found" }, 404);
+    if (!allowed) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     const schedule = await schedules.get(scheduleId);
     if (!schedule || schedule.ownerId !== ctx.ownerId!) {
-      return json(res, { error: "not found" }, 404);
+      return json(res, { code: ErrorCode.SCHEDULE_NOT_FOUND, error: "Schedule not found" }, 404);
     }
     return json(res, { schedule });
   }
@@ -1043,16 +1083,16 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules$/);
     const agentId = match?.[1];
-    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    if (!agentId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid agent id in path", details: { param: "agentId" } }, 400);
     const canCreate = await authorizationService.canCreateSchedule(ctx, agentId);
-    if (!canCreate) return json(res, { error: "not found" }, 404);
+    if (!canCreate) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
 
     let body: unknown;
     try {
       const text = await readBody(req);
       body = text ? JSON.parse(text) : {};
     } catch {
-      return json(res, { error: "invalid JSON body" }, 400);
+      return json(res, { code: ErrorCode.INVALID_JSON, error: "invalid JSON body" }, 400);
     }
 
     const intent = (body as any)?.intent;
@@ -1063,12 +1103,12 @@ export async function createApiServer(options: ServerOptions) {
 
     const intentValidation = validateScheduleIntent(intent);
     if (!intentValidation.valid) {
-      return json(res, { error: intentValidation.error }, 400);
+      return json(res, { code: ErrorCode.VALIDATION_ERROR, error: intentValidation.error, details: { field: "intent" } }, 400);
     }
 
     const exprValidation = validateScheduleExpression(scheduleExpression, timezone);
     if (!exprValidation.valid) {
-      return json(res, { error: exprValidation.error }, 400);
+      return json(res, { code: ErrorCode.VALIDATION_ERROR, error: exprValidation.error, details: { field: "scheduleExpression" } }, 400);
     }
 
     const now = new Date().toISOString();
@@ -1094,26 +1134,26 @@ export async function createApiServer(options: ServerOptions) {
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)$/);
     const agentId = match?.[1];
     const scheduleId = match?.[2];
-    if (!agentId || !scheduleId) return json(res, { error: "invalid path" }, 400);
+    if (!agentId || !scheduleId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid path" }, 400);
     const canUpdate = await authorizationService.canUpdateSchedule(ctx, scheduleId);
-    if (!canUpdate) return json(res, { error: "not found" }, 404);
+    if (!canUpdate) return json(res, { code: ErrorCode.SCHEDULE_NOT_FOUND, error: "Schedule not found" }, 404);
 
     let body: unknown;
     try {
       const text = await readBody(req);
       body = text ? JSON.parse(text) : {};
     } catch {
-      return json(res, { error: "invalid JSON body" }, 400);
+      return json(res, { code: ErrorCode.INVALID_JSON, error: "invalid JSON body" }, 400);
     }
 
     const schedule = await schedules.get(scheduleId);
-    if (!schedule) return json(res, { error: "not found" }, 404);
+    if (!schedule) return json(res, { code: ErrorCode.SCHEDULE_NOT_FOUND, error: "Schedule not found" }, 404);
 
     const patch: any = {};
     if ((body as any)?.scheduleExpression !== undefined) {
       const { validateScheduleExpression } = await import("@4evergent/database");
       const result = validateScheduleExpression((body as any)?.scheduleExpression, schedule.timezone);
-      if (!result.valid) return json(res, { error: result.error }, 400);
+      if (!result.valid) return json(res, { code: ErrorCode.VALIDATION_ERROR, error: result.error, details: { field: "scheduleExpression" } }, 400);
       patch.scheduleExpression = (body as any).scheduleExpression;
       patch.nextRunAt = result.nextRunAt ?? schedule.nextRunAt;
     }
@@ -1127,11 +1167,11 @@ export async function createApiServer(options: ServerOptions) {
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)$/);
     const agentId = match?.[1];
     const scheduleId = match?.[2];
-    if (!agentId || !scheduleId) return json(res, { error: "invalid path" }, 400);
+    if (!agentId || !scheduleId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid path" }, 400);
     const canDelete = await authorizationService.canDeleteSchedule(ctx, scheduleId);
-    if (!canDelete) return json(res, { error: "not found" }, 404);
+    if (!canDelete) return json(res, { code: ErrorCode.SCHEDULE_NOT_FOUND, error: "Schedule not found" }, 404);
     const deleted = await schedules.delete(scheduleId);
-    if (!deleted) return json(res, { error: "not found" }, 404);
+    if (!deleted) return json(res, { code: ErrorCode.SCHEDULE_NOT_FOUND, error: "Schedule not found" }, 404);
     return json(res, { deleted: true });
   }
 
@@ -1141,7 +1181,7 @@ export async function createApiServer(options: ServerOptions) {
     const agentId = match?.[1];
     const scheduleId = match?.[2];
     const action = match?.[3] as "pause" | "resume" | "disable";
-    if (!agentId || !scheduleId || !action) return json(res, { error: "invalid path" }, 400);
+    if (!agentId || !scheduleId || !action) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid path" }, 400);
 
     let allowed: boolean;
     if (action === "pause") {
@@ -1151,10 +1191,10 @@ export async function createApiServer(options: ServerOptions) {
     } else {
       allowed = await authorizationService.canDisableSchedule(ctx, scheduleId);
     }
-    if (!allowed) return json(res, { error: "not found" }, 404);
+    if (!allowed) return json(res, { code: ErrorCode.SCHEDULE_NOT_FOUND, error: "Schedule not found" }, 404);
 
     const schedule = await schedules.get(scheduleId);
-    if (!schedule) return json(res, { error: "not found" }, 404);
+    if (!schedule) return json(res, { code: ErrorCode.SCHEDULE_NOT_FOUND, error: "Schedule not found" }, 404);
 
     const status = action === "pause" ? "paused" : action === "resume" ? "active" : "disabled";
     const updated = await schedules.update(scheduleId, { status });
@@ -1165,9 +1205,9 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/executions$/);
     const agentId = match?.[1];
-    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    if (!agentId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid agent id in path", details: { param: "agentId" } }, 400);
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
-    if (!allowed) return json(res, { error: "not found" }, 404);
+    if (!allowed) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
     const all = await executionStore.listByAgent(agentId, limit + 1, offset);
@@ -1180,15 +1220,15 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/executions\/([^/]+)$/);
     const executionId = match?.[1];
-    if (!executionId) return json(res, { error: "invalid execution id in path" }, 400);
+    if (!executionId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid execution id in path", details: { param: "executionId" } }, 400);
     const execution = await executionStore.getForOwner(executionId, ctx.ownerId!);
-    if (!execution) return json(res, { error: "not found" }, 404);
+    if (!execution) return json(res, { code: ErrorCode.EXECUTION_NOT_FOUND, error: "Execution not found" }, 404);
     return json(res, { execution });
   }
 
   async function handleQueueStatus(ctx: RequestContext, _req: any, res: any) {
     if (!executionQueue) {
-      return json(res, { error: "execution queue not enabled" }, 404);
+      return json(res, { code: ErrorCode.QUEUE_NOT_ENABLED, error: "execution queue not enabled" }, 404);
     }
     const execCounts = await executionStore.countByOwner(ctx.ownerId!);
     const byStatus: Record<string, number> = {};
@@ -1245,29 +1285,29 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/executions\/([^/]+)\/retry$/);
     const executionId = match?.[1];
-    if (!executionId) return json(res, { error: "invalid execution id in path" }, 400);
+    if (!executionId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid execution id in path", details: { param: "executionId" } }, 400);
 
     if (!executionQueue) {
-      return json(res, { error: "execution queue not enabled" }, 404);
+      return json(res, { code: ErrorCode.QUEUE_NOT_ENABLED, error: "execution queue not enabled" }, 404);
     }
 
     const execution = await executionStore.getForOwner(executionId, ctx.ownerId!);
-    if (!execution) return json(res, { error: "not found" }, 404);
+    if (!execution) return json(res, { code: ErrorCode.EXECUTION_NOT_FOUND, error: "Execution not found" }, 404);
 
     if (execution.status !== "failed" && execution.status !== "dead_letter") {
-      return json(res, { error: `cannot retry execution in status '${execution.status}'` }, 409);
+      return json(res, { code: ErrorCode.INVALID_STATE, error: `cannot retry execution in status '${execution.status}'`, details: { status: execution.status } }, 409);
     }
 
     const maxRetries = executionQueue["retryPolicy"]?.maxRetries ?? 3;
     if (execution.attempt >= maxRetries) {
-      return json(res, { error: `max retry attempts (${maxRetries}) reached` }, 409);
+      return json(res, { code: ErrorCode.MAX_RETRIES_REACHED, error: `max retry attempts (${maxRetries}) reached` }, 409);
     }
 
     const result = await executionQueue.retry(executionId, maxRetries);
-    if (result.status === "not_found") return json(res, { error: "not found" }, 404);
-    if (result.status === "invalid_state") return json(res, { error: `cannot retry execution in status '${execution.status}'` }, 409);
-    if (result.status === "max_retries_reached") return json(res, { error: `max retry attempts (${maxRetries}) reached` }, 409);
-    if (result.status === "conflict") return json(res, { error: "execution state changed; please refresh" }, 409);
+    if (result.status === "not_found") return json(res, { code: ErrorCode.EXECUTION_NOT_FOUND, error: "Execution not found" }, 404);
+    if (result.status === "invalid_state") return json(res, { code: ErrorCode.INVALID_STATE, error: `cannot retry execution in status '${execution.status}'`, details: { status: execution.status } }, 409);
+    if (result.status === "max_retries_reached") return json(res, { code: ErrorCode.MAX_RETRIES_REACHED, error: `max retry attempts (${maxRetries}) reached` }, 409);
+    if (result.status === "conflict") return json(res, { code: ErrorCode.CONFLICT, error: "execution state changed; please refresh" }, 409);
 
     return json(res, { execution: result.execution, message: "execution queued for retry" });
   }
@@ -1276,58 +1316,58 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/executions\/([^/]+)\/cancel$/);
     const executionId = match?.[1];
-    if (!executionId) return json(res, { error: "invalid execution id in path" }, 400);
+    if (!executionId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid execution id in path", details: { param: "executionId" } }, 400);
 
     if (!executionQueue) {
-      return json(res, { error: "execution queue not enabled" }, 404);
+      return json(res, { code: ErrorCode.QUEUE_NOT_ENABLED, error: "execution queue not enabled" }, 404);
     }
 
     const execution = await executionStore.getForOwner(executionId, ctx.ownerId!);
-    if (!execution) return json(res, { error: "not found" }, 404);
+    if (!execution) return json(res, { code: ErrorCode.EXECUTION_NOT_FOUND, error: "Execution not found" }, 404);
 
     if (execution.status !== "queued" && execution.status !== "executing") {
-      return json(res, { error: `cannot cancel execution in status '${execution.status}'` }, 409);
+      return json(res, { code: ErrorCode.INVALID_STATE, error: `cannot cancel execution in status '${execution.status}'`, details: { status: execution.status } }, 409);
     }
 
     const result = await executionQueue.cancel(executionId);
-    if (result.status === "not_found") return json(res, { error: "not found" }, 404);
-    if (result.status === "invalid_state") return json(res, { error: `cannot cancel execution in status '${execution.status}'` }, 409);
-    if (result.status === "conflict") return json(res, { error: "execution state changed; please refresh" }, 409);
+    if (result.status === "not_found") return json(res, { code: ErrorCode.EXECUTION_NOT_FOUND, error: "Execution not found" }, 404);
+    if (result.status === "invalid_state") return json(res, { code: ErrorCode.INVALID_STATE, error: `cannot cancel execution in status '${execution.status}'`, details: { status: execution.status } }, 409);
+    if (result.status === "conflict") return json(res, { code: ErrorCode.CONFLICT, error: "execution state changed; please refresh" }, 409);
 
     return json(res, { execution: result.execution, message: "execution cancelled" });
   }
 
   async function handleIntent(ctx: RequestContext, req: any, res: any) {
     const agentId = extractAgentId(req.url);
-    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    if (!agentId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid agent id in path", details: { param: "agentId" } }, 400);
 
     let body: unknown;
     try {
       const text = await readBody(req);
       body = JSON.parse(text);
     } catch {
-      return json(res, { error: "invalid JSON body" }, 400);
+      return json(res, { code: ErrorCode.INVALID_JSON, error: "invalid JSON body" }, 400);
     }
 
     if (isRawTransaction(body)) {
-      return json(res, { error: "raw XDR and transaction blobs are not accepted; submit a typed intent" }, 400);
+      return json(res, { code: ErrorCode.RAW_TRANSACTION_REJECTED, error: "raw XDR and transaction blobs are not accepted; submit a typed intent" }, 400);
     }
 
     let intent: AgentIntent;
     try {
       intent = parseIntent(body);
     } catch (e) {
-      return json(res, { error: (e as Error).message }, 400);
+      return json(res, { code: ErrorCode.VALIDATION_ERROR, error: (e as Error).message }, 400);
     }
 
     const validation = IntentValidator.validate(intent);
     if (!validation.valid) {
-      return json(res, { error: `Intent validation failed: ${validation.error}` }, 400);
+      return json(res, { code: ErrorCode.VALIDATION_ERROR, error: `Intent validation failed: ${validation.error}` }, 400);
     }
 
-    if (!(await agentExists(agentId))) return json(res, { error: "agent not found" }, 404);
+    if (!(await agentExists(agentId))) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     const canSubmit = await authorizationService.canSubmitIntent(ctx, agentId);
-    if (!canSubmit) return json(res, { error: "not found" }, 404);
+    if (!canSubmit) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
 
     // Agent status admission boundary: only ACTIVE agents accept NEW intents.
     // Reads the CURRENT status from the persistent agent store so a paused or
@@ -1335,9 +1375,9 @@ export async function createApiServer(options: ServerOptions) {
     // or execution-queue entries are created. In-flight executions are not
     // affected — this gate only applies at intent submission time.
     const agent = await agentStore.get(agentId);
-    if (!agent) return json(res, { error: "agent not found" }, 404);
+    if (!agent) return json(res, { code: ErrorCode.AGENT_NOT_FOUND, error: "Agent not found" }, 404);
     if (agent.status !== "active") {
-      return json(res, { error: `agent is ${agent.status}; new intents are rejected` }, 409);
+      return json(res, { code: ErrorCode.AGENT_NOT_ACTIVE, error: `agent is ${agent.status}; new intents are rejected`, details: { status: agent.status } }, 409);
     }
 
     // Idempotency key from header (scoped to owner+agent)
@@ -1345,7 +1385,7 @@ export async function createApiServer(options: ServerOptions) {
     if (idempotencyKey) {
       // Enforce bounded key length to prevent abuse
       if (idempotencyKey.length > 256) {
-        return json(res, { error: "Idempotency-Key must be 256 characters or fewer" }, 400);
+        return json(res, { code: ErrorCode.VALIDATION_ERROR, error: "Idempotency-Key must be 256 characters or fewer", details: { field: "Idempotency-Key" } }, 400);
       }
       const existing = await store.getByIdempotencyKey(ctx.ownerId!, agentId, idempotencyKey);
       if (existing) {
@@ -1353,7 +1393,7 @@ export async function createApiServer(options: ServerOptions) {
         const existingIntentJson = JSON.stringify(existing.intent);
         const newIntentJson = JSON.stringify(intent);
         if (existingIntentJson !== newIntentJson) {
-          return json(res, { error: "Idempotency-Key already used with a different intent" }, 409);
+          return json(res, { code: ErrorCode.IDEMPOTENCY_CONFLICT, error: "Idempotency-Key already used with a different intent" }, 409);
         }
         // Duplicate request → return existing activity (idempotent success)
         return json(res, toIntentResponse(existing), 200);
@@ -1365,7 +1405,7 @@ export async function createApiServer(options: ServerOptions) {
     if (decision.result === "deny") {
       const outcome = await pipeline.execute({ intent, sourceAccount: { agentId, ownerId: ctx.ownerId } as any, idempotencyKey });
       const denied = outcome.activityId ? await store.get(outcome.activityId) : null;
-      return json(res, toIntentResponse(denied!), 403);
+      return json(res, { ...toIntentResponse(denied!), code: ErrorCode.POLICY_DENIED }, 403);
     }
 
     if (decision.result === "requires_approval") {
@@ -1416,7 +1456,7 @@ export async function createApiServer(options: ServerOptions) {
       const failed = makeActivity(intent, agentId, ctx.ownerId!, decision, "failed", null, outcome.message ?? "Unknown error");
       failed.idempotencyKey = idempotencyKey;
       await store.record(failed);
-      return json(res, toIntentResponse(failed), 502);
+      return json(res, { ...toIntentResponse(failed), code: ErrorCode.EXECUTION_FAILED }, 502);
     }
 
     if (outcome.status === "submitted") {
@@ -1442,7 +1482,7 @@ export async function createApiServer(options: ServerOptions) {
 
     if (outcome.status === "simulation_failed") {
       const failed = outcome.activityId ? await store.get(outcome.activityId) : null;
-      return json(res, toIntentResponse(failed!), 422);
+      return json(res, { ...toIntentResponse(failed!), code: ErrorCode.SIMULATION_FAILED }, 422);
     }
 
     const rejected = outcome.activityId ? await store.get(outcome.activityId) : null;
@@ -1451,18 +1491,18 @@ export async function createApiServer(options: ServerOptions) {
 
   async function handleApprove(ctx: RequestContext, req: any, res: any) {
     const approvalId = extractApprovalId(req.url);
-    if (!approvalId) return json(res, { error: "invalid approval id in path" }, 400);
+    if (!approvalId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid approval id in path", details: { param: "approvalId" } }, 400);
 
     let body: unknown = {};
     try {
       const text = await readBody(req);
       body = text ? JSON.parse(text) : {};
     } catch {
-      return json(res, { error: "invalid JSON body" }, 400);
+      return json(res, { code: ErrorCode.INVALID_JSON, error: "invalid JSON body" }, 400);
     }
 
     if (isRawTransaction(body)) {
-      return json(res, { message: "raw XDR and transaction blobs are not accepted at the approve endpoint" }, 400);
+      return json(res, { code: ErrorCode.RAW_TRANSACTION_REJECTED, error: "raw XDR and transaction blobs are not accepted at the approve endpoint" }, 400);
     }
 
     // Phase 28K-2: Actor from authenticated principal subject
@@ -1470,20 +1510,20 @@ export async function createApiServer(options: ServerOptions) {
 
     const approval = await approvals.get(approvalId);
     if (!approval) {
-      return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
+      return json(res, { ...toApprovalResponse(approvalId, "", "rejected", "approval not found"), code: ErrorCode.APPROVAL_NOT_FOUND }, 404);
     }
 
     const canApprove = await authorizationService.canApprove(ctx, approvalId);
-    if (!canApprove) return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
+    if (!canApprove) return json(res, { ...toApprovalResponse(approvalId, "", "rejected", "approval not found"), code: ErrorCode.APPROVAL_NOT_FOUND }, 404);
 
     const transitionError = validateApprovalTransition(approval.status, "approved");
     if (transitionError) {
-      return json(res, toApprovalResponse(approvalId, approval.activityId, approval.status, `cannot approve: ${transitionError}`), 409);
+      return json(res, { ...toApprovalResponse(approvalId, approval.activityId, approval.status, `cannot approve: ${transitionError}`), code: ErrorCode.INVALID_STATE }, 409);
     }
 
     if (approval.expiresAt && new Date(approval.expiresAt) < new Date()) {
       await approvals.update(approvalId, { status: "expired", expiredAt: new Date().toISOString() });
-      return json(res, toApprovalResponse(approvalId, approval.activityId, "expired", "approval expired"), 410);
+      return json(res, { ...toApprovalResponse(approvalId, approval.activityId, "expired", "approval expired"), code: ErrorCode.APPROVAL_EXPIRED }, 410);
     }
 
     await approvals.update(approvalId, { status: "approved", approvedAt: new Date().toISOString(), approver: approver ?? null });
@@ -1533,31 +1573,31 @@ export async function createApiServer(options: ServerOptions) {
 
   async function handleReject(ctx: RequestContext, req: any, res: any) {
     const approvalId = extractApprovalId(req.url);
-    if (!approvalId) return json(res, { error: "invalid approval id in path" }, 400);
+    if (!approvalId) return json(res, { code: ErrorCode.INVALID_PATH_PARAM, error: "invalid approval id in path", details: { param: "approvalId" } }, 400);
 
     let body: unknown = {};
     try {
       const text = await readBody(req);
       body = text ? JSON.parse(text) : {};
     } catch {
-      return json(res, { error: "invalid JSON body" }, 400);
+      return json(res, { code: ErrorCode.INVALID_JSON, error: "invalid JSON body" }, 400);
     }
 
     if (isRawTransaction(body)) {
-      return json(res, { message: "raw XDR and transaction blobs are not accepted at the reject endpoint" }, 400);
+      return json(res, { code: ErrorCode.RAW_TRANSACTION_REJECTED, error: "raw XDR and transaction blobs are not accepted at the reject endpoint" }, 400);
     }
 
     const approval = await approvals.get(approvalId);
     if (!approval) {
-      return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
+      return json(res, { ...toApprovalResponse(approvalId, "", "rejected", "approval not found"), code: ErrorCode.APPROVAL_NOT_FOUND }, 404);
     }
 
     const canReject = await authorizationService.canReject(ctx, approvalId);
-    if (!canReject) return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
+    if (!canReject) return json(res, { ...toApprovalResponse(approvalId, "", "rejected", "approval not found"), code: ErrorCode.APPROVAL_NOT_FOUND }, 404);
 
     const transitionError = validateApprovalTransition(approval.status, "rejected");
     if (transitionError) {
-      return json(res, toApprovalResponse(approvalId, approval.activityId, approval.status, `cannot reject: ${transitionError}`), 409);
+      return json(res, { ...toApprovalResponse(approvalId, approval.activityId, approval.status, `cannot reject: ${transitionError}`), code: ErrorCode.INVALID_STATE }, 409);
     }
 
     await approvals.update(approvalId, { status: "rejected", rejectedAt: new Date().toISOString() });

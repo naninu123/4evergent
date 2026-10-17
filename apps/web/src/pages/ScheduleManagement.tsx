@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import { api } from '../api';
+import { api, ApiError } from '../api';
 import type { ScheduleRecord, SubmitPaymentIntent } from '../types';
+import { describeApiError } from '../errors';
+import { describeScheduleError } from '../errors';
 
 interface ScheduleManagementProps {
   agentId: string;
@@ -32,8 +34,9 @@ export function ScheduleManagement({ agentId, onError }: ScheduleManagementProps
     api.listSchedules(agentId)
       .then((r) => setSchedules(r.schedules))
       .catch((e: any) => {
-        setError(e.message);
-        onError?.(e.message);
+        const msg = describeScheduleError(e, 'Failed to load schedules.');
+        setError(msg);
+        onError?.(msg);
       });
   };
 
@@ -46,7 +49,7 @@ export function ScheduleManagement({ agentId, onError }: ScheduleManagementProps
       else await api.disableSchedule(agentId, scheduleId);
       load();
     } catch (e: any) {
-      onError?.(e.message);
+      onError?.(describeScheduleError(e, 'Failed to update schedule.'));
     }
   };
 
@@ -56,7 +59,7 @@ export function ScheduleManagement({ agentId, onError }: ScheduleManagementProps
       await api.deleteSchedule(agentId, scheduleId);
       load();
     } catch (e: any) {
-      onError?.(e.message);
+      onError?.(describeScheduleError(e, 'Failed to delete schedule.'));
     }
   };
 
@@ -93,7 +96,7 @@ export function ScheduleManagement({ agentId, onError }: ScheduleManagementProps
       );
       cancelEdit();
     } catch (e: any) {
-      setEditError(e.message ?? 'Failed to update schedule expression.');
+      setEditError(describeScheduleError(e, 'Failed to update schedule expression.'));
     } finally {
       setEditSaving(false);
     }
@@ -278,7 +281,7 @@ function CreateScheduleForm({ agentId, onSuccess, onError }: {
       });
       onSuccess();
     } catch (e: any) {
-      const msg = e.message ?? 'Failed to create schedule';
+      const msg = describeScheduleError(e, 'Failed to create schedule');
       setError(msg);
       onError(msg);
     } finally {

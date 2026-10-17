@@ -4,12 +4,41 @@
 const API_BASE = import.meta.env.VITE_API_BASE?.trim() || 'http://localhost:3000';
 import { getStoredToken, clearAuth } from './auth';
 
+/**
+ * Structured error codes returned by the API. The code is the stable
+ * contract; the message is human-readable and may change.
+ */
+export const API_ERROR_CODES = {
+  AGENT_NOT_FOUND: 'AGENT_NOT_FOUND',
+  APPROVAL_NOT_FOUND: 'APPROVAL_NOT_FOUND',
+  EXECUTION_NOT_FOUND: 'EXECUTION_NOT_FOUND',
+  SCHEDULE_NOT_FOUND: 'SCHEDULE_NOT_FOUND',
+  NOT_FOUND: 'NOT_FOUND',
+  INVALID_PATH_PARAM: 'INVALID_PATH_PARAM',
+  INVALID_JSON: 'INVALID_JSON',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  UNAUTHORIZED_ERROR: 'UNAUTHORIZED_ERROR',
+  FORBIDDEN: 'FORBIDDEN',
+  CONFLICT: 'CONFLICT',
+  APPROVAL_EXPIRED: 'APPROVAL_EXPIRED',
+  SIMULATION_FAILED: 'SIMULATION_FAILED',
+  INTERNAL_ERROR: 'INTERNAL_ERROR',
+  SIGNER_UNAVAILABLE: 'SIGNER_UNAVAILABLE',
+  UNKNOWN: 'UNKNOWN ',
+} as const;
+
+export type ApiErrorCode = (typeof API_ERROR_CODES)[keyof typeof API_ERROR_CODES];
+
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code: string;
+  details?: unknown;
+  constructor(status: number, message: string, code: string = 'UNKNOWN', details?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code || 'UNKNOWN';
+    this.details = details;
   }
 }
 
@@ -17,7 +46,7 @@ export class ApiError extends Error {
  * Requests carry:
  *  - credentials: include → the HttpOnly session cookie (user login)
  *  - X-Requested-With → CSRF guard for cookie-authenticated state changes
- *  - legacy Bearer token if one is stored (API-key/CLI consumers only;
+ *  - legacy Bearer token if one is stored (API-Key/CLI consumers only;
  *    browser user login never sets it)
  */
 async function request<T>(path: string, init?: RequestInit & { skipAuthClear?: boolean }): Promise<T> {
@@ -39,12 +68,13 @@ async function request<T>(path: string, init?: RequestInit & { skipAuthClear?: b
   const body = res.status !== 204 ? await res.json().catch(() => null) : null;
   if (!res.ok) {
     const message = body?.error ?? `API error ${res.status}`;
+    const code = typeof body?.code === 'string' && body.code.length > 0 ? body.code : 'UNKNOWN';
     // Probes (e.g. /auth/me during session bootstrap) must not wipe a stored
     // legacy bearer token — the caller decides how to handle 401.
     if (res.status === 401 && !skipAuthClear) {
       clearAuth();
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, code, body?.details);
   }
   return body as T;
 }
@@ -99,15 +129,15 @@ export const api = {
     ),
 
   activityDetail: (agentId: string, activityId: string) =>
-    request<{ activity: ActivityRecord }>(`/agents/${encodeURIComponent(agentId)}/activity/${encodeURIComponent(activityId)}`),
+    request<{ activity: ActivityRecord }>(` /agents/${encodeURIComponent(agentId)}/activity/${encodeURIComponent(activityId)}`),
 
   agentApprovals: (agentId: string, statusFilter?: string) => {
     const qs = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : '';
-    return request<{ agentId: string; approvals: ApprovalRecord[] }>(`/agents/${encodeURIComponent(agentId)}/approvals${qs}`);
+    return request<{ agentId: string; approvals: ApprovalRecord[] }>(` /agents/${encodeURIComponent(agentId)}/approvals?${qs}`);
   },
 
   updateAgentStatus: (agentId: string, status: string) =>
-    request<{ id: string; status: string }>(`/agents/${encodeURIComponent(agentId)}/status`, {
+    request<{ id: string; status: string }>(` /agents/${encodeURIComponent(agentId)}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }),
@@ -163,7 +193,7 @@ export const api = {
     }),
 
   submitTrustline: (agentId: string, intent: SubmitTrustlineIntent) =>
-    request<IntentResponse>(`/agents/${encodeURIComponent(agentId)}/intents`, {
+    request<IntentResponse>(` /agents/${encodeURIComponent(agentId)}/intents`, {
       method: 'POST',
       body: JSON.stringify({ ...intent, type: 'trustline' }),
     }),
@@ -231,7 +261,7 @@ export const api = {
     ),
 
   createSchedule: (agentId: string, body: { intent: any; scheduleExpression: string; timezone?: string }) =>
-    request<{ schedule: ScheduleRecord }>(`/agents/${encodeURIComponent(agentId)}/schedules`, {
+    request<{ schedule: ScheduleRecord }>(` /agents/${encodeURIComponent(agentId)}/schedules`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
@@ -294,8 +324,6 @@ export const api = {
   stellarVerify: (body: { publicKey: string; challengeId: string; signature: string }) =>
     request<{ subject: string }>('/auth/stellar/verify', { method: 'POST', body: JSON.stringify(body) }),
 
-  logout: () => request<null>('/auth/logout', { method: 'POST' }),
-
-  /** Full-page navigation target for the Google OAuth start (server-side flow). */
-  authStartUrl: () => `${API_BASE}/auth/google/start`,
+  logout: () =>
+    request<{ ok: boolean }>('/auth/logout', { method: 'POST', body: JSON.stringify({}) }),
 };

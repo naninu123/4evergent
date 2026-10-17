@@ -1,8 +1,31 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { api } from '../api';
+import { api, ApiError, API_ERROR_CODES } from '../api';
 import type { ApprovalRecord } from '../types';
 import { StatusBadge, Skeleton, EmptyState, DetailCard } from '../components';
+
+/**
+ * Map a structured error code to a context-appropriate message for the
+ * approval detail page. The code is the contract; the message is human-
+ * readable and may change.
+ */
+function approvalErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case API_ERROR_CODES.APPROVAL_EXPIRED:
+        return 'This approval has expired — submit a new intent.';
+      case API_ERROR_CODES.APPROVAL_NOT_FOUND:
+        return 'This approval does not exist or you do not have access.';
+      case API_ERROR_CODES.CONFLICT:
+        return 'Approval state changed; please refresh and try again.';
+      case API_ERROR_CODES.FORBIDDEN:
+        return 'You do not have permission to act on this approval.';
+      default:
+        break;
+    }
+  }
+  return (err as any)?.message ?? fallback;
+}
 
 export default function ApprovalDetail() {
   const { approvalId } = useParams<{ approvalId: string }>();
@@ -16,7 +39,7 @@ export default function ApprovalDetail() {
     if (!approvalId) return;
     api.approvalDetail(approvalId)
       .then((r) => setApproval(r.approval))
-      .catch((e: any) => setError(e.message ?? 'Failed to load approval'))
+      .catch((e: any) => setError(approvalErrorMessage(e, 'Failed to load approval')))
       .finally(() => setLoading(false));
   }, [approvalId]);
 
@@ -30,11 +53,7 @@ export default function ApprovalDetail() {
       const r = await api.approvalDetail(approval.id);
       setApproval(r.approval);
     } catch (e: any) {
-      if (e.status === 409) {
-        setActionError(e.message ?? 'Approval state changed; please refresh');
-      } else {
-        setActionError(e.message ?? 'Approve failed');
-      }
+      setActionError(approvalErrorMessage(e, 'Approve failed'));
     } finally {
       setActionLoading(null);
     }
@@ -50,11 +69,7 @@ export default function ApprovalDetail() {
       const r = await api.approvalDetail(approval.id);
       setApproval(r.approval);
     } catch (e: any) {
-      if (e.status === 409) {
-        setActionError(e.message ?? 'Approval state changed; please refresh');
-      } else {
-        setActionError(e.message ?? 'Reject failed');
-      }
+      setActionError(approvalErrorMessage(e, 'Reject failed'));
     } finally {
       setActionLoading(null);
     }
