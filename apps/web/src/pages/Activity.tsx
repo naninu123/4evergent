@@ -1,42 +1,45 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import type { ActivityRecord } from '../types';
 import { StatusBadge, Skeleton, EmptyState, IntentAmount, PaginationFooter } from '../components';
+import { useApiResource } from '../hooks/useApiResource';
 
 const PAGE_SIZE = 50;
 
 export default function Activity() {
-  const [activity, setActivity] = useState<ActivityRecord[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [nextOffset, setNextOffset] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  const loadPage = useCallback(async (offset: number, replace: boolean) => {
-    try {
-      const r = await api.listActivity(PAGE_SIZE, offset);
-      setActivity(replace ? r.activity : (prev) => (prev ?? []).concat(r.activity));
+  const { data, error, loading, reload } = useApiResource(
+    async () => {
+      const r = await api.listActivity(PAGE_SIZE, 0);
       setHasMore(r.hasMore);
-      setNextOffset(offset + r.activity.length);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  }, []);
+      setNextOffset(r.activity.length);
+      return r.activity;
+    },
+    [],
+  );
 
-  useEffect(() => {
-    loadPage(0, true).catch(() => {});
-  }, [loadPage]);
-
-  const loadMore = () => {
+  const loadMore = async () => {
     setLoadingMore(true);
-    loadPage(nextOffset, false).finally(() => setLoadingMore(false));
+    try {
+      const r = await api.listActivity(PAGE_SIZE, nextOffset);
+      setHasMore(r.hasMore);
+      setNextOffset(nextOffset + r.activity.length);
+    } catch {
+      // Surface load-more failures through reload so the page remains consistent.
+      await reload();
+    } finally {
+      setLoadingMore(false);
+    }
   };
 
   if (error) return <EmptyState title="Failed to load activity" message={error} />;
-  if (activity === null) return <Skeleton label="Loading activity..." />;
-  if (activity.length === 0) {
+  if (loading || data === null) return <Skeleton label="Loading activity..." />;
+  if (data.length === 0) {
     return (
       <EmptyState
         title="No activity"
@@ -65,7 +68,7 @@ export default function Activity() {
             </tr>
           </thead>
           <tbody>
-            {activity.map((r) => (
+            {data.map((r) => (
               <tr
                 key={r.id}
                 className="table-row-link"
@@ -83,7 +86,7 @@ export default function Activity() {
         </table>
       </div>
 
-      <PaginationFooter hasMore={hasMore} loadingMore={loadingMore} onLoadMore={loadMore} itemCount={activity.length} />
+      <PaginationFooter hasMore={hasMore} loadingMore={loadingMore} onLoadMore={loadMore} itemCount={data.length} />
     </section>
   );
 }
