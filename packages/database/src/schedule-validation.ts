@@ -6,7 +6,7 @@ export interface ScheduleValidationResult {
   nextRunAt?: string;
 }
 
-export function validateScheduleExpression(expression?: string, timezone?: string): ScheduleValidationResult {
+export function validateScheduleExpression(expression?: string, timezone?: string, now?: Date): ScheduleValidationResult {
   if (!expression || expression.trim().length === 0) return { valid: false, error: 'schedule expression is required' };
   if (!timezone || !isValidTimezone(timezone)) return { valid: false, error: 'invalid timezone' };
 
@@ -25,7 +25,7 @@ export function validateScheduleExpression(expression?: string, timezone?: strin
   if (!isValidCronField(month, 1, 12)) return { valid: false, error: 'invalid month' };
   if (!isValidCronField(dow, 0, 6)) return { valid: false, error: 'invalid day-of-week' };
 
-  const nextRunAt = computeNextRun(minute, hour, dom, month, dow);
+  const nextRunAt = computeNextRun(minute, hour, dom, month, dow, timezone, now);
   if (!nextRunAt) return { valid: false, error: 'could not compute next run time' };
 
   return { valid: true, nextRunAt };
@@ -64,19 +64,56 @@ function isValidTimezone(tz: string): boolean {
   return ['UTC', 'America/New_York', 'Europe/London', 'Asia/Tokyo'].includes(tz);
 }
 
-function computeNextRun(minute: string, hour: string, dom: string, month: string, dow: string): string | null {
-  const now = new Date();
-  const candidate = new Date(now);
-  candidate.setSeconds(0, 0);
+function computeNextRun(
+  minute: string,
+  hour: string,
+  dom: string,
+  month: string,
+  dow: string,
+  timezone: string,
+  now: Date = new Date(),
+): string | null {
+  const candidate = new Date(now.getTime());
+  candidate.setUTC(candidate.getUTCSeconds(), 0);
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour12: false,
+    minute: '2-digit',
+    hour: '2-digit',
+    day: '2-digit',
+    month: '2-digit',
+    weekday: 'short',
+  });
+
+  const weekdayIndex: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
 
   for (let i = 0; i < 525600; i++) {
-    candidate.setMinutes(candidate.getMinutes() + 1);
+    candidate.setUTCMinutes(candidate.getUTCMinutes() + 1);
 
-    if (!matchesMinutes(candidate.getMinutes(), minute)) continue;
-    if (!matchesHours(candidate.getHours(), hour)) continue;
-    if (!matchesDayOfMonth(candidate.getDate(), dom)) continue;
-    if (!matchesMonth(candidate.getMonth() + 1, month)) continue;
-    if (!matchesDayOfWeek(candidate.getDay(), dow)) continue;
+    const parts = formatter.formatToParts(candidate);
+    const get = (type: Intl.DateTimeFormatPartType): string =>
+      parts.find((p) => p.type === type)?.value ?? '';
+
+    const localMinute = parseInt(get('minute'), 10);
+    const localHour = parseInt(get('hour'), 10);
+    const localDay = parseInt(get('day'), 10);
+    const localMonth = parseInt(get('month'), 10);
+    const localWeekday = weekdayIndex[get('weekday')] ?? 0;
+
+    if (!matchesMinutes(localMinute, minute)) continue;
+    if (!matchesHours(localHour, hour)) continue;
+    if (!matchesDayOfMonth(localDay, dom)) continue;
+    if (!matchesMonth(localMonth, month)) continue;
+    if (!matchesDayOfWeek(localWeekday, dow)) continue;
 
     if (candidate > now) return candidate.toISOString();
   }

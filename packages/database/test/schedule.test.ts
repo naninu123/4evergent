@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import {
   SQLiteScheduleStore,
   InMemoryScheduleStore,
+  validateScheduleExpression,
 } from "../src/index.js";
 import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
 
@@ -67,6 +68,66 @@ test("SQLite: create/get schedule round-trips", async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ===== Timezone-aware nextRunAt tests =====
+// The schedule's declared timezone must determine when the cron expression
+// fires, independent of the host's local timezone.
+
+function wallClockIn(iso: string, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(new Date(iso));
+  const get = (t: string) => parts.find((p) => p.type === t)!.value;
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
+test("validateScheduleExpression: 09:00 in America/New_York is 09:00 local wall clock", () => {
+  const result = validateScheduleExpression("0 9 * * *", "America/New_York");
+  assert.equal(result.valid, true);
+  assert.ok(result.nextRunAt);
+  assert.equal(wallClockIn(result.nextRunAt!, "America/New_York"), "09:00");
+});
+
+test("validateScheduleExpression: four allowlisted timezones yield distinct instants", () => {
+  const zones = ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"];
+  const results = zones.map((tz) => {
+    const r = validateScheduleExpression("0 9 * * *", tz);
+    assert.equal(r.valid, true, `expected valid for ${tz}`);
+    assert.ok(r.nextRunAt, `expected nextRunAt for ${tz}`);
+    assert.equal(wallClockIn(r.nextRunAt!, tz), "09:00", `expected 09:00 local in ${tz}`);
+    return r.nextRunAt!;
+  });
+  assert.equal(new Set(results).size, 4, "all four instants should be distinct");
+});
+
+test("validateScheduleExpression: America/New_York offset from UTC is DST-aware", () => {
+  const utc = validateScheduleExpression("0 9 * * *", "UTC").nextRunAt!;
+  const ny = validateScheduleExpression("0 9 * * *", "America/New_York").nextRunAt!;
+  const diffHours = (new Date(ny).getTime() - new Date(utc).getTime()) / 3600000;
+  assert.ok(
+    diffHours === 4 || diffHours === 5,
+    `expected 4h (EDT) or 5h (EST) offset, got ${diffHours}h`,
+  );
+});
+
+test("validateScheduleExpression: DST boundary in America/New_York", () => {
+  // 2026-03-08 is the US spring-forward date; 09:00 local is 13:00 UTC (EDT).
+  const spring = validateScheduleExpression("0 9 * * *", "America/New_York");
+  assert.equal(spring.valid, true);
+  assert.ok(spring.nextRunAt);
+  assert.equal(wallClockIn(spring.nextRunAt!, "America/New_York"), "09:00");
+});
+
+test("validateScheduleExpression: rejects invalid timezone", () => {
+  const result = validateScheduleExpression("0 9 * * *", "Not/AZone");
+  assert.equal(result.valid, false);
 });
 
 test("InMemory: listByAgent returns only that agent's schedules", async () => {
