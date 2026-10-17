@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InMemoryScheduleStore } from "@4evergent/database";
+import { ScheduleRecoveryService } from "../src/schedule-recovery.js";
 import { AgentScheduler } from "../src/scheduler.js";
 import type { ScheduleRecord } from "@4evergent/database";
 import type { AgentIntent } from "@4evergent/shared";
@@ -205,4 +206,104 @@ test("Scheduler: updates nextRunAt after execution", async () => {
 
   assert.notEqual(after!.nextRunAt, before!.nextRunAt);
   assert.ok(new Date(after!.nextRunAt) > new Date(before!.nextRunAt));
+});
+
+test("Scheduler: interrupted run is detectable and reconciled on restart", async () => {
+  const store = new InMemoryScheduleStore();
+  const schedule = makeSchedule();
+  await store.create(schedule);
+
+  let executed = 0;
+  const scheduler = new AgentScheduler(store, agentStore, async () => {
+    executed++;
+    throw new Error("simulated crash after callback started");
+  });
+
+  await scheduler.runDue(new Date().toISOString());
+  assert.equal(executed, 1);
+
+  const interrupted = await store.get(schedule.id);
+  assert.ok(interrupted!.inProgressAt, "in-progress marker should be set");
+
+  const recovery = new ScheduleRecoveryService(store);
+  const reconciled = await recovery.reconcile();
+  assert.equal(reconciled, 1);
+
+  const after = await store.get(schedule.id);
+  assert.equal(after!.inProgressAt, null);
+  assert.ok(after!.lastRunAt);
+});
+
+test("Scheduler: normally completed schedule is not treated as interrupted", async () => {
+  const store = new InMemoryScheduleStore();
+  const schedule = makeSchedule();
+  await store.create(schedule);
+
+  const scheduler = new AgentScheduler(store, agentStore, async () => {});
+  await scheduler.runDue(new Date().toISOString());
+
+  const completed = await store.get(schedule.id);
+  assert.equal(completed!.inProgressAt, null);
+
+  const recovery = new ScheduleRecoveryService(store);
+  const reconciled = await recovery.reconcile();
+  assert.equal(reconciled, 0);
+});
+
+test("Scheduler: callback failure preserves existing failure path", async () => {
+  const store = new InMemoryScheduleStore();
+  const schedule = makeSchedule();
+  await store.create(schedule);
+
+  const scheduler = new AgentScheduler(store, agentStore, async () => {
+    throw new Error("intentional failure");
+  });
+
+  await scheduler.runDue(new Date().toISOString());
+
+  const updated = await store.get(schedule.id);
+  assert.ok(updated!.lastRunAt, "failure path must still record lastRunAt");
+  assert.equal(updated!.inProgressAt, null);
+});
+
+test("Scheduler: reconciliation is idempotent", async () => {
+  const store = new InMemoryScheduleStore();
+  const schedule = makeSchedule();
+  await store.create(schedule);
+
+  const scheduler = new AgentScheduler(store, agentStore, async () => {
+    throw new Error("simulated crash");
+  });
+  await scheduler.runDue(new Date().toISOString());
+
+  const recovery = new ScheduleRecoveryService(store);
+  const first = await recovery.reconcile();
+  const second = await recovery.reconcile();
+
+  assert.equal(first, 1);
+  assert.equal(second, 0);
+
+  const after = await store.get(schedule.id);
+  assert.equal(after!.inProgressAt, null);
+});
+
+test("Scheduler: reconciled run is not re-executed on next tick", async () => {
+  const store = new InMemoryScheduleStore();
+  const schedule = makeSchedule();
+  await store.create(schedule);
+
+  let executed = 0;
+  const scheduler = new AgentScheduler(store, agentStore, async () => {
+    executed++;
+    throw new Error("simulated crash");
+  });
+  await scheduler.runDue(new Date().toISOString());
+  assert.equal(executed, 1);
+
+  const recovery = new ScheduleRecoveryService(store);
+  await recovery.reconcile();
+
+  const count = await scheduler.runDue(new Date().toISOString());
+  assert.equal(count, 0);
+  assert.equal(executed, 1);
 });

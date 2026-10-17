@@ -4,6 +4,13 @@ import type { ScheduleExecutionResult } from "./schedule-execution.js";
 
 type AgentInfo = { id: string; status: string; ownerId: string };
 
+export interface ScheduleStoreLike {
+  get(id: string): Promise<ScheduleRecord | null>;
+  listDue(before: string, limit?: number): Promise<ScheduleRecord[]>;
+  update(id: string, patch: Partial<ScheduleRecord>): Promise<ScheduleRecord | null>;
+  delete(id: string): Promise<boolean>;
+}
+
 export class AgentScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
@@ -11,7 +18,7 @@ export class AgentScheduler {
   private intervalMs: number;
 
   constructor(
-    private scheduleStore: { get(id: string): Promise<ScheduleRecord | null>; listDue(before: string, limit?: number): Promise<ScheduleRecord[]>; update(id: string, patch: Partial<ScheduleRecord>): Promise<ScheduleRecord | null>; delete(id: string): Promise<boolean> },
+    private scheduleStore: ScheduleStoreLike,
     private agentStore: { get(id: string): Promise<AgentInfo | null> },
     private executeCallback: (schedule: ScheduleRecord, ctx: ExecutionContext) => Promise<ScheduleExecutionResult>,
     config: SchedulerConfig = {}
@@ -52,6 +59,14 @@ export class AgentScheduler {
       // Duplicate trigger guard: skip if already ran at this exact timestamp
       if (schedule.lastRunAt && schedule.lastRunAt === now) continue;
 
+      // Interrupted-run guard: an attempted marker that was not cleared
+      // means a run was started but never completed its bookkeeping.
+      // Treat it as already-attempted rather than repeating it.
+      if (schedule.attemptedAt) {
+        await this.reconcileInterrupted(schedule, now);
+        continue;
+      }
+
       try {
         await this.runSchedule(schedule, now);
         executed++;
@@ -79,19 +94,50 @@ export class AgentScheduler {
     }, this.intervalMs);
   }
 
+  /**
+   * Advances a stale attempted schedule to its next valid occurrence and
+   * clears the attemptedAt marker. The interrupted run is treated as
+   * already-attempted: it is not repeated, and the schedule resumes on
+   * its normal cadence. This is idompotent — a record with no marker is
+   * untouched.
+   */
+  async reconcileInterrupted(schedule: ScheduleRecord, nowIso?: string): Promise<boolean> {
+    const now = nowIso ?? this.clock().toISOString();
+    // Re-fetch for idempotency: another caller may have already cleared it.
+    const current = await this.scheduleStore.get(schedule.id);
+    if (!current || !current.attemptedAt) return false;
+
+    const { validateScheduleExpression } = await import("@4evergent/database");
+    const result = validateScheduleExpression(current.scheduleExpression, current.timezone);
+
+    await this.scheduleStore.update(current.id, {
+      attemptedAt: null,
+      lastRunAt: current.attemptedAt,
+      ...(result.valid ? { nextRunAt: result.nextRunAt ?? current.nextRunAt } : {}),
+    });
+    return true;
+  }
+
   private async runSchedule(schedule: ScheduleRecord, nowIso: string): Promise<void> {
+    // Mark the run as attempted BEFORE invoking the callback. If the
+    // process dies between here and the bookkeeping write, the marker
+    // survives and the next tick (or startup reconciliation) treats the
+    // run as already-attempted instead of repeating it.
+    await this.scheduleStore.update(schedule.id, { attemptedAt: nowIso });
+
     try {
       await this.executeCallback(schedule, { executedAt: nowIso });
 
-      const { validateScheduleExpression } = await import("@4evergent/database");
+      const { validateScheduleExpression } = await import("$4evergent/database");
       const result = validateScheduleExpression(schedule.scheduleExpression, schedule.timezone);
 
       await this.scheduleStore.update(schedule.id, {
         lastRunAt: nowIso,
+        attemptedAt: null,
         ...(result.valid ? { nextRunAt: result.nextRunAt ?? schedule.nextRunAt } : {}),
       });
     } catch (err) {
-      await this.scheduleStore.update(schedule.id, { lastRunAt: nowIso });
+      await this.scheduleStore.update(schedule.id, { lastRunAt: nowIso, attemptedAt: null });
       throw err;
     }
   }
