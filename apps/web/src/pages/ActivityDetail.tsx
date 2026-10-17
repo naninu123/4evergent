@@ -1,38 +1,33 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { api } from '../api';
 import type { ActivityRecord, ExecutionRecord } from '../types';
 import { Skeleton, EmptyState, IntentAmount, DetailCard, Section, StatusBadge, Address } from '../components';
+import { useApiResource } from '../hooks/useApiResource';
+import { api } from '../api';
 
 export default function ActivityDetail() {
   const { agentId, activityId } = useParams<{ agentId: string; activityId: string }>();
   const navigate = useNavigate();
-  const [activity, setActivity] = useState<ActivityRecord | null>(null);
   const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+
+  const { data, error, loading } = useApiResource<{ activity: ActivityRecord | null }>(
+    () => api.activityDetail(agentId!, activityId!),
+    [agentId, activityId],
+  );
+  const activity = data?.activity ?? null;
 
   useEffect(() => {
-    if (!agentId || !activityId) return;
+    if (!agentId || !activityId || !activity) return;
     let cancelled = false;
-    api.activityDetail(agentId, activityId)
-      .then((r) => {
-        if (cancelled) return;
-        setActivity(r.activity);
-        if (r.activity) {
-          api.listAgentExecutions(agentId)
-            .then((r2) => setExecutions(r2.executions.filter((e: ExecutionRecord) => e.activityId === activityId)))
-            .catch(() => {});
+    api.listAgentExecutions(agentId)
+      .then((r2) => {
+        if (!cancelled) {
+          setExecutions(r2.executions.filter((e: ExecutionRecord) => e.activityId === activityId));
         }
       })
-      .catch((e: any) => {
-        if (!cancelled) setError(e.message ?? 'Failed to load activity');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      .catch(() => {});
     return () => { cancelled = true; };
-  }, [agentId, activityId]);
+  }, [agentId, activityId, activity]);
 
   if (loading) return <Skeleton label="Loading activity..." />;
   if (error) return <div className="error-banner">{error}</div>;
