@@ -145,3 +145,110 @@ test("DAILY SPENDING: invalid limit rejected", async () => {
   const result = await store.reserveDailySpending("agent-a", "XLM", "10", "xyz");
   assert.equal(result, false);
 });
+
+test("DAILY SPENDING: getDailySpending returns null for a day with no reservations", async () => {
+  const store = new InMemoryActivityStore();
+
+  const spent = await store.getDailySpending("agent-a", "XLM");
+  assert.equal(spent, null);
+});
+
+test("DAILY SPENDING: reservation at the daily limit is denied on the same day", async () => {
+  const store = new InMemoryActivityStore();
+
+  const first = await store.reserveDailySpending("agent-a", "XLM", "100", "100");
+  assert.equal(first, true);
+
+  const second = await store.reserveDailySpending("agent-a", "XLM", "1", "100");
+  assert.equal(second, false);
+});
+
+test("DAILY SPENDING: reservation succeeds after the UTC day boundary", async () => {
+  let current = new Date(Date.UTC(2024, 0, 1, 23, 59, 0));
+  const store = new InMemoryActivityStore({ now: () => current });
+
+  const beforeMidnight = await store.reserveDailySpending("agent-a", "XLM", "100", "100");
+  assert.equal(beforeMidnight, true);
+
+  const blocked = await store.reserveDailySpending("agent-a", "XLM", "1", "100");
+  assert.equal(blocked, false);
+
+  current = new Date(Date.UTC(2024, 0, 2, 0, 1, 0));
+
+  const afterMidnight = await store.reserveDailySpending("agent-a", "XLM", "100", "100");
+  assert.equal(afterMidnight, true);
+});
+
+test("DAILY SPENDING: getDailySpending resets to null after the UTC day boundary", async () => {
+  let current = new Date(Date.UTC(2024, 0, 1, 23, 59, 0));
+  const store = new InMemoryActivityStore({ now: () => current });
+
+  await store.reserveDailySpending("agent-a", "XLM", "100", "100");
+  const dayOne = await store.getDailySpending("agent-a", "XLM");
+  assert.equal(dayOne, "100");
+
+  current = new Date(Date.UTC(2024, 0, 2, 0, 1, 0));
+
+  const dayTwo = await store.getDailySpending("agent-a", "XLM");
+  assert.equal(dayTwo, null);
+});
+
+test("DAILY SPENDING: default now option is used when not provided", async () => {
+  const store = new InMemoryActivityStore();
+
+  const result = await store.reserveDailySpending("agent-a", "XLM", "50", "100");
+  assert.equal(result, true);
+
+  const spent = await store.getDailySpending("agent-a", "XLM");
+  assert.equal(spent, "50");
+});
+
+test("DAILY SPENDING: reservation at the daily limit is denied on the same day", async () => {
+  const store = new InMemoryActivityStore();
+
+  const first = await store.reserveDailySpending("agent-a", "XLM", "100", "100");
+  assert.equal(first, true);
+
+  const second = await store.reserveDailySpending("agent-a", "XLM", "1", "100");
+  assert.equal(second, false);
+});
+
+test("DAILY SPENDING: reservation succeeds after the UTC day boundary", async () => {
+  let current = new Date(Date.UTC(2024, 0, 1, 23, 59, 0));
+  const store = new InMemoryActivityStore({ now: () => current });
+
+  const beforeMidnight = await store.reserveDailySpending("agent-a", "XLM", "100", "100");
+  assert.equal(beforeMidnight, true);
+
+  const blocked = await store.reserveDailySpending("agent-a", "XLM", "1", "100");
+  assert.equal(blocked, false);
+
+  current = new Date(Date.UTC(2024, 0, 2, 0, 1, 0));
+
+  const afterMidnight = await store.reserveDailySpending("agent-a", "XLM", "100", "100");
+  assert.equal(afterMidnight, true);
+});
+
+test("DAILY SPENDING: getDailySpending resets to null after the UTC day boundary", async () => {
+  let current = new Date(Date.UTC(2024, 0, 1, 23, 59, 0));
+  const store = new InMemoryActivityStore({ now: () => current });
+
+  await store.reserveDailySpending("agent-a", "XLM", "100", "100");
+  const dayOne = await store.getDailySpending("agent-a", "XLM");
+  assert.equal(dayOne, "100");
+
+  current = new Date(Date.UTC(2024, 0, 2, 0, 1, 0));
+
+  const dayTwo = await store.getDailySpending("agent-a", "XLM");
+  assert.equal(dayTwo, null);
+});
+
+test("DAILY SPENDING: default now option is used when not provided", async () => {
+  const store = new InMemoryActivityStore();
+
+  const result = await store.reserveDailySpending("agent-a", "XLM", "50", "100");
+  assert.equal(result, true);
+
+  const spent = await store.getDailySpending("agent-a", "XLM");
+  assert.equal(spent, "50");
+});

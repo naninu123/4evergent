@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import type {
   ActivityRecord,
   AgentIntent,
@@ -215,7 +216,7 @@ export class SQLiteActivityStore implements ActivityStore {
    * Concurrent calls are serialized by SQLite's row-level locking. The PRIMARY KEY
    * (agent_id, asset, day) ensures one row per asset per day.
    */
-  async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now = new Date()): Promise<boolean> {
+  async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now: Date = new Date()): Promise<boolean> {
     const amountNum = parseFloat(amount);
     const limitNum = parseFloat(limit);
     if (isNaN(amountNum) || isNaN(limitNum)) return false;
@@ -259,7 +260,11 @@ export class SQLiteActivityStore implements ActivityStore {
     }
   }
 
-  async getDailySpending(agentId: string, asset: string, now = new Date()): Promise<number | null> {
+  /**
+   * Returns the total reserved for the current UTC day, or null if no
+   * reservation exists for that (agent, asset, day) tuple.
+   */
+  async getDailySpending(agentId: string, asset: string, now: Date = new Date()): Promise<number | null> {
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
       .toISOString().slice(0, 10);
     const row = this.db
