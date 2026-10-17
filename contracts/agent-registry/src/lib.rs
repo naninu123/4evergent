@@ -34,13 +34,13 @@ use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, 
 const MAX_ID_LEN: u32 = 64;
 
 /// Max accepted length of `display_name`, in bytes.
-const MAX_DISPLAY_NAME_LEN: u32 = 128;
+pub const MAX_DISPLAY_NAME_LEN: u32 = 128;
 
 /// Max number of entries in `capabilities`.
-const MAX_CAPABILITIES: u32 = 32;
+pub const MAX_CAPABILITIES: u32 = 32;
 
 /// Max accepted length of a single capability string, in bytes.
-const MAX_CAPABILITY_LEN: u32 = 32;
+pub const MAX_CAPABILITY_LEN: u32 = 32;
 
 #[contracttype]
 #[derive(Clone)]

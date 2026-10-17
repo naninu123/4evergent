@@ -132,10 +132,10 @@ Public (no authentication). Returns `{"status":"ok","signerAccountId":"G..."}`.
 
 Create an agent. Auth: any authenticated owner.
 
-Body: `{ "displayName": string (required, ≤100 chars, trimmed), "description"?: string (optional, ≤500 chars), "capabilities"?: string[] (optional, ≤32 entries, each ≤32 chars, trimmed, non-empty, unique), "stellarAddress"?: string }`
+Body: `{ "displayName": string (required, ≤100 chars, trimmed), "description"?: string (optional, ≤2000 chars), "capabilities"?: string[] (optional, ≤32 entries, each ≤32 chars, trimmed, non-empty, unique), "stellarAddress"?: string }`
 
 - `201` → `{ "agent": AgentRecord }` (bound to caller's `ownerId`)
-- `400` → invalid JSON / missing `displayName` / `displayName` too long (>100 chars) / `description` not a string or too long (>500 chars) / `capabilities` not string array, too many entries (>32), entry too long (>32 chars), empty entry after trimming, or duplicate entries / `stellarAddress` not a string
+- `400` → invalid JSON / missing `displayName` / `displayName` too long (>100 chars) / `description` not a string or too long (>2000 chars) / `capabilities` not string array, too many entries (>32), entry too long (>32 chars), empty entry after trimming, or duplicate entries / `stellarAddress` not a string
 
 ### GET /agents
 
@@ -144,6 +144,46 @@ List caller's agents. Returns `{ "agents": AgentRecord[] }`.
 ### GET /agents/:id
 
 Get one agent (owner-scoped). `404` if not found or not owned.
+
+### PATCH /agents/:id
+
+General metadata update for an agent (owner-scoped). Companion to
+`PATCH /agents/:id/status`, which remains the only way to change `status`.
+
+Body: any subset of the mutable fields below; at least one field is
+required. Unknown fields are rejected with `400` (strict validation — the
+caller must not be able to silently think a typo was applied).
+
+| Field | Type | Cap | Notes |
+|-------|------|-----|-------|
+| `displayName` | string | ≤100 chars, trimmed, non-empty | same cap as `POST /agents` |
+| `description` | string | ≤2000 chars | optional; trimmed |
+| `capabilities` | string[] | ≤32 entries, each ≤32 chars | trimmed, non-empty, unique |
+
+Not mutable on this route:
+
+- `status` — rejected with `400`. Use `PATCH /agents/:id/status`.
+- `stellarAddress` — rejected with `400`. The signer address is immutable
+  after creation because changing it would retarget the agent's signing
+  authority without a corresponding on-chain rotation flow. A future
+  rotation endpoint would need its own authorization and audit trail.
+- `metadata` — rejected with `400`. Reserved for system annotations.
+
+Responses:
+
+- `200` → `{ "agent": AgentRecord }` — the updated agent
+- `400` → invalid JSON / no mutable fields / validation failure /
+  attempt to patch an immutable field / unknown field
+- `404` → not found or not owned
+
+Example:
+
+```bash
+curl -X PATCH https://api.example/agents/agent_123 \
+  -H 'Authorization: Bearer <placeholder-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"displayName":"Treasury Bot","capabilities":["payments"]}'
+```
 
 ### PATCH /agents/:id/status
 
@@ -228,7 +268,7 @@ Raw XDR in body → `400` with `{"message": ...}`.
 ### GET /approvals
 
 List caller's approvals (most recent 50). Query: `?status=<status>`
-optional filter. Returns `{ "approvals": ApprovalRecord[] }`.
+foptional filter. Returns `{ "approvals": ApprovalRecord[] }`.
 
 ### GET /agents/:id/approvals
 
@@ -269,7 +309,7 @@ The validator also accepts JSON numbers for these fields. Amounts must be finite
 thresholds may be zero or greater.
 
 | Field | Type | Meaning and format | Default |
-|---|---|---|---|
+|-------|------|-------------------|---------|
 | `maxTxAmount` | `Record<string, string>` | Per-transaction maximum, keyed by policy asset identifier. Each configured value must be positive. | `{ "XLM": "100" }` |
 | `dailySpendingLimit` | `Record<string, string>` | Per-agent daily limit, keyed by policy asset identifier. Each value must be non-negative. | `{ "XLM": "500" }` |
 | `allowedAssets` | `string[]` | Asset identifiers permitted by the policy. An empty array disables this allowlist check. | `["XLM"]` |
@@ -285,9 +325,9 @@ the policy engine's normalized asset names: `XLM` for native XLM and
 [`PaymentAsset` representation](capabilities.md#asset-representation): native
 XLM has no issuer, while an issued asset is identified by its code and issuer.
 For trustline intents, the engine's identifier is
-`trustline:CODE:ISSUER`. When an exact per-asset spending-limit key is absent,
+`+trustline:CODE:ISSUER`. When an exact per-asset spending-limit key is absent,
 the engine also supports a `native` fallback key. See
-[`extractAsset` and the policy checks](../packages/policy/src/engine.ts).
+[`extractAsset` and the policy checks](hrttps://github.com/naninu123/4evergent/blob/main/packages/policy/src/engine.ts).
 
 `approvalThreshold` is retained as a compatibility alias. Normalization copies
 it to `requireHumanApprovalForAmountAbove` when the latter is omitted, and copies
@@ -295,8 +335,8 @@ the canonical value back when only the canonical field is supplied. If both are
 provided with different values, the engine uses
 `requireHumanApprovalForAmountAbove`; it compares the transaction amount with
 `>=`, so an amount exactly at that effective threshold requires approval. See
-[`normalizePolicyRules`](../packages/policy/src/validation.ts) and the
-[approval check](../packages/policy/src/engine.ts). The zero-value validation
+[`normalizePolicyRules`](https://github.com/naninu123/4evergent/blob/main/packages/policy/src/validation.ts) and the
+[approval check](https://github.com/naninu123/4evergent/blob/main/packages/policy/src/engine.ts). The zero-value validation
 boundary is tracked separately in [PR #101](https://github.com/naninu123/4evergent/pull/101).
 
 Example complete request body using the defaults:
@@ -318,316 +358,3 @@ Example complete request body using the defaults:
   "requireHumanApprovalForAmountAbove": "50"
 }
 ```
-
-The field types and defaults come from [`PolicyRules` and `DEFAULT_RULES`](../packages/policy/src/types.ts);
-the accepted values and the invalid-policy response are defined by
-[`validatePolicyRules`](../packages/policy/src/validation.ts).
-
-### GET /agents/:id/policy
-
-Get the agent's effective policy rules (owner-scoped). Returns
-`{ "agentId", "policy": PolicyRules, "version": number, "updatedAt" }`.
-Agents without a custom policy return `DEFAULT_RULES` with `version: 0`.
-
-### PUT /agents/:id/policy
-
-Set the agent's policy (owner-scoped). Body: a `PolicyRules` object.
-Validated by `validatePolicyRules`; normalized before storage.
-
-- `200` → `{ "agentId", "policy", "version" }`
-- `400` → `{"error":"invalid policy","details":[...]}` / invalid JSON /
-  body not an object
-
----
-
-## Schedules
-
-### POST /agents/:id/schedules
-
-Create a schedule (owner-scoped). Body:
-
-`{ "intent": AgentIntent, "scheduleExpression": "<cron-like>",
-"timezone"?: string (default "UTC") }`
-
-Intent and expression are validated (`validateScheduleIntent`,
-`validateScheduleExpression`); invalid input → `400` with the
-validator's error message. `201` → `{ "schedule": ScheduleRecord }`.
-
-### GET /agents/:id/schedules
-
-List schedules for an agent (owner-scoped). Query: `?limit=`
-(default 50, clamped 1–100). Returns `{ "agentId", "schedules": [] }`.
-
-### GET /agents/:id/schedules/:scheduleId
-
-Single schedule (owner-scoped). Returns `{ "schedule": ScheduleRecord }`.
-
-### PATCH /agents/:id/schedules/:scheduleId
-
-Update a schedule's `scheduleExpression` (re-validated against the
-schedule's timezone). `200` → `{ "schedule" }`.
-
-### DELETE /agents/:id/schedules/:scheduleId
-
-Delete a schedule. `200` → `{ "deleted": true }`.
-
-### POST /agents/:id/schedules/:scheduleId/pause | /resume | /disable
-
-Transition schedule status (`paused` / `active` / `disabled`).
-`200` → `{ "schedule" }`.
-
----
-
-## Executions
-
-Execution records are created when an approved intent is enqueued for
-on-chain execution (retry, dead-letter, reconciliation).
-
-### GET /agents/:id/executions
-
-List executions for an agent (owner-scoped). Query: `?limit=`
-(default 50, clamped 1–100). Returns `{ "agentId", "executions": [] }`.
-
-### GET /executions/:id
-
-Single execution (owner-scoped via `getForOwner`). Returns
-`{ "execution": ExecutionRecord }`.
-
-### POST /executions/:id/retry
-
-Retry a `failed` or `dead_letter` execution. Requires the execution
-queue to be enabled.
-
-- `200` → `{ "execution", "message": "execution queued for retry" }`
-- `409` → wrong status / max retries reached / state conflict
-- `404` → not found / queue not enabled
-
-### POST /executions/:id/cancel
-
-Cancel a `queued` or `executing` execution. Requires the queue.
-
-- `200` → `{ "execution", "message": "execution cancelled" }`
-- `409` → wrong status / conflict
-- `404` → not found / queue not enabled
-
-### GET /agent-queue
-
-Queue summary for the caller's executions. Returns
-`{ "running": boolean, "byStatus": Record<string, number> }`.
-`404` with `{"error":"execution queue not enabled"}` if the queue is off.
-
----
-
-## Dashboard (owner-scoped listing endpoints)
-
-These three endpoints were added as dashboard convenience routes to eliminate
-N+1 fetch patterns. All are owner-scoped: every request must be authenticated
-and only returns data belonging to the authenticated `ownerId`.
-
-### GET /activity
-
-List all activity records across every agent owned by the caller.
-
-**Auth:** required (owner-scoped).
-
-Query parameters:
-
-| Parameter | Default | Max | Description |
-|---|---|---|---|
-| `limit` | `50` | `100` | Maximum number of records to return. Values outside 1–100 are clamped. |
-
-Response `200`:
-
-```json
-{
-  "activity": [ActivityRecord]
-}
-```
-
-`ActivityRecord` fields are defined in `packages/shared/src/types.ts`.
-
----
-
-### GET /agents/:id/spending
-
-Return the current day's spending breakdown for a single agent,
-computed from the agent's active policy rules and the day's reserved
-spending totals.
-
-**Auth:** required (owner-scoped). `404` if the agent is not found or not
-owned by the caller.
-
-Response `200`:
-
-```json
-{
-  "agentId": "<id>",
-  "spending": {
-    "XLM": {
-      "used": 12.5,
-      "limit": "500",
-      "remaining": 487.5
-    }
-  }
-}
-```
-
-The `spending` value is a `Record<string, { used: number; limit: string; remaining: number }>`.
-Each key is a policy asset identifier (e.g. `XLM`, `CODE:ISSUER`). Only
-assets listed in the agent's `dailySpendingLimit` policy appear in the
-response. `remaining` is clamped to `0` — it will never be negative.
-
----
-
-### GET /overview/attention
-
-Return headline counters for items that need the owner's attention.
-All counts are owner-scoped — they reflect the authenticated owner's
-data only.
-
-**Auth:** required (owner-scoped).
-
-Response `200`:
-
-```json
-{
-  "pendingApprovals": 3,
-  "failedExecutions": 1,
-  "deadLetterExecutions": 0,
-  "retryingExecutions": 2,
-  "stuckExecutions": 0
-}
-```
-
-| Field | Description |
-|---|---|
-| `pendingApprovals` | Approvals in `pending_approval` state owned by the caller. |
-| `failedExecutions` | Executions in `failed` state. |
-| `deadLetterExecutions` | Executions in `dead_letter` state. |
-| `retryingExecutions` | Executions in `queued` state (awaiting retry). |
-| `stuckExecutions` | Executions in `executing` state (may be hung). |
-
----
-
-## Notes
-
-- Response shapes above are the primary success shapes; record fields
-  (`AgentRecord`, `ActivityRecord`, `ApprovalRecord`, `ScheduleRecord`,
-  `ExecutionRecord`, `PolicyRules`) are defined in
-  `packages/shared/src/types.ts` and `packages/database/src/*-types.ts`.
-- This API is served by `apps/api` (`pnpm --filter @4evergent/api start`,
-  default port 3000). Configuration via environment — see
-  [testnet.md](testnet.md) and `.env.example`.
-
----
-
-## Hosted runtime (production deployment)
-
-The API is a **long-running, stateful Node.js service**. It is not a serverless
-function and does not support scale-to-zero. Any hosting choice must satisfy
-the requirements below; this document does not endorse a specific provider.
-
-### Runtime requirements
-
-- **Node.js 22 or newer.** `apps/api` and the `@4evergent/database` stores use
-  the built-in `node:sqlite` module (Node 22+). The repository pins
-  `pnpm@10.34.5` (root `packageManager`) and Node 22 (`.nvmrc`).
-- **One instance only.** Sequence-sensitive Stellar submission is serialized by
-  an in-process coordinator (`AccountSequenceCoordinator`), and the execution
-  queue and reconciler run as in-process timers. Running two instances against
-  the same database would allow duplicate workers and conflicting sequence
-  numbers. Do not autoscale horizontally.
-
-### Required environment
-
-| Variable | Required | Notes |
-|---|---|---|
-| `STELLAR_TESTNET_SECRET_KEY` | yes | Testnet signing key, read at startup by `TestnetLocalSigner`. Never bake into an image. |
-| `STELLAR_HORIZON_URL` | no | Defaults to `https://horizon-testnet.stellar.org`. **Must contain `testnet`** or startup fails. |
-| `HOST` | yes in a container | Bind address. Use `0.0.0.0` to be reachable outside the container/network namespace. Defaults to `127.0.0.1` (loopback only). |
-| `PORT` | usually | Defaults to `3000`. Most platforms inject this. |
-| `DATABASE_PATH` | yes in production | SQLite file path. Omit it and all records live in memory and are lost on restart. Mount a **persistent** volume at this path. |
-| `API_KEYS` | yes unless deliberately public | `key:ownerId[:subject]`, comma-separated. Enables `ProductionApiKeyAuthProvider`; every protected endpoint then requires `Authorization: Bearer <key>`. |
-| `CORS_ORIGIN` | when the frontend is cross-origin | Comma-separated exact browser origins. Unset ⇒ no `Access-Control-Allow-Origin` header ⇒ browsers block the calls. |
-| `LIVE_SUBMIT` | no | `1` enables real Testnet submission. Off by default. |
-| `ALLOW_DEV_AUTH` | no | See "Authentication fail-closed" below. |
-
-### Authentication fail-closed
-
-Development auth (`DevAuthProvider`) authenticates **every** request as a single
-default owner with no credentials. To keep local development simple while
-preventing an accidental public exposure, startup refuses to run when:
-
-- `HOST` is not loopback (`127.0.0.1`, `localhost`, `::1`), **and**
-- `API_KEYS` is not set, **and**
-- `ALLOW_DEV_AUTH` is not `1`.
-
-That combination exits with a `FATAL` error rather than serving an
-unauthenticated API on a public interface. Setting `ALLOW_DEV_AUTH=1` is an
-explicit operator opt-in and must not be used for a real deployment.
-
-### Persistent filesystem
-
-`DATABASE_PATH` must live on storage that survives restarts and redeploys —
-a container volume or attached disk. An ephemeral container filesystem loses
-agents, activities, approvals, schedules, executions, and policy config on every
-restart, and the SQLite file cannot be reliably shared between instances.
-
-### Background workers
-
-`apps/api/src/server.ts` starts, in-process:
-
-- an **execution queue** (polls for due executions every 10s, with retry and
-  dead-letter semantics), and
-- a **transaction status reconciler** (polls Horizon every 30s for submitted
-  transactions).
-
-Startup also runs `ExecutionRecoveryService.recover()` to re-queue records left
-in `executing` by an unclean shutdown. These timers require a process that stays
-alive; a platform that freezes or suspends idle processes will delay execution
-and reconciliation. Note also that the process has no `SIGTERM`/`SIGINT` handler,
-so a platform that stops hard on shutdown can interrupt in-flight work — the
-startup recovery pass is what repairs that on the next boot.
-
-### Not supported: serverless and scale-to-zero
-
-This API must not be deployed to a request-scoped serverless or scale-to-zero
-platform. The blockers are structural, not configuration:
-
-- file-backed SQLite (no shared database service),
-- long-lived in-process timers (queue, reconciler, scheduler),
-- in-process sequence serialization for Stellar submissions,
-- a persistent single-instance process model.
-
-Deploy it as a long-running service with a persistent volume. The Dockerfile in
-`apps/api/Dockerfile` builds a provider-neutral image for that purpose:
-
-```
-docker build -f apps/api/Dockerfile -t 4evergent-api .
-```
-
-It runs the repository's own start script (`pnpm --filter @4evergent/api start`
-→ `node apps/api/dist/server.js`) and takes all configuration from the runtime
-environment. No provider-specific configuration is included.
-
-### Frontend integration
-
-The dashboard (`apps/web`) is a static Vite SPA. Set `VITE_API_BASE` at build
-time to the API's public origin, and set the API's `CORS_ORIGIN` to the
-frontend's origin. The two are configured independently — the frontend must not
-rely on same-origin `/api` proxying. See `.env.example`.
-### Data retention
-
-The server sweeps expired `auth_sessions` and old `daily_spending` reservations
-once per day by default. Expired session rows are retained for 30 days after
-`expires_at`; spending rows are retained for 90 UTC days. Rows are deleted in
-batches of at most 500 per table, using the expiry and day indexes, so each
-autocommit statement has bounded work and does not hold a long-running write
-transaction. A sweep logs the number removed from each table.
-
-Configure the policy with `AUTH_SESSION_RETENTION_DAYS`,
-`DAILY_SPENDING_RETENTION_DAYS`, and `DATA_RETENTION_INTERVAL_MS`. Set either
-table's day window to `0` to keep its rows forever, or set
-`DATA_RETENTION_ENABLED=0` to disable the worker. Session retention begins
-after expiration; a live session is never removed. Daily-spending rows for the
-cutoff UTC date or newer remain available, including the current day.

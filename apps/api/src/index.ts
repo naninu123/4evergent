@@ -662,6 +662,9 @@ export async function createApiServer(options: ServerOptions) {
     if (method === "PATCH" && /^\/agents\/[^/]+\/status$/.test(url)) {
       return handleUpdateAgentStatus(requestScopedCtx, req, res);
     }
+    if (method === "PATCH" && /^\/agents\/[^/]+$/.test(url)) {
+      return handleUpdateAgent(requestScopedCtx, req, res);
+    }
     if (method === "GET" && /^\/agents\/[^/]+\/schedules(\?.*)?$/.test(url)) {
       return handleListSchedules(requestScopedCtx, req, res);
     }
@@ -1007,6 +1010,133 @@ export async function createApiServer(options: ServerOptions) {
     const agent = await agentStore.update(agentId, { status: status as any });
     if (!agent) return json(res, { error: "not found" }, 404);
     return json(res, { id: agent.id, status: agent.status });
+  }
+
+  // PATCH /agents/:id — general metadata update for displayName, description,
+  // and capabilities. Owner-scoped: a non-owner sees 404 (matching the
+  // authorization pattern used by the other agent routes).
+  //
+  // Non-obvious decisions:
+  // - `status` is REJECTED on this route (400). Status has its own dedicated
+  //   endpoint (PATCH /agents/:id/status) with its own authorization check
+  //   (canChangeAgentStatus); allowing it here would silently widen that
+  //   surface. Callers must use the status endpoint.
+  // - `stellarAddress` is NOT mutable via this route. Changing the signer
+  //   address has security implications (it changes which key authorizes
+  //   on-chain actions for the agent), so it is intentionally excluded and
+  //   rejected with 400 if present.
+  // - Unknown fields are IGNORED (not rejected). This matches the lenient
+  //   body handling of the create handler and keeps forward compatibility.
+  // - Caps mirror the create handler and the on-chain registry
+  //   (MAX_CAPABILITIES = 32, MAX_CAPABILITY_LEN = 32 in
+  //   contracts/agent-registry/src/lib.rs).
+  async function handleUpdateAgent(ctx: RequestContext, req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)$/);
+    const agentId = match?.[1];
+    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
+    if (!allowed) return json(res, { error: "not found" }, 404);
+
+    // Confirm the agent actually exists for this owner before parsing the
+    // body, so a nonexistent agent returns 404 rather than a validation 400.
+    const existing = await agentStore.getForOwner(agentId, ctx.ownerId!);
+    if (!existing) return json(res, { error: "not found" }, 404);
+
+    let body: unknown;
+    try {
+      const text = await readBody(req);
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      return json(res, { error: "invalid JSON body" }, 400);
+    }
+
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return json(res, { error: "body must be a JSON object" }, 400);
+    }
+    const b = body as Record<string, unknown>;
+
+    // status belongs to PATCH /agents/:id/status — reject it here.
+    if (b.status !== undefined) {
+      return json(res, { error: "status cannot be updated via this endpoint; use PATCH /agents/:id/status" }, 400);
+    }
+
+    // stellarAddress is intentionally immutable via this route.
+    if (b.stellarAddress !== undefined) {
+      return json(res, { error: "stellarAddress is not mutable via this endpoint" }, 400);
+    }
+
+    const patch: Partial<Agent> = {};
+
+    if (b.displayName !== undefined) {
+      if (typeof b.displayName !== "string" || b.displayName.trim().length === 0) {
+        return json(res, { error: "displayName must be a non-empty string" }, 400);
+      }
+      if (b.displayName.trim().length > 100) {
+        return json(res, { error: "displayName must be 100 characters or fewer" }, 400);
+      }
+      patch.displayName = b.displayName.trim();
+    }
+
+    if (b.description !== undefined) {
+      if (typeof b.description !== "string") {
+        return json(res, { error: "description must be a string" }, 400);
+      }
+      if (b.description.length > 500) {
+        return json(res, { error: "description must be 500 characters or fewer" }, 400);
+      }
+      patch.description = b.description;
+    }
+
+    if (b.capabilities !== undefined) {
+      if (!Array.isArray(b.capabilities) || !b.capabilities.every((c) => typeof c === "string")) {
+        return json(res, { error: "capabilities must be an array of strings" }, 400);
+      }
+      if (b.capabilities.length > 32) {
+        return json(res, { error: "capabilities must be 32 entries or fewer" }, 400);
+      }
+      const trimmedCaps: string[] = [];
+      const seen = new Set<string>();
+      for (const cap of b.capabilities) {
+        const trimmed = cap.trim();
+        if (trimmed.length === 0) {
+          return json(res, { error: "capability entries cannot be empty" }, 400);
+        }
+        if (trimmed.length > 32) {
+          return json(res, { error: "capability entries must be 32 characters or fewer" }, 400);
+        }
+        if (seen.has(trimmed)) {
+          return json(res, { error: "capabilities must not contain duplicate entries" }, 400);
+        }
+        seen.add(trimmed);
+        trimmedCaps.push(trimmed);
+      }
+      patch.capabilities = trimmedCaps;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return json(res, { error: "no updatable fields provided" }, 400);
+    }
+
+    const agent = await agentStore.update(agentId, patch);
+    if (!agent) return json(res, { error: "not found" }, 404);
+
+    // Keep the in-memory map in sync for the session-scoped fast path.
+    agents.set(agent.id, agent);
+
+    return json(res, {
+      id: agent.id,
+      displayName: agent.displayName,
+      description: agent.description,
+      ownerId: agent.ownerId,
+      stellarAddress: agent.stellarAddress,
+      capabilities: agent.capabilities,
+      status: agent.status,
+      active: agent.active,
+      createdAt: agent.createdAt,
+      updatedAt: agent.updatedAt,
+    });
   }
 
   async function handleListSchedules(ctx: RequestContext, req: any, res: any) {
