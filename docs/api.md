@@ -170,7 +170,9 @@ Body: an `AgentIntent` union member (`packages/shared/src/types.ts`):
 
 Headers: optional `Idempotency-Key` (≤256 chars, scoped to owner+agent).
 Same key + same intent → returns the original activity (`200`).
-Same key + different intent → `409`.
+Same key + different intent → `409`. The key is honoured for a replay
+window of 24 hours by default; after that window the same key is treated
+as new. Configure the window with `IDEMPOTENCY_KEY_TTL_MS` (milliseconds).
 
 Agent status admission: the agent must be `active`. A `paused` or
 `disabled` agent rejects new intents before any activity, approval,
@@ -196,6 +198,31 @@ Response (success/denied): `{ "activityId", "agentId", "status",
 
 Raw XDR / transaction blobs in the body are rejected with `400`
 (typed intents only — no raw transaction acceptance by design).
+
+---
+
+## Idempotency-Key replay window
+
+`POST /agents/:id/intents` accepts an optional `Idempotency-Key` header
+(≤256 chars, scoped to `(ownerId, agentId, key)`). A key suppresses a
+duplicate execution only while it is inside its replay window. The
+default window is **24 hours** (`IDEMPOTENCY_KEY_TTL_MS=86400000`).
+
+Inside the window:
+
+- same key + same intent → `200` with the original activity, no new
+  execution and no new value movement;
+- same key + different intent → `409` "Idempotency-Key already used with
+  a different intent".
+
+After the window the key is treated as new and a fresh activity is
+created. Expiry removes only the key's suppression effect — the
+original activity record is never deleted, because the activity log is
+the decision audit trail.
+
+Set `IDEMPOTENCY_KEY_TTL_MS` to change the window (milliseconds). The
+default is deliberately conservative so a normal client retry cannot
+produce a duplicate execution.
 
 ---
 

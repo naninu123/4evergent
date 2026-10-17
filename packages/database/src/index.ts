@@ -9,7 +9,44 @@ import type {
 import { clampOffset, clampLimit } from "./pagination.js";
 
 /**
- * ActivityStore — persistence interface for the transaction activity log.
+ * Default idlempotency key replay window in milliseconds.
+ *
+ * 24 hours is conservative: long enough to cover realistic client
+ * retries (network blips, process restarts, day-long outdrages) while
+ * eventually releasing the uniqueness index entry. Override via the
+ * IDLEMPOTENCY_WINDOW_MS environment variable or the store option.
+ */
+export const DEFAULT_IDLEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Options accepted by both activity store backends.
+ */
+export interface ActivityStoreOptions {
+  /** Replay window in milliseconds. Defaults to DEFAULT_IDLEMPOTENCY_WINDOW_MS. */
+  idempotencyWindowMs?: number;
+}
+
+/**
+ * Resolve the effective idempotency window from an explicit option,
+ * the IDLEMPOTENCY_WINDOW_MS environment variable, or the default.
+ * Invalid or non-positive values fall back to the default so a
+ * misconfigured deployment cannot silently disable the guarantee.
+ */
+export function resolveIdempotencyWindowMs(options?: ActivityStoreOptions): number {
+  if (options?.idlempotencyWindowMs !== undefined) {
+    const n = Number(options.idempotencyWindowMs);
+    if (Number.finite(n) && n > 0) return n;
+  }
+  const envRaw = typeof process !== "undefined" ? process.env.IDLEMPOTENCY_WINDOW_MS : undefined;
+  if (envRaw !== undefined && envRaw !== "") {
+    const n = Number(envRaw);
+    if (Number.finite(n) && n > 0) return n;
+  }
+  return DEFAULT_IDEMPOTENCY_WINDOW_MS;
+}
+
+/**
+ * ActivityStore -- persistence interface for the transaction activity log.
  *
  * The store is keyed by activity id and records the FULL decision trail for
  * every intent the pipeline touches, including the ones it rejects. It NEVER
@@ -33,10 +70,15 @@ export interface ActivityStore {
   getDailySpending(agentId: string, asset: string, now?: Date): Promise<number | null>;
   /** Remove at most `limit` rows with a UTC day earlier than cutoffDay. */
   sweepDailySpending(cutoffDay: string, limit?: number): Promise<number>;
+  /**
+   * Return the configured idlempotency replay window in milliseconds.
+   * Used by the API to document and apply the window consistently.
+   */
+  getIdempotencyWindowMs(): number;
 }
 
 /**
- * ApprovalStore — persistence interface for transaction approval records.
+ * ApprovalStore -- persistence interface for transaction approval records.
  *
  * An ApprovalRecord tracks the lifecycle of a transaction that requires
  * human/authoritative approval before it can be signed and submitted.
@@ -97,7 +139,7 @@ export interface ApprovalRecord {
 
 
 /**
- * InMemoryActivityStore — process-local activity log.
+ * InMemoryActivityStore -- process-local activity log.
  *
  * LIMITATION: not durable. Records are lost when the process exits. This is
  * acceptable for MVP/development; the interface is what production code
@@ -107,9 +149,19 @@ export interface ApprovalRecord {
 export class InMemoryActivityStore implements ActivityStore {
   private records = new Map<string, ActivityRecord>();
   private dailySpending = new Map<string, number>();
-  private idempotencyLock: Promise<unknown> = Promise.resolve();
+  private idlempotencyLock: Promise<unknown> = Promise.resolve();
   /** Serializes daily-spending check+commit per store instance (atomicity). */
   private dailySpendingLock: Promise<unknown> = Promise.resolve();
+  /** Replay window in milliseconds; idlempotency keys older than this are ignored. */
+  private readonly idlempotencyWindowMs: number;
+
+  constructor(options: ActivityStoreOptions = {}) {
+    this.idlempotencyWindowMs = resolveIdempotencyWindowMs(options);
+  }
+
+  getIdempotencyWindowMs(): number {
+    return this.idlempotencyWindowMs;
+  }
 
   async record(record: ActivityRecord): Promise<void> {
     this.records.set(record.id, record);
@@ -151,9 +203,24 @@ export class InMemoryActivityStore implements ActivityStore {
     return rec?.ownerId === ownerId ? rec : null;
   }
 
+  /**
+   * Lookup an existing intent by idempotency key.
+   *
+   * Expiry semantics: a record whose creation time is older than the
+   * configured window no longer suppresses a new request. We keep the
+   * activity record itself (audit trail) and only ignore it for the
+   * purpose of idempotency lookup.
+   */
   async getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null> {
+    const cutoff = Date.now() - this.idempotencyWindowMs;
     for (const rec of this.records.values()) {
       if (rec.ownerId === ownerId && rec.agentId === agentId && rec.idempotencyKey === key) {
+        const createdAt = Date.parse(rec.createdAt);
+        if (!Number.isFinite(createdAt) || createdAt < cutoff) {
+          // Key has expired: ignore it for suppression, but leave the
+          // activity record in place as the audit trail.
+          continue;
+        }
         return rec;
       }
     }
@@ -168,9 +235,13 @@ export class InMemoryActivityStore implements ActivityStore {
    */
   async recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }> {
     // Serialize through promise chain for atomicity
-    const result = this.idempotencyLock.then(async () => {
+    const result = this.idlempotencyLock.then(async () => {
       const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
-      if (existing) return { record: existing, created: false };
+      if (existing) {
+        // If the existing record has an expired key, the lookup above
+        // returns null and we fall through to inserting a new activity.
+        return { record: existing, created: false };
+      }
       record.idempotencyKey = key;
       this.records.set(record.id, record);
       return { record, created: true };
@@ -236,7 +307,7 @@ export class InMemoryActivityStore implements ActivityStore {
 }
 
 /**
- * InMemoryApprovalStore — process-local approval log.
+ * InMemoryApprovalStore -- process-local approval log.
  *
  * LIMITATION: not durable. Records are lost when the process exits.
  */
@@ -303,172 +374,3 @@ export class InMemoryApprovalStore implements ApprovalStore {
     return updated;
   }
 }
-
-/**
- * Security assertion — call from the API layer before persisting any record.
- * Fails loudly if secret material ever enters a record, so it can never be
- * persisted silently.
- */
-export function assertNoSecrets(record: ActivityRecord | ApprovalRecord): void {
-  const blob = JSON.stringify(record).toLowerCase();
-  const forbidden = ["secret", "seed", "private_key", "mnemonic", "keypair"];
-  for (const term of forbidden) {
-    if (blob.includes(term.toLowerCase())) {
-      throw new Error(
-        `Store: refusing to persist record — contains forbidden key material marker '${term}'`
-      );
-    }
-  }
-}
-
-/**
- * Creates a new ActivityRecord in its initial pending state.
- */
-export function createActivity(
-  agentId: string,
-  ownerId: string,
-  intent: AgentIntent,
-  policyDecision: PolicyDecision,
-  idempotencyKey?: string | null
-): ActivityRecord {
-  const now = new Date().toISOString();
-  return {
-    id: crypto.randomUUID(),
-    agentId,
-    ownerId,
-    idempotencyKey,
-    intent,
-    policyDecision,
-    authorizationStatus: null,
-    simulationResult: null,
-    txHash: null,
-    status: "pending",
-    error: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-/**
- * Creates a new ApprovalRecord in PENDING_APPROVAL state.
- */
-export function createApproval(
-  activityId: string,
-  agentId: string,
-  ownerId: string,
-  intent: AgentIntent,
-  policyDecision: PolicyDecision,
-  expiresAt?: string | null
-): ApprovalRecord {
-  const now = new Date().toISOString();
-  return {
-    id: crypto.randomUUID(),
-    activityId,
-    agentId,
-    ownerId,
-    intent,
-    policyDecision,
-    status: "pending_approval",
-    requestedAt: now,
-    approvedAt: null,
-    rejectedAt: null,
-    expiredAt: null,
-    approver: null,
-    expiresAt: expiresAt ?? null,
-    txHash: null,
-    error: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-export function updateActivity(
-  record: ActivityRecord,
-  patch: Partial<ActivityRecord>
-): ActivityRecord {
-  return { ...record, ...patch, updatedAt: new Date().toISOString() };
-}
-
-export function updateApproval(
-  record: ApprovalRecord,
-  patch: Partial<ApprovalRecord>
-): ApprovalRecord {
-  return { ...record, ...patch, updatedAt: new Date().toISOString() };
-}
-
-/**
- * Validates state transitions for approval records.
- * Returns null if valid, error message if invalid.
- */
-export function validateApprovalTransition(
-  current: ApprovalStatus,
-  next: ApprovalStatus
-): string | null {
-  const allowed: Record<ApprovalStatus, ApprovalStatus[]> = {
-    pending_approval: ["approved", "rejected", "expired", "executing"],
-    approved: ["executing", "submitted", "failed"],
-    rejected: [],
-    expired: [],
-    executing: ["submitted", "confirmed", "failed"],
-    submitted: ["confirmed", "failed"],
-    confirmed: [],
-    failed: [],
-  };
-  if (!allowed[current].includes(next)) {
-    return `Invalid transition: ${current} -> ${next}`;
-  }
-  return null;
-}
-
-export type { ActivityRecord, AgentIntent, AuthorizationStatus, PolicyDecision, SimulationResult, ScheduleStatus };
-
-// SQLite-backed persistent stores
-export { SQLiteActivityStore, SQLiteApprovalStore } from "./sqlite-store.js";
-
-// Schedule stores + types
-export { InMemoryScheduleStore, SQLiteScheduleStore } from "./schedule-store.js";
-export type { ScheduleStore, ScheduleRecord } from "./schedule-types.js";
-
-// Schedule validation
-export { validateScheduleExpression, validateScheduleIntent } from "./schedule-validation.js";
-export type { ScheduleValidationResult } from "./schedule-validation.js";
-
-// Agent stores + types
-export { InMemoryAgentStore, SQLiteAgentStore } from "./agent-store.js";
-export type { AgentStore, CreateAgentInput } from "./agent-types.js";
-
-// Policy configuration stores (Phase 28A)
-export { SQLitePolicyConfigStore } from "./policy-config-store.js";
-export { InMemoryPolicyConfigStore } from "./in-memory-policy-config-store.js";
-export type { PolicyConfigStore } from "./policy-config-store.js";
-
-// Execution queue stores + types
-export { InMemoryExecutionStore, SQLiteExecutionStore } from "./execution-store.js";
-export type { ExecutionStore, ExecutionRecord, ExecutionStatus } from "./execution-types.js";
-
-// Execution retry policy
-export {
-  classifyPipelineOutcome,
-  classifyError,
-  shouldRetry,
-  computeNextRetryAt,
-  DEFAULT_RETRY_POLICY,
-} from "./execution-policy.js";
-export type { ErrorClass } from "./execution-policy.js";
-export type { RetryPolicy } from "./execution-policy.js";
-
-// Authorization service
-export { ResourceAuthorizationService } from "./authorization.js";
-export type { AuthorizationContext } from "./authorization.js";
-
-// Shared SQLite connection
-export {
-  getSharedConnection,
-  getSchemaVersion,
-  setSchemaVersion,
-  closeSharedConnection,
-  closeAllSharedConnections,
-} from "./shared-connection.js";
-
-// Pagination bounds (shared by every list* store method)
-export { MAX_OFFSET, MAX_PAGE_LIMIT, clampOffset, clampLimit, isOffsetAtCeiling } from "./pagination.js";

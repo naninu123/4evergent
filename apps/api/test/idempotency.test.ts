@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { setTimeout as sleep } from "node:timers/promises";
 import { createApiServer } from "../src/index.js";
 import { DevAuthProvider } from "@4evergent/shared";
 import type { Signer } from "@4evergent/stellar";
@@ -34,7 +35,7 @@ function makeAgent(id: string, ownerId: string) {
   };
 }
 
-async function startServer(opts?: { policyRules?: Partial<PolicyRules>; signer?: Signer; ownerId?: string; agentId?: string }) {
+async function startServer(opts?: { policyRules?: Partial<PolicyRules>; signer?: Signer; ownerId?: string; agentId?: string; idempotencyWindowMs?: number }) {
   const signer = opts?.signer ?? new MockSigner("test-agent");
   const ownerId = opts?.ownerId ?? "test";
   const agentId = opts?.agentId ?? "test-agent";
@@ -43,6 +44,7 @@ async function startServer(opts?: { policyRules?: Partial<PolicyRules>; signer?:
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer,
     policyRules: opts?.policyRules,
+    idempotencyWindowMs: opts?.idempotencyWindowMs,
     authProvider: new DevAuthProvider({ defaultOwnerId: ownerId }),
   });
   server.registerAgent(makeAgent(agentId, ownerId));
@@ -84,6 +86,113 @@ test("TEST A: same owner+agent+key → exactly 1 activity record", async () => {
     const existing = await store.getByIdempotencyKey("test", "test-agent", "idem-key-a");
     assert.ok(existing);
     assert.equal(existing?.id, body1.activityId);
+  } finally {
+    await close();
+  }
+});
+
+test("TEST F: same key inside the window returns the original activity", async () => {
+  const { baseUrl, close } = await startServer({ idempotencyWindowMs: 60_000 });
+  try {
+    const headers = { "Content-Type": "application/json", "Idempotency-Key": "idem-key-f" };
+    const res1 = await fetch(`${baseUrl}/agents/test-agent/intents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(INTENT_BODY),
+    });
+    assert.equal(res1.status, 202);
+    const body1 = await res1.json();
+
+    await sleep(50);
+
+    const res2 = await fetch(`${baseUrl}/agents/test-agent/intents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(INTENT_BODY),
+    });
+    assert.equal(res2.status, 200);
+    const body2 = await res2.json();
+    assert.equal(body1.activityId, body2.activityId);
+  } finally {
+    await close();
+  }
+});
+
+test("TEST G: same key after the window creates a new activity", async () => {
+  const { baseUrl, close } = await startServer({ idempotencyWindowMs: 50 });
+  try {
+    const headers = { "Content-Type": "application/json", "Idempotency-Key": "idem-key-g" };
+    const res1 = await fetch(`${baseUrl}/agents/test-agent/intents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(INTENT_BODY),
+    });
+    assert.equal(res1.status, 202);
+    const body1 = await res1.json();
+
+    await sleep(120);
+
+    const res2 = await fetch(`${baseUrl}/agents/test-agent/intents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(INTENT_BODY),
+    });
+    assert.equal(res2.status, 202);
+    const body2 = await res2.json();
+    assert.notEqual(body1.activityId, body2.activityId);
+  } finally {
+    await close();
+  }
+});
+
+test("TEST H: same key + different intent inside the window still returns 409", async () => {
+  const { baseUrl, close } = await startServer({ idempotencyWindowMs: 60_000 });
+  try {
+    const headers = { "Content-Type": "application/json", "Idempotency-Key": "idem-key-h" };
+    const res1 = await fetch(`${baseUrl}/agents/test-agent/intents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(INTENT_BODY),
+    });
+    assert.equal(res1.status, 202);
+
+    await sleep(50);
+
+    const differentIntent = { ...INTENT_BODY, amount: "999" };
+    const res2 = await fetch(`${baseUrl}/agents/test-agent/intents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(differentIntent),
+    });
+    assert.equal(res2.status, 409);
+  } finally {
+    await close();
+  }
+});
+
+test("TEST I: same key + different intent after the window is treated as new", async () => {
+  const { baseUrl, close } = await startServer({ idempotencyWindowMs: 50 });
+  try {
+    const headers = { "Content-Type": "application/json", "Idempotency-Key": "idem-key-i" };
+    const res1 = await fetch(`${baseUrl}/agents/test-agent/intents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(INTENT_BODY),
+    });
+    assert.equal(res1.status, 202);
+    const body1 = await res1.json();
+
+    await sleep(120);
+
+    const differentIntent = { ...INTENT_BODY, amount: "999" };
+    const res2 = await fetch(`${baseUrl}/agents/test-agent/intents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(differentIntent),
+    });
+    assert.equal(res2.status, 202);
+    const body2 = await res2.json();
+    assert.notEqual(body1.activityId, body2.activityId);
   } finally {
     await close();
   }

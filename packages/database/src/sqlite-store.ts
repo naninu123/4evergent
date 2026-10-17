@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { resolveIdempotencyWindowMs } from "./idempotency-window.js";
 import type {
   ActivityRecord,
   AgentIntent,
@@ -27,9 +28,11 @@ import type {
  */
 export class SQLiteActivityStore implements ActivityStore {
   private db: DatabaseSync;
+  private idempotencyWindowMs: number;
 
   constructor(dbPath: string) {
     this.db = getSharedConnection(dbPath);
+    this.idempotencyWindowMs = resolveIdempotencyWindowMs();
     this.initSchema();
   }
 
@@ -59,6 +62,9 @@ export class SQLiteActivityStore implements ActivityStore {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_idempotency
         ON activities(owner_id, agent_id, idempotency_key)
         WHERE idempotency_key IS NOT NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_activities_idempotency_created
+        ON activities(owner_id, agent_id, idempotency_key, created_at);
     `);
     // Phase 23: daily_spending table for atomic spending reservation
     try {
@@ -146,9 +152,12 @@ export class SQLiteActivityStore implements ActivityStore {
   }
 
   async getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null> {
+    const cutoff = new Date(Date.now() - this.idempotencyWindowMs).toISOString();
     const row = this.db
-      .prepare("SELECT * FROM activities WHERE owner_id = ? AND agent_id = ? AND idempotency_key = ?")
-      .get(ownerId, agentId, key);
+      .prepare(
+        "SELECT * FROM activities WHERE owner_id = ? AND agent_id = ? AND idempotency_key = ? AND created_at >= ?"
+      )
+      .get(ownerId, agentId, key, cutoff);
     return row ? rowToActivityRecord(row as unknown as ActivityRow) : null;
   }
 
@@ -197,6 +206,14 @@ export class SQLiteActivityStore implements ActivityStore {
     } catch (e: any) {
       // UNIQUE constraint violation — another caller won the race; return their record
       if (e?.message?.includes("UNIQUE") || e?.code === "ERR_SQLITE_CONSTRAINT") {
+        // The unique index is not time-aware, so a stale row (older than the
+        // replay window) can still block the INSERT. Clear the stale key so the
+        // retry can succeed, then re-check for a live winner.
+        this.db
+          .prepare(
+            "UPDATE activities SET idempotency_key = NULL WHERE owner_id = ? AND agent_id = ? AND idempotency_key = ? AND created_at < ?"
+          )
+          .run(record.ownerId, record.agentId, key, new Date(Date.now() - this.idempotencyWindowMs).toISOString());
         const winner = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
         if (winner) return { record: winner, created: false };
       }

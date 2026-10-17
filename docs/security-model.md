@@ -10,6 +10,7 @@
 | Funds sent to wrong/blacklisted destination | Allowed-destinations allowlist + destination format validation |
 | Excessive spending | Per-tx and daily spending limits; approval threshold |
 | Replay attacks | Stellar sequence numbers + timebounds on all transactions |
+| Duplicate intent submission | `Idempotency-Key` header with a bounded replay window (see below) |
 | Policy bypass via malformed intent | Strict schema validation before policy evaluation |
 | Signer bypass via direct invocation | Pipeline is the only public entry point; signer is not exposed to callers |
 | Secret leakage through API responses | Signer interface has no key-returning methods; activity store asserts no secrets |
@@ -113,6 +114,36 @@ Stellar's native sequence numbers are used. Each transaction includes:
 - Current account sequence number
 - Timebounds (valid window)
 - (Future) Memo for intent correlation
+
+## Idempotency-Key Replay Window
+
+`POST /agents/:id/intents` accepts an optional `Idempotency-Key` header. The
+key is scoped to `(owner_id, agent_id, key)` and suppresses duplicate
+executions within a bounded **replay window**.
+
+**What the window protects against:**
+- Accidental duplicate submissions from client retries (network timeouts,
+  dropped responses, at-least-once delivery) within the window.
+- Concurrent duplicate requests racing to create two activities for the same
+  intent, within the window.
+
+**What the window does NOT protect against:**
+- A client that retries with the same key **after** the window expires. The
+  key is treated as new and a fresh activity (and potentially a fresh value
+  movement) is created. Clients must not rely on the key as a permanent
+  deduplication token.
+- A client that reuses the same key for a **different** intent inside the
+  window. This is rejected with `409` (the existing same-key/different-intent
+  behaviour is preserved).
+- Adversarial replay of a captured request by a party that already holds
+  valid credentials. The window bounds the exposure but does not eliminate
+  it; authentication and authorization are the primary controls.
+
+The window's default duration and how to configure it are documented in
+`docs/api.md`. Expiry is a **lookup predicate**, not a deletion: the activity
+record (the audit trail) is never removed when a key expires — only the key's
+suppression effect lapses. See the ADR entry in `docs/architecture.md` for the
+chosen default and its justification.
 
 ## Spending Limits
 

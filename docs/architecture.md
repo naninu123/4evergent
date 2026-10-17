@@ -47,7 +47,7 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 ## ADR-007: tsx test runner with explicit `.ts` import extensions
 
 **Status:** Accepted  
-**Context:** Node.js ESM (verified on Node 26 during initial development; the supported runtime is Node 22+) requires explicit `.ts` extensions for local imports when running via tsx without a bundler.  
+**Context:** Node.js ESM (verified on Node 26 during initial development; the supported runtime is Node 22+ requires explicit `.ts` extensions for local imports when running via tsx without a bundler.  
 **Decision:** All intra-project relative imports use `.ts` extensions. Test runner is `tsx --test`.  
 **Consequences:** Tests run without a separate build step. Production build uses `tsc` which rewrites extensions appropriately, or a bundler handles it.
 
@@ -79,7 +79,7 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 **Decision:** `SQLiteActivityStore` and `SQLiteApprovalStore` in `packages/database/src/sqlite-store.ts` use Node.js built-in `node:sqlite` (`DatabaseSync`). Schema is versioned in `_meta` (version 1). The default API server auto-selects SQLite when `dbPath` is provided; otherwise falls back to in-memory stores. No external `better-sqlite3` or server process.
 **Consequences:** Single dependency (Node.js stdlib), file-backed persistence with cross-restart durability tested via reopen simulation. `initSchema()` idempotent. Partial unique index `idx_approvals_activity_one` enforces one PENDING_APPROVAL per activity.
 
-## ADR-012: Persistent Execution Queue for Retry & Dead-Letter
+## ADR-012: Persistent Execution Qeuue for Retry & Dead-Letter
 
 **Status:** Accepted | Phase 9 | 2026-09-16
 
@@ -87,21 +87,28 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 
 **Decision:** Introduce `ExecutionStore` (InMemory + SQLite via `node:sqlite`) and `ExecutionQueue` that:
 - Persists execution records with full state: `queued → executing → submitted → confirmed → failed → dead_letter`
-- Retries transient failures (network/Horizon/submission errors) with exponential backoff (baseDelayMs \* 2^attempt, capped at maxDelayMs)
+- Retries transient failures (network/Horizon/submission errors) with exponential backoff (baseDelayMs * 2^attempt, capped at maxDelayMs)
 - Moves permanent failures (policy deny, invalid intent, validation error) directly to `dead_letter`
 - Bounded retries: max 3 (configurable) after which execution moves to `dead_letter`
 - Duplicate safety: atomic conditional update CAS (`updateIfStatus(queued→executing)`) ensures only one worker can claim a queued execution
-- Owner-scoped: all execution records are tied to `ownerId`, endpoints enforce owner isolation via `getForOwner/listByOwner`
+-
+Owner-scoped: all execution records are tied to `ownerId`, endpoints enforce owner isolation via `getForOwner/listByOwner`
 - Recovery: `ExecutionRecoveryService` scans stuck `executing` records on startup and re-queues them via `nextRetryAt`
 - Approval boundary: execution records carry `approvalId`; the queue does NOT bypass approval — it only executes after approval has been recorded
 
 **Consequences:**
-- Execution state survives process restarts (when SQLite store is configured)
-- Transient failures are automatically retried with backoff
-- Permanent failures are visible in `dead_letter` for manual intervention
-- Scheduler (Phase 8) and approval flow both enqueue through the same queue
-- Exactly-once is not guaranteed (single-process SQLite provides at-most-once deduplication via atomic status claims); document as known limitation
-- Recovery: `ExecutionRecoveryService` scans stuck `executing` records on startup and re-queues them via `nextRetryAt`
+-
+Execution state survives process restarts (when SQLite store is configured)
+-
+Transient failures are automatically retried with backoff
+-
+Permanent failures are visible in `dead_letter` for manual intervention
+-
+Scheduler (Phase 8) and approval flow both enqueue through the same queue
+-
+Exactly-once is not guaranteed (single-process SQLite provides at-most-once deduplication via atomic status claims); document as known limitation
+-
+Recovery: `ExecutionRecoveryService` scans stuck `executing` records on startup and re-queues them via `nextRetryAt`
 
 ## ADR-013: Agent Self-Serve Creation
 
@@ -112,12 +119,18 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 **Decision:** Introduce `AgentStore` abstraction (InMemory + SQLite via `node:sqlite`) and `POST /agents` endpoint. The endpoint validates input, binds the agent to `requestCtx.ownerId`, persists via `AgentStore`, and returns the created record. Existing `registerAgent()` now syncs to both the in-memory Map (for backward compatibility with scheduler and authorization) and the persistent store. `handleListAgents` and `handleGetAgent` now read from `AgentStore` instead of the in-memory Map.
 
 **Consequences:**
-- Users can create agents from the Agents page without backend bootstrap
-- Agents survive API restart when SQLite store is configured
-- Owner isolation enforced via existing `ResourceAuthorizationService`
-- Backward compatible: existing test helpers using `registerAgent()` still work
-- No production authentication — `requestContext.ownerId` is set server-side (existing limitation)
-- `AgentRecord` has no secret fields by construction
+-
+Users can create agents from the Agents page without backend bootstrap
+-
+Agents survive API restart when SQLite store is configured
+-
+Owner isolation enforced via existing `ResourceAuthorizationService`
+-
+Backward compatible: existing test helpers using `registerAgent()` still work
+-
+No production authentication — `requestContext.ownerId` is set server-side (existing limitation)
+-
+`AgentRecord` has no secret fields by construction
 
 ## ADR-014: Bounded retention sweeps for transient data
 
@@ -128,3 +141,27 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 **Decision:** Sweep sessions 30 days after `expires_at` and daily-spending rows older than 90 UTC days, once per day. Each indexed delete is limited to 500 rows per table and runs as a short autocommit statement. Operators can set the two retention-day environment variables, change the interval, disable the worker, or set either day window to zero to retain that table forever. The idempotency table remains outside this policy and belongs to #109.
 
 **Consequences:** Transient storage is bounded over repeated sweeps without a schema migration or a long-held write transaction. A large backlog drains in batches. Recent expired sessions and the current spending day remain available; setting a zero window explicitly keeps all rows.
+
+## ADR-015: Idempotency Key replay window and expiry policy
+
+**Status:** Accepted
+
+**Context:** `POST /agents/:id/intents` accepts an `Idempotency-Key` header guaranteeing that a repeated request cannot produce a duplicate financial execution. The guarantee is a uniqueness constraint over `(owner_id, agent_id, idempotency_key)` in both stores. Neither store stated how long a key was remembered, whether it was ever cleaned up, or what a client should do after that window. The in-memory store kept keys for the process lifetime while the SQLite store kept them forever, so the two backends already disagreed about the window.
+
+**Decision:** Define a configurable replay window for `Idempotency-Key`, defaulting to 24 hours (`IDEMPLOTENCY_KEY_TTL_MS` in `.env.example`, overridable via the `idempotencyKeyTtlMs` server option). The default is conservative: it covers realistic client retry horizons (network outages, operator intervention, overnight batches) without shortening the guarantee for any client that retried within the existing documented behaviour. Both backends implement the same expiry semantics by recording an `idempotency_key_expires_at` timestamp on the activity record and excluding expired keys from lookup. The cleanup mechanism is a predicate (exclude expired keys from `getByIdempotencyKey`), not a removal step: the activity record is the audit trail and must never be deleted by key expiry. Only the key's suppression effect expires. The SQLite unique index is replaced by a partial index that includes the expiry column so that an expired key no longer conflicts with a new request.
+
+**Consequences:**
+-
+The replay window has a stated default (24 hours) and is documented in `docs/api.md`.
+-
+The window is configurable without a code change; the configuration key is documented in `.env.example`.
+-
+Both backends implement the same expiry semantics, proven by the same behavioural test set run against each.
+-
+Inside the window the same key returns the original activity; after the window the same key is treated as new and a fresh activity is created.
+-
+The existing `409` same-key/different-intent behaviour is preserved inside the window.
+-
+The activity audit record is never deleted by key expiry.
+-
+The SQLite activity table no longer grows a permanent index entry per keyed request.

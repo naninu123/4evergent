@@ -129,6 +129,13 @@ export interface ServerOptions {
     intervalMs?: number;
     instance?: import("@4evergent/stellar").TransactionStatusReconciler;
   };
+  /**
+   * Idempotency-Key replay window in milliseconds. A key older than this
+   * window no longer suppresses a new request. Defaults to 24 hours
+   * (86_400_000 ms) — long enough to cover realistic client retries.
+   * Overridable via the IDEMPOTENCY_KEY_TTL_MS environment variable.
+   */
+  idempotencyKeyTtlMs?: number;
 }
 
 export async function createApiServer(options: ServerOptions) {
