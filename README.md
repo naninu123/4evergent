@@ -6,6 +6,11 @@ An open-source framework for deploying AI agents that hold permissioned Stellar 
 
 > **Testnet-first.** No mainnet assumptions in the MVP. No project token. No speculative tokenomics.
 
+> **New here? Start with the walkthrough:**
+> [Your first agent, end to end](docs/tutorial-first-agent.md) — a clean
+> checkout to a working Testnet agent, with copy-pasteable commands for the
+> allow, requires-approval, and deny policy outcomes plus the execution record.
+
 ---
 
 ## Table of Contents
@@ -16,10 +21,11 @@ An open-source framework for deploying AI agents that hold permissioned Stellar 
 4. [Architecture](#architecture)
 5. [Security model](#security-model)
 6. [Local development](#local-development)
-7. [Testnet setup](#testnet-setup)
-8. [Adding a new agent capability](#adding-a-new-agent-capability)
-9. [Roadmap](#roadmap)
-10. [HTTP API reference and OpenAPI document](docs/api.md#openapi-document)
+7. [Your first agent (walkthrough)](docs/tutorial-first-agent.md)
+8. [Testnet setup](#testnet-setup)
+9. [Adding a new agent capability](#adding-a-new-agent-capability)
+10. [Roadmap](#roadmap)
+11. [HTTP API reference and OpenAPI document](docs/api.md#openapi-document)
 
 ---
 

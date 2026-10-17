@@ -19,6 +19,10 @@ cp .env.example .env
 pnpm build
 ```
 
+> **New to the codebase?** After the build, follow the
+> [first-agent walkthrough](docs/tutorial-first-agent.md): it exercises the API,
+> policy engine, approval queue, and execution pipeline end to end on Testnet.
+
 > **On a fresh checkout, run `pnpm build` before `pnpm typecheck`.**
 > Workspace packages resolve each other through their build output: e.g.
 > `packages/shared/package.json` points `types`/`main` at `./dist/index.*`, and
