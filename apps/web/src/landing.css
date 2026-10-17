@@ -860,7 +860,19 @@
 }
 
 @media (max-width: 560px) {
-  .lp-topbar-in { height: 56px; gap: 10px; }
+  .lp-topbar-in {
+    width: 100%;
+    min-width: 0;
+    min-height: 56px;
+    height: auto;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+  .lp-brand { min-width: 0; }
+  .lp-actions { flex: 0 0 auto; }
   .lp-topbar-actions .lp-ghost-sm { display: none; }
   .lp-solid, .lp-ghost { min-height: 44px; }
   .lp-solid-sm { padding: 10px 16px; font-size: 13px; }
