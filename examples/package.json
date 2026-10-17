@@ -1,0 +1,14 @@
+{
+  "name": "@4evergent/examples",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable examples for @4evergent/* packages. Not wired into CI — documentation only.",
+  "dependencies": {
+    "@4evergent/agent-core": "workspace:*",
+    "@4evergent/database": "workspace:*",
+    "@4evergent/policy": "workspace:*",
+    "@4evergent/shared": "workspace:*",
+    "@4evergent/stellar": "workspace:*"
+  }
+}
