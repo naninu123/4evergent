@@ -245,6 +245,13 @@ List activity records for an agent (owner-scoped).
 Query: `?limit=` (default 50, clamped 1–100).
 Returns `{ "agentId", "activity": ActivityRecord[] }`.
 
+### GET /schedules
+
+List the caller's schedules across all their agents (owner-scoped).
+Query: `?limit=` (default 50, clamped 1–100).
+Returns `{ "schedules": ScheduleRecord[] }`, where each schedule
+includes its owning `agentId`.
+
 ### GET /agents/:id/activity/:activityId
 
 Single activity record (owner-scoped). `404` if not found/not owned.

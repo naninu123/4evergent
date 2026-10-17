@@ -188,6 +188,11 @@ export async function createApiServer(options: ServerOptions) {
   // Any remaining `ctx` usage will fail loudly in development.
   void als;
 
+  // Global owner-scoped listing endpoints (N+1 elimination)
+  // GET /schedules returns the caller's schedules across all their agents.
+  // Owner isolation is enforced by the store query (listByOwner), never by
+  // post-filtering a capped list in the handler.
+
   // Phase 28A: Create policy resolver that loads agent-specific rules
   // Falls back to DEFAULT_RULES if no custom policy exists for the agent
   const getRules = async (agentId: string): Promise<PolicyRules> => {

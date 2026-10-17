@@ -111,7 +111,7 @@ Key guarantees:
 
 ## Local development
 
-```bash
+```
 # clone
 git clone https://github.com/naninu123/4evergent
 cd 4evergent
@@ -146,6 +146,7 @@ pnpm --filter @4evergent/api start
 
 # Or run directly
 node apps/api/dist/server.js
+
 ```
 
 The server starts on `http://localhost:3000`. See [docs/testnet.md](docs/testnet.md) for the full Testnet workflow including funding, simulation, and live submission (`LIVE_SUBMIT=1`).
@@ -217,8 +218,11 @@ curl -X POST http://localhost:3000/agents/<agent-id>/schedules \
     "timezone": "UTC"
   }'
 
-# List schedules
+# List schedules for one agent
 curl http://localhost:3000/agents/<agent-id>/schedules
+
+# List all of the caller's schedules across every agent they own
+curl http://localhost:3000/schedules?limit=50
 
 # Pause/resume/disable
 curl -X POST http://localhost:3000/agents/<agent-id>/schedules/<schedule-id>/pause
@@ -226,7 +230,7 @@ curl -X POST http://localhost:3000/agents/<agent-id>/schedules/<schedule-id>/res
 curl -X POST http://localhost:3000/agents/<agent-id>/schedules/<schedule-id>/disable
 ```
 
-Schedules are stored in SQLite (when `dbPath` is configured) or in-memory. The scheduler polls every 60 seconds by default. Failed schedules do not stop the scheduler.
+Schedules are stored in SQLite (when `dbPath` is configured) or in-memory. The scheduler polls every 60 seconds by default. Failed schedules do not stop the scheduler. The owner-scoped `GET /schedules` endpoint lists the caller's schedules across all of their agents and accepts an optional `?limit=` cap; see [docs/api.md](docs/api.md). The dashboard does not consume it yet — a follow-up UI issue is expected.
 
 ## Operator CLI
 
@@ -287,7 +291,7 @@ See [docs/cli.md](docs/cli.md) for full command reference.
 | 10 | Execution queue crash recovery | ✅ Shipped |
 | 11 | Agent self-serve creation | ✅ Shipped |
 | 12 | Trustline & non-XLM asset support | ✅ Shipped |
-| 13-18 | Reliability hardening (atomic claim, idempotency, ambiguous submission, pre-check, docs) | ✅ Shipped |
+| 13-18 | Reliability hardening (atomic claim, idompotency, ambiguous submission, pre-check, docs) | ✅ Shipped |
 | 19 | Operator CLI v1 (health, agent lifecycle, approval, execution) | ✅ Shipped |
 
 ---

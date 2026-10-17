@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { Keypair } from "@stellar/stellar-sdk";
 import { InMemoryExecutionStore, InMemoryScheduleStore, InMemoryApprovalStore, InMemoryActivityStore } from "@4evergent/database";
 import type { ExecutionStore, ExecutionRecord, ScheduleRecord, ApprovalStore, ApprovalRecord, ActivityStore, ActivityRecord } from "@4evergent/database";
+import type { AuthProvider } from "@4evergent/shared";
 
 declare const fetch: typeof globalThis.fetch;
 
@@ -42,7 +43,7 @@ const TEST_AGENT = {
   metadata: {},
 };
 
-async function startServer(opts?: { policyRules?: Partial<PolicyRules>; registerAgent?: boolean }) {
+async function startServer(opts?: { policyRules?: Partial<PolicyRules>; registerAgent?: boolean; authProvider?: AuthProvider }) {
   const executionStore = new InMemoryExecutionStore();
   const scheduleStore = new InMemoryScheduleStore();
   const approvalStore = new InMemoryApprovalStore();
@@ -53,7 +54,7 @@ async function startServer(opts?: { policyRules?: Partial<PolicyRules>; register
     signer: new MockSigner("test-agent"),
     policyRules: opts?.policyRules,
     deferExecution: true,
-    authProvider: new DevAuthProvider({ defaultOwnerId: "test" }),
+    authProvider: opts?.authProvider ?? new DevAuthProvider({ defaultOwnerId: "test" }),
     executionStore,
     scheduleStore,
     approvalStore,
@@ -105,6 +106,102 @@ test("GET /agents returns registered agents without secret fields", async () => 
     // No secret material in the response
     const json = JSON.stringify(res.body);
     assert.ok(!/secret|seed|private_key|mnemonic|keypair/i.test(json));
+  } finally {
+    await close();
+  }
+});
+
+// ===== GET /schedules (global owner-scoped listing) =====
+
+test("GET /schedules returns owner's schedules across all agents in single request", async () => {
+  const { baseUrl, close, scheduleStore } = await startServer();
+  try {
+    await scheduleStore.create(makeSchedule({ id: "sched-a", agentId: "test-agent" }));
+    await scheduleStore.create(makeSchedule({ id: "sched-b", agentId: "test-agent" }));
+
+    const res = await get(baseUrl, "/schedules");
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.body.schedules));
+    assert.equal(res.body.schedules.length, 2);
+    const ids = new Set(res.body.schedules.map((s: any) => s.id));
+    assert.ok(ids.has("sched-a"));
+    assert.ok(ids.has("sched-b"));
+
+    // Each schedule identifies its owning agent
+    for (const s of res.body.schedules) {
+      assert.equal(s.agentId, "test-agent");
+    }
+
+    // No secret material
+    const json = JSON.stringify(res.body);
+    assert.ok(!/secret|seed|private_key|mnemonic|keypair/i.test(json));
+  } finally {
+    await close();
+  }
+});
+
+test("GET /schedules does not return another owner's schedules", async () => {
+  const { baseUrl, close, scheduleStore } = await startServer();
+  try {
+    // Owner "test" has no schedules; "owner-b" has one
+    await scheduleStore.create(makeSchedule({ ownerId: "owner-b", id: "sched-other" }));
+    const res = await get(baseUrl, "/schedules");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.schedules.length, 0);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /schedules returns empty array when owner has no schedules", async () => {
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await get(baseUrl, "/schedules");
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.schedules, []);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /schedules respects limit", async () => {
+  const { baseUrl, close, scheduleStore } = await startServer();
+  try {
+    for (let i = 0; i < 5; i++) {
+      await scheduleStore.create(makeSchedule({ id: `sched-${i}` }));
+    }
+    const res = await get(baseUrl, "/schedules?limit=2");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.schedules.length, 2);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /schedules clamps oversized limit like sibling endpoints", async () => {
+  const { baseUrl, close, scheduleStore } = await startServer();
+  try {
+    for (let i = 0; i < 3; i++) {
+      await scheduleStore.create(makeSchedule({ id: `sched-clamp-${i}` }));
+    }
+    const res = await get(baseUrl, "/schedules?limit=999999");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.schedules.length, 3);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /agents/:id/schedules is unchanged by the global endpoint", async () => {
+  const { baseUrl, close, scheduleStore } = await startServer();
+  try {
+    await scheduleStore.create(makeSchedule({ id: "sched-agent-scoped", agentId: "test-agent" }));
+
+    const res = await get(baseUrl, "/agents/test-agent/schedules");
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.body.schedules));
+    assert.equal(res.body.schedules.length, 1);
+    assert.equal(res.body.schedules[0].id, "sched-agent-scoped");
   } finally {
     await close();
   }
