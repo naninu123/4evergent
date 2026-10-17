@@ -8,6 +8,11 @@
 
 ## Full Testnet Execution Workflow
 
+> **Guided tour:** for one end-to-end path (agent → policy → allow / approval /
+> deny → approve → execution → on-chain identity), start with
+> [`tutorial-first-agent.md`](tutorial-first-agent.md). The sections below are
+> the reference for each individual step.
+
 ### 1. Install dependencies
 
 ```bash
