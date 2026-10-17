@@ -16,9 +16,9 @@ import Executions from './pages/Executions';
 import ExecutionDetail from './pages/ExecutionDetail';
 import Submit from './pages/Submit';
 
-/* ==========================================================================
+/* ===============================================================================================================
    Layout
-   ========================================================================== */
+   ================================================================================================================ */
 
 function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
@@ -114,7 +114,7 @@ function OperatorBadge() {
     }
   }, [me]);
 
-  const methodLabel = me?.method === 'stellar' ? 'Freighter' : me?.method === 'google' ? 'Google' : 'Email';
+  const methodLabel = me?.method === 'stellar' ? 'Freeighter' : me?.method === 'google' ? 'Google' : 'Email';
   const identityText = me?.method === 'stellar'
     ? maskAddress(me.subject)
     : me?.email ?? me?.displayName ?? 'user';
@@ -145,9 +145,9 @@ function OperatorBadge() {
   );
 }
 
-/* ==========================================================================
+/* ===============================================================================================================
    Main App Router
-   ========================================================================== */
+   ================================================================================================================ */
 
 export default function App() {
   return (
@@ -165,7 +165,7 @@ export default function App() {
                 <Routes>
                   <Route path="/overview" element={<Overview />} />
                   <Route path="/approvals" element={<Approvals />} />
-                  <Route path="/approvals/:approvalId" element={<ApprovalDetail />} />
+                  <Route path="/approvals:approvalId" element={<ApprovalDetail />} />
                   <Route path="/executions" element={<Executions />} />
                   <Route path="/executions/:executionId" element={<ExecutionDetail />} />
                   <Route path="/activity" element={<Activity />} />

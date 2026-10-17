@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Keypair } from "@stellar/stellar-sdk";
+import { executeApproved } from "@4evergent/stellar";
 import type { Signer } from "@4evergent/stellar";
 import type { PolicyRules } from "@4evergent/shared";
 import type { AddressInfo } from "node:net";
@@ -326,6 +327,161 @@ test("approval: approve approval belonging to other agent — current impl allow
     // Anyone with the approvalId can approve — this is a known limitation
     const approve = await post(baseUrl, `/approvals/${intentRes.body.approvalId}/approve`, { approver: "anonymous" });
     assert.equal(approve.status, 200);
+  } finally {
+    await close();
+  }
+});
+
+test("approval: reject pending approval → activity reflects rejection and re-approve blocked", async () => {
+  const rules: Partial<PolicyRules> = {
+    maxTxAmount: { XLM: "1000" },
+    requireHumanApprovalForAmountAbove: "10",
+  };
+  const { baseUrl, close, store, approvals } = await startServer({ policyRules: rules });
+  try {
+    const intentRes = await post(baseUrl, "/agents/test-agent/intents", {
+      type: "payment",
+      asset: "XLM",
+      destination: Keypair.random().publicKey(),
+      amount: "50",
+      reason: "reject reflects activity test",
+    });
+    assert.equal(intentRes.status, 202);
+    assert.ok(intentRes.body.activityId);
+
+    const reject = await post(baseUrl, `/approvals/${intentRes.body.approvalId}/reject`, {});
+    assert.equal(reject.status, 200);
+    assert.equal(reject.body.status, "rejected");
+
+    // Approval status is rejected
+    const approval = await approvals.get(intentRes.body.approvalId);
+    assert.ok(approval);
+    assert.equal(approval!.status, "rejected");
+    assert.ok(approval!.rejectedAt);
+
+    // Linked activity reflects the rejection
+    const activity = await store.get(intentRes.body.activityId);
+    assert.ok(activity);
+    assert.equal(activity!.status, "rejected");
+    assert.equal(activity!.authorizationStatus, "denied_by_policy");
+
+    // Subsequent approve attempt is blocked (invalid transition)
+    const approve = await post(baseUrl, `/approvals/${intentRes.body.approvalId}/approve`, {});
+    assert.equal(approve.status, 409);
+    assert.match(approve.body.message, /cannot approve/);
+  } finally {
+    await close();
+  }
+});
+
+test("approval: reject endpoint records authenticated principal as rejecting actor", async () => {
+  const rules: Partial<PolicyRules> = {
+    maxTxAmount: { XLM: "1000" },
+    requireHumanApprovalForAmountAbove: "10",
+  };
+  const { baseUrl, close, approvals } = await startServer({ policyRules: rules });
+  try {
+    const intentRes = await post(baseUrl, "/agents/test-agent/intents", {
+      type: "payment",
+      asset: "XLM",
+      destination: Keypair.random().publicKey(),
+      amount: "50",
+      reason: "reject actor test",
+    });
+    assert.equal(intentRes.status, 202);
+
+    // Client-supplied approver/rejector must be ignored; DevAuthProvider
+    // resolves the authenticated principal to "dev-user".
+    const reject = await post(baseUrl, `/approvals/${intentRes.body.approvalId}/reject`, {
+      approver: "spoofed-client-value",
+      rejector: "spoofed-client-value",
+    });
+    assert.equal(reject.status, 200);
+    assert.equal(reject.body.status, "rejected");
+
+    const approval = await approvals.get(intentRes.body.approvalId);
+    assert.ok(approval);
+    assert.equal(approval!.status, "rejected");
+    assert.equal(approval!.approver, "dev-user");
+    assert.notEqual(approval!.approver, "spoofed-client-value");
+  } finally {
+    await close();
+  }
+});
+
+test("approval: approve expired approval → 410 and status becomes expired", async () => {
+  const rules: Partial<PolicyRules> = {
+    maxTxAmount: { XLM: "1000" },
+    requireHumanApprovalForAmountAbove: "10",
+  };
+  const { baseUrl, close, approvals } = await startServer({ policyRules: rules, deferExecution: true });
+  try {
+    const intentRes = await post(baseUrl, "/agents/test-agent/intents", {
+      type: "payment",
+      asset: "XLM",
+      destination: Keypair.random().publicKey(),
+      amount: "50",
+      reason: "expired approve test",
+    });
+    assert.equal(intentRes.status, 202);
+
+    // Force the approval into the past.
+    const approval = await approvals.get(intentRes.body.approvalId);
+    assert.ok(approval);
+    approval!.expiresAt = new Date(Date.now() - 60_000).toISOString();
+    await approvals.update(approval!);
+
+    const approve = await post(baseUrl, `/approvals/${intentRes.body.approvalId}/approve`, {});
+    assert.equal(approve.status, 410);
+    assert.match(approve.body.message, /expir/i);
+
+    const after = await approvals.get(intentRes.body.approvalId);
+    assert.ok(after);
+    assert.equal(after!.status, "expired");
+  } finally {
+    await close();
+  }
+});
+
+test("approval: executeApproved on expired approval → rejected with expiry reason and status expired", async () => {
+  const rules: Partial<PolicyRules> = {
+    maxTxAmount: { XLM: "1000" },
+    requireHumanApprovalForAmountAbove: "10",
+  };
+  const { baseUrl, close, store, approvals } = await startServer({ policyRules: rules, deferExecution: true });
+  try {
+    const intentRes = await post(baseUrl, "/agents/test-agent/intents", {
+      type: "payment",
+      asset: "XLM",
+      destination: Keypair.random().publicKey(),
+      amount: "50",
+      reason: "executeApproved expiry test",
+    });
+    assert.equal(intentRes.status, 202);
+
+    const approval = await approvals.get(intentRes.body.approvalId);
+    assert.ok(approval);
+    approval!.expiresAt = new Date(Date.now() - 60_000).toISOString();
+    await approvals.update(approval!);
+
+    const activity = await store.get(intentRes.body.activityId);
+    assert.ok(activity);
+
+    const result = await executeApproved({
+      approval: approval!,
+      activity: activity!,
+      approvals,
+      store,
+      signer: new MockSigner("test-agent"),
+      horizonUrl: "https://horizon-testnet.stellar.org",
+    } as any);
+
+    assert.equal(result.status, "rejected");
+    assert.match(String(result.reason ?? result.message ?? ""), /expir/i);
+
+    const after = await approvals.get(intentRes.body.approvalId);
+    assert.ok(after);
+    assert.equal(after!.status, "expired");
   } finally {
     await close();
   }
