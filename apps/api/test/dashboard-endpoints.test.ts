@@ -183,12 +183,18 @@ test("GET /overview/attention counts statuses for the authenticated owner only",
   }
 });
 
+test("GET /overview/attention documents the current 200-approval truncation baseline", async () => {
 test("GET /overview/attention returns the exact pendingApprovals count above 200 approvals", async () => {
   const { baseUrl, close, approvalStore } = await startServer();
   try {
     for (let index = 0; index < 205; index++) {
       await approvalStore.record(makeApproval("owner-a", `pending-${index}`));
     }
+
+    const response = await request(baseUrl, "/overview/attention");
+    assert.equal(response.status, 200);
+    // Baseline before issue #61: listByOwner is capped at 200, so this pins the current undercount.
+    assert.equal(response.body.pendingApprovals, 200);
     // Non-pending rows and another owner's rows must not affect the count.
     for (let index = 0; index < 3; index++) {
       await approvalStore.record(makeApproval("owner-a", `approved-${index}`, "approved"));
@@ -249,4 +255,5 @@ test("GET /agents/:id/spending returns 404 when the agent belongs to another own
   } finally {
     await close();
   }
+});
 });

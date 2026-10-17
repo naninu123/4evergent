@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import {
   SQLiteScheduleStore,
   InMemoryScheduleStore,
+  closeSharedConnection,
 } from "../src/index.js";
 import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
 
@@ -65,6 +66,7 @@ test("SQLite: create/get schedule round-trips", async () => {
     assert.equal(got!.scheduleExpression, schedule.scheduleExpression);
     store.close();
   } finally {
+    closeSharedConnection(path);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -160,6 +162,7 @@ test("SQLite: schedule survives reopen", async () => {
     assert.equal(got!.agentId, schedule.agentId);
     store2.close();
   } finally {
+    closeSharedConnection(path);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -237,6 +240,7 @@ test("SQLite: update preserves all fields except scheduleExpression and nextRunA
 
     store.close();
   } finally {
+    closeSharedConnection(path);
     rmSync(dir, { recursive: true, force: true });
   }
 });

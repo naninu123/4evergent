@@ -12,6 +12,7 @@ import {
   createApproval,
   assertNoSecrets,
   validateApprovalTransition,
+  closeAllSharedConnections,
   type ActivityStore,
   type ApprovalStore,
   type ApprovalStatus,
@@ -192,7 +193,10 @@ runStoreTests("SQLite", () => {
   return {
     activity: new SQLiteActivityStore(path),
     approval: new SQLiteApprovalStore(path),
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    cleanup: () => {
+      closeAllSharedConnections();
+      rmSync(dir, { recursive: true, force: true });
+    },
   };
 });
 
@@ -218,6 +222,10 @@ for (const kind of ["InMemory", "SQLite"] as const) {
       assert.equal(await store.sweepDailySpending("2025-01-03"), 0);
     } finally {
       if (store instanceof SQLiteActivityStore) store.close();
+      if (dir) {
+        closeAllSharedConnections();
+        rmSync(dir, { recursive: true, force: true });
+      }
       if (dir) rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -248,6 +256,7 @@ test("SQLite: second pending approval for same activity is rejected", async () =
     actStore.close();
     apprStore.close();
   } finally {
+    closeAllSharedConnections();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -277,6 +286,7 @@ test("SQLite: update existing approval (status transition) still works", async (
     actStore.close();
     apprStore.close();
   } finally {
+    closeAllSharedConnections();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -303,6 +313,7 @@ test("SQLite: activity survives store reopen (restart simulation)", async () => 
     // File exists on disk
     assert.ok(existsSync(path));
   } finally {
+    closeAllSharedConnections();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -325,6 +336,7 @@ test("SQLite: approval survives store reopen (restart simulation)", async () => 
     assert.equal(got!.status, "pending_approval");
     store2.close();
   } finally {
+    closeAllSharedConnections();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -343,6 +355,7 @@ test("SQLite: schema is versioned in _meta", async () => {
     assert.ok(got);
     store2.close();
   } finally {
+    closeAllSharedConnections();
     rmSync(dir, { recursive: true, force: true });
   }
 });

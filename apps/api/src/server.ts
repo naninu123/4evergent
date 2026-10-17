@@ -260,6 +260,8 @@ async function main() {
         authSessionDays: parseRetentionDays(process.env.AUTH_SESSION_RETENTION_DAYS, 30),
         dailySpendingDays: parseRetentionDays(process.env.DAILY_SPENDING_RETENTION_DAYS, 90),
       },
+      executionQueue: { enabled: true },
+      reconciliation: { enabled: true },
       executionQueue: { enabled: true, intervalMs: workerIntervals.executionQueueIntervalMs },
       reconciliation: { enabled: true, intervalMs: workerIntervals.reconciliationIntervalMs },
       authProvider,

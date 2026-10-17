@@ -10,6 +10,7 @@ import {
   InMemoryApprovalStore,
   createActivity,
   createApproval,
+  closeSharedConnection,
 } from "../src/index.js";
 import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
 
@@ -33,7 +34,10 @@ function makeStores() {
   return {
     activity: new SQLiteActivityStore(path),
     approval: new SQLiteApprovalStore(path),
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    cleanup: () => {
+      closeSharedConnection(path);
+      rmSync(dir, { recursive: true, force: true });
+    },
   };
 }
 

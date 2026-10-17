@@ -167,6 +167,11 @@ class UserStore {
     const row = this.db?.prepare("SELECT * FROM auth_users WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     return row ? this.rowToUser(row) : null;
   }
+
+  close(): void {
+    this.db?.close();
+    this.db = null;
+  }
 }
 
 class SessionStore {
@@ -256,6 +261,11 @@ class SessionStore {
     }
     return removed;
   }
+
+  close(): void {
+    this.db?.close();
+    this.db = null;
+  }
 }
 
 /* --------------------------------------------------------------- utilities */
@@ -331,6 +341,7 @@ export interface AuthModule {
   /** Remove up to `limit` sessions whose expiration is at/before cutoff. */
   sweepExpiredSessions(cutoff: number, limit?: number): number;
   configStatus(): { email: boolean; google: boolean; stellar: boolean; registration: boolean };
+  close(): void;
 }
 
 export function createAuthModule(opts: {
@@ -772,5 +783,9 @@ export function createAuthModule(opts: {
     sessionFor,
     configStatus,
     sweepExpiredSessions: (cutoff: number, limit?: number) => sessions.deleteExpiredBefore(cutoff, limit),
+    close: () => {
+      users.close();
+      sessions.close();
+    },
   };
 }

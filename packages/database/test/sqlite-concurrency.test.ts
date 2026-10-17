@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SQLiteActivityStore } from "../src/sqlite-store.js";
+import { closeSharedConnection } from "../src/shared-connection.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +9,13 @@ import { join } from "node:path";
 function makeTempDb(): { path: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "4evergent-test-"));
   const path = join(dir, "test.db");
-  return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return {
+    path,
+    cleanup: () => {
+      closeSharedConnection(path);
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 test("SQLITE CONCURRENCY: identical idempotency key → only one created", async () => {

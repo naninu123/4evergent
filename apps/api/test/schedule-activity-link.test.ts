@@ -28,6 +28,68 @@ function makeSchedule(overrides: Partial<ScheduleRecord> = {}): ScheduleRecord {
   };
 }
 
+interface TestServer {
+  baseUrl: string;
+  close: () => Promise<void>;
+  activityStore: ActivityStore;
+  executionStore: ExecutionStore;
+  scheduleStore: InMemoryScheduleStore;
+}
+
+/** Start a server with scheduler + execution queue enabled at a low interval. */
+async function startServer(intervalMs = 100): Promise<TestServer> {
+  const activityStore = new InMemoryActivityStore();
+  const executionStore = new InMemoryExecutionStore();
+  const scheduleStore = new InMemoryScheduleStore();
+
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://127.0.0.1:1",
+    signer: new MockSigner("test-agent"),
+    policyRules: { maxTxAmount: { XLM: "1000" } },
+    deferExecution: true,
+    authProvider: new DevAuthProvider({ defaultOwnerId: "test" }),
+    activityStore,
+    executionStore,
+    scheduleStore,
+    executionQueue: { enabled: true, intervalMs },
+    scheduler: { enabled: true, intervalMs },
+  });
+
+  server.registerAgent(TEST_AGENT);
+
+  return new Promise<TestServer>((resolve) => {
+    const http = server.server.listen(0, "127.0.0.1", () => {
+      const addr = http.address() as AddressInfo;
+      resolve({
+        baseUrl: `http://127.0.0.1:${addr.port}`,
+        close: () => server.close(),
+        activityStore,
+        executionStore,
+        scheduleStore,
+      });
+    });
+  });
+}
+
+/** Sleep for n ms on the event loop. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Poll an async predicate until it returns a truthy value or timeout.
+ */
+async function waitFor<T>(fn: () => Promise<T | undefined> | T | undefined, timeoutMs = 2000, intervalMs = 20): Promise<T | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await fn();
+    if (result) return result;
+    await sleep(intervalMs);
+  }
+  return await fn();
+}
+
 /** Find the first execution record for an agent with a given status (or any). */
 function findExecution(records: ExecutionRecord[], status?: string): ExecutionRecord | undefined {
   if (status) return records.find((r) => r.status === status);
@@ -118,6 +180,13 @@ test("SCHEDULE ACTIVITY TEST 4: no duplicate ActivityRecord after pipeline runs"
     const schedule = makeSchedule();
     await scheduleStore.create(schedule);
 
+    // Wait for execution to reach a terminal state
+    const execution = await waitFor(async () => {
+      const recs = await executionStore.listByAgent(schedule.agentId);
+      return findExecution(recs, "submitted") ?? findExecution(recs, "dead_letter") ?? findExecution(recs, "failed");
+    }, 5000);
+    assert.ok(execution, "ExecutionRecord should reach a terminal state");
+    assert.ok(execution.activityId, "ExecutionRecord should retain its ActivityRecord link");
     // Wait for execution to reach a terminal state (Horizon network call takes ~6s)
     await waitFor(async () => {
       const recs = await executionStore.listByAgent(schedule.agentId);
@@ -129,8 +198,11 @@ test("SCHEDULE ACTIVITY TEST 4: no duplicate ActivityRecord after pipeline runs"
     assert.equal(allActivities.length, 1, "Exactly one ActivityRecord should exist for the scheduled execution");
 
     // The activity should have been updated from "pending" to a terminal state
-    const activity = allActivities[0];
-    assert.notEqual(activity.status, "pending", "ActivityRecord should be updated to terminal state after pipeline runs");
+    const activity = await waitFor(async () => {
+      const record = await activityStore.get(execution.activityId!);
+      return record && record.status !== "pending" ? record : undefined;
+    }, 1000);
+    assert.ok(activity, "ActivityRecord should be updated after the execution completes");
   } finally {
     await close();
   }

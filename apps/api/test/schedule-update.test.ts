@@ -44,6 +44,13 @@ async function patchSchedule(baseUrl: string, agentId: string, scheduleId: strin
   return { status: res.status, body: res.status === 204 ? null : await res.json() };
 }
 
+async function scheduleAction(baseUrl: string, scheduleId: string, action: "pause" | "resume" | "disable") {
+  const res = await apiFetch(`${baseUrl}/agents/test-agent/schedules/${encodeURIComponent(scheduleId)}/${action}`, {
+    method: "POST",
+  });
+  return { status: res.status, body: await res.json() };
+}
+
 async function _getSchedule(baseUrl: string, scheduleId: string) {
   const res = await apiFetch(`${baseUrl}/agents/test-agent/schedules/${encodeURIComponent(scheduleId)}`);
   return { status: res.status, body: await res.json() };
@@ -341,6 +348,49 @@ test("PATCH scheduleExpression → scheduler runs at NEW time, not old", async (
     // --- Step 5: execution is for the right schedule/agent ---
     assert.equal(executed[0], schedule.id);
     assert.equal(executed[1], schedule.id);
+  } finally {
+    await close();
+  }
+});
+
+test("schedule status actions enforce the complete transition matrix", async () => {
+  const transitions: {
+    initialStatus: ScheduleRecord["status"];
+    action: "pause" | "resume" | "disable";
+    expectedStatus: number;
+    resultingStatus: ScheduleRecord["status"];
+  }[] = [
+    { initialStatus: "active", action: "pause", expectedStatus: 200, resultingStatus: "paused" },
+    { initialStatus: "active", action: "resume", expectedStatus: 409, resultingStatus: "active" },
+    { initialStatus: "active", action: "disable", expectedStatus: 200, resultingStatus: "disabled" },
+    { initialStatus: "paused", action: "pause", expectedStatus: 409, resultingStatus: "paused" },
+    { initialStatus: "paused", action: "resume", expectedStatus: 200, resultingStatus: "active" },
+    { initialStatus: "paused", action: "disable", expectedStatus: 200, resultingStatus: "disabled" },
+    { initialStatus: "disabled", action: "pause", expectedStatus: 409, resultingStatus: "disabled" },
+    { initialStatus: "disabled", action: "resume", expectedStatus: 200, resultingStatus: "active" },
+    { initialStatus: "disabled", action: "disable", expectedStatus: 409, resultingStatus: "disabled" },
+  ];
+  const store = new InMemoryScheduleStore();
+  const { baseUrl, close, scheduleStore } = await startServer(store);
+
+  try {
+    for (const { initialStatus, action, expectedStatus, resultingStatus } of transitions) {
+      const schedule = makeSchedule({ status: initialStatus });
+      await store.create(schedule);
+
+      const res = await scheduleAction(baseUrl, schedule.id, action);
+      assert.equal(res.status, expectedStatus, `${action} from ${initialStatus}`);
+
+      const after = await scheduleStore.get(schedule.id);
+      assert.equal(after?.status, resultingStatus, `${action} from ${initialStatus} persisted status`);
+
+      if (expectedStatus === 409) {
+        assert.equal(res.body.error, `cannot ${action} schedule in status '${initialStatus}'`);
+        assert.equal(after?.updatedAt, schedule.updatedAt, `${action} from ${initialStatus} must not mutate`);
+      } else {
+        assert.equal(res.body.schedule.status, resultingStatus);
+      }
+    }
   } finally {
     await close();
   }
