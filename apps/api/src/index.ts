@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
-import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { log, generateRequestId, runRequestIdContext } from "./logging.js";
 import type {
   AgentIntent,
   AuthorizationStatus,
@@ -47,6 +47,7 @@ import {
   type ActivityRecord,
   type PolicyConfigStore,
   createActivity,
+  isOffsetAtCeiling,
 } from "@4evergent/database";
 import type { PolicyRules, Agent, RequestContext, AuthorizationService, AuthProvider, AuthenticatedPrincipal } from "@4evergent/shared";
 import { createAuthModule, type PrincipalResolution } from "./auth.js";
@@ -106,6 +107,7 @@ export interface ServerOptions {
   scheduler?: {
     enabled?: boolean;
     intervalMs?: number;
+    maxLatenessMs?: number;
     /** Inject a custom scheduler (e.g. for testing). */
     instance?: AgentScheduler;
   };
@@ -288,7 +290,10 @@ export async function createApiServer(options: ServerOptions) {
       };
     };
 
-    const pipelineExecutor = async (record: ExecutionRecord) => {
+    const pipelineExecutor = async (
+      record: ExecutionRecord,
+      context?: import("./execution-queue.js").ExecutionContext
+    ) => {
       // Phase 25: Wrap sequence-sensitive execution in account-scoped lock.
       //
       // WHY: Two concurrent executions using the SAME Stellar source account
@@ -306,14 +311,31 @@ export async function createApiServer(options: ServerOptions) {
       // two executions read the same sequence before either acquires the lock.
       const accountId = options.signer.getAccountId();
       return sequenceCoordinator.runExclusive(accountId, async () => {
+        if (context?.signal?.aborted) {
+          const err = new Error("Execution was cancelled");
+          err.name = "AbortError";
+          throw err;
+        }
         try {
           const sourceAccount = await getSourceAccount();
+          if (context?.signal?.aborted) {
+            const err = new Error("Execution was cancelled");
+            err.name = "AbortError";
+            throw err;
+          }
           const outcome = await pipeline.execute({
             intent: record.intent,
             sourceAccount,
             activityId: record.activityId ?? undefined,
+            signal: context?.signal,
+            onBeforeSubmit: () => {
+              context?.onBeforeSubmit?.();
+            },
           });
           const txHash = (outcome as { txHash?: string }).txHash;
+          if (txHash) {
+            context?.onSubmitted?.(txHash);
+          }
           return {
             record,
             success: outcome.status === "submitted",
@@ -325,6 +347,20 @@ export async function createApiServer(options: ServerOptions) {
             activityId: (outcome as { activityId?: string }).activityId ?? record.activityId ?? undefined,
           };
         } catch (err: unknown) {
+          if (context?.signal?.aborted) {
+            if (record.activityId && options.activityStore) {
+              try {
+                await options.activityStore.update(record.activityId, {
+                  status: "failed",
+                  error: "cancelled by user",
+                  updatedAt: new Date().toISOString(),
+                });
+              } catch {
+                // ActivityStore update failure is non-critical
+              }
+            }
+            throw err;
+          }
           // Pipeline failed before persisting activity (e.g., source account load failure).
           // Update the pre-created ActivityRecord to reflect the failure so the
           // activity record is not left in "pending" indefinitely.
@@ -469,9 +505,7 @@ export async function createApiServer(options: ServerOptions) {
           }
           return scheduleExecution.executeSchedule(schedule);
         },
-        options.scheduler.intervalMs !== undefined
-          ? { intervalMs: options.scheduler.intervalMs }
-          : {}
+        { intervalMs: options.scheduler.intervalMs, maxLatenessMs: options.scheduler.maxLatenessMs }
       );
 
     scheduler.start();
@@ -534,6 +568,37 @@ export async function createApiServer(options: ServerOptions) {
     const url = req.url ?? "";
     const method = req.method ?? "GET";
 
+    // Phase 28L: Request logging with correlation IDs.
+    // Assigned before any handler runs so every response — including
+    // OPTIONS preflights and 401/404 errors — carries X-Request-Id.
+    const suppliedId = req.headers["x-request-id"];
+    const requestId = generateRequestId(
+      Array.isArray(suppliedId) ? suppliedId[0] : suppliedId,
+    );
+    res.setHeader("X-Request-Id", requestId);
+
+    const requestStart = Date.now();
+    let ownerId: string | null = null;
+    let logged = false;
+
+    const originalEnd = res.end.bind(res);
+    res.end = function (...args: any[]) {
+      if (!logged) {
+        logged = true;
+        const durationMs = Date.now() - requestStart;
+        const status = res.statusCode || 0;
+        log(status >= 500 ? "error" : "info", "request completed", {
+          method,
+          path: new URL(url, "http://localhost").pathname,
+          status,
+          durationMs,
+          requestId,
+          ownerId,
+        });
+      }
+      return originalEnd(...args);
+    };
+
     // Handle CORS preflight (OPTIONS) — does NOT bypass authentication for
     // actual API requests. Preflight is unauthenticated but returns no data.
     if (method === "OPTIONS") {
@@ -579,7 +644,9 @@ export async function createApiServer(options: ServerOptions) {
     // Phase 28K-1: Authenticate and create request-scoped context
     const resolution = await authenticateRequest(req, method);
     const requestScopedCtx = principalToContext(resolution.principal);
+    ownerId = requestScopedCtx.ownerId;
 
+    return runRequestIdContext(requestId, () => {
     return als.run(requestScopedCtx, () => {
       // Health check is public
       if (method === "GET" && url === "/health") {
@@ -690,6 +757,7 @@ export async function createApiServer(options: ServerOptions) {
     }
     json(res, { error: "not found" }, 404);
     }); // End als.run
+    }); // End runRequestIdContext
   });
 
   async function handleListAgents(ctx: RequestContext, _req: any, res: any) {
@@ -794,18 +862,25 @@ export async function createApiServer(options: ServerOptions) {
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const activity = await store.listByAgent(agentId, limit);
-    return json(res, { agentId, activity });
+    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    const all = await store.listByAgent(agentId, limit + 1, offset);
+    const activity = all.slice(0, limit);
+    const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
+    return json(res, { agentId, activity, hasMore });
   }
 
   async function handleListApprovals(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const statusFilter = urlObj.searchParams.get("status") ?? undefined;
-    const all = await approvals.listByOwner(ctx.ownerId!, 200);
-    const filtered = statusFilter
-      ? all.filter((r) => r.status === statusFilter).slice(0, 50)
-      : all.slice(0, 50);
-    return json(res, { approvals: filtered });
+    const limit = Math.max(1, Math.min(200, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
+    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    const rows = await approvals.listByOwner(ctx.ownerId!, limit, offset, statusFilter);
+    const total = await approvals.countByOwner(ctx.ownerId!, statusFilter);
+    // `truncated`: more matching rows exist beyond this page.
+    // `hasMore`: the client can actually fetch them (offset ceiling ends pagination).
+    const truncated = offset + rows.length < total;
+    const hasMore = truncated && !isOffsetAtCeiling(offset);
+    return json(res, { approvals: rows, hasMore, truncated, total });
   }
 
   async function handleGetApproval(ctx: RequestContext, req: any, res: any) {
@@ -945,9 +1020,12 @@ export async function createApiServer(options: ServerOptions) {
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
     const statusFilter = urlObj.searchParams.get("status") ?? undefined;
-    const all = await approvals.listByAgent(agentId, 200);
-    const filtered = statusFilter ? all.filter((r) => r.status === statusFilter).slice(0, 50) : all.slice(0, 50);
-    return json(res, { agentId, approvals: filtered });
+    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
+    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    const rows = await approvals.listByAgent(agentId, limit + 1, offset, statusFilter);
+    const page = rows.slice(0, limit);
+    const hasMore = rows.length > limit && !isOffsetAtCeiling(offset);
+    return json(res, { agentId, approvals: page, hasMore });
   }
 
   async function handleUpdateAgentStatus(ctx: RequestContext, req: any, res: any) {
@@ -981,8 +1059,11 @@ export async function createApiServer(options: ServerOptions) {
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const all = await schedules.listByAgent(agentId, limit);
-    return json(res, { agentId, schedules: all });
+    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    const all = await schedules.listByAgent(agentId, limit + 1, offset);
+    const page = all.slice(0, limit);
+    const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
+    return json(res, { agentId, schedules: page, hasMore });
   }
 
   async function handleGetSchedule(ctx: RequestContext, req: any, res: any) {
@@ -1134,8 +1215,11 @@ export async function createApiServer(options: ServerOptions) {
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const all = await executionStore.listByAgent(agentId, limit);
-    return json(res, { agentId, executions: all });
+    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    const all = await executionStore.listByAgent(agentId, limit + 1, offset);
+    const executions = all.slice(0, limit);
+    const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
+    return json(res, { agentId, executions, hasMore });
   }
 
   async function handleExecutionDetail(ctx: RequestContext, req: any, res: any) {
@@ -1152,10 +1236,10 @@ export async function createApiServer(options: ServerOptions) {
     if (!executionQueue) {
       return json(res, { error: "execution queue not enabled" }, 404);
     }
-    const all = await executionStore.listByOwner(ctx.ownerId!, 200);
+    const execCounts = await executionStore.countByOwner(ctx.ownerId!);
     const byStatus: Record<string, number> = {};
-    for (const e of all) {
-      byStatus[e.status] = (byStatus[e.status] ?? 0) + 1;
+    for (const [status, count] of Object.entries(execCounts)) {
+      if (count > 0) byStatus[status] = count;
     }
     return json(res, {
       running: executionQueue.isRunning(),
@@ -1166,8 +1250,7 @@ export async function createApiServer(options: ServerOptions) {
 
   async function handleGetOverviewAttention(ctx: RequestContext, _req: any, res: any) {
     const ownerId = ctx.ownerId!;
-    const pendingApprovals = (await approvals.listByOwner(ownerId, 200))
-      .filter((a) => a.status === "pending_approval").length;
+    const pendingApprovals = await approvals.countByOwner(ownerId, "pending_approval");
     const execCounts: Record<ExecutionStatus, number> =
       await executionStore.countByOwner(ownerId);
     return json(res, {
@@ -1187,15 +1270,21 @@ export async function createApiServer(options: ServerOptions) {
   async function handleListExecutions(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const executions = await executionStore.listByOwner(ctx.ownerId!, limit);
-    return json(res, { executions });
+    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    const all = await executionStore.listByOwner(ctx.ownerId!, limit + 1, offset);
+    const executions = all.slice(0, limit);
+    const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
+    return json(res, { executions, hasMore });
   }
 
   async function handleListActivity(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const activity = await store.listByOwner(ctx.ownerId!, limit);
-    return json(res, { activity });
+    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    const all = await store.listByOwner(ctx.ownerId!, limit + 1, offset);
+    const activity = all.slice(0, limit);
+    const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
+    return json(res, { activity, hasMore });
   }
 
   async function handleRetryExecution(ctx: RequestContext, req: any, res: any) {
@@ -1248,7 +1337,19 @@ export async function createApiServer(options: ServerOptions) {
 
     const result = await executionQueue.cancel(executionId);
     if (result.status === "not_found") return json(res, { error: "not found" }, 404);
-    if (result.status === "invalid_state") return json(res, { error: `cannot cancel execution in status '${execution.status}'` }, 409);
+    if (result.status === "invalid_state") {
+      const current = await executionStore.get(executionId);
+      const currentStatus = current?.status ?? execution.status;
+      let msg: string;
+      if (currentStatus !== "executing") {
+        msg = `cannot cancel execution in status '${currentStatus}'`;
+      } else if (result.reason === "not_in_flight") {
+        msg = "cannot cancel execution: execution is not actively running on this worker";
+      } else {
+        msg = "cannot cancel execution: pipeline has already begun submitting transaction";
+      }
+      return json(res, { error: msg }, 409);
+    }
     if (result.status === "conflict") return json(res, { error: "execution state changed; please refresh" }, 409);
 
     return json(res, { execution: result.execution, message: "execution cancelled" });
@@ -1625,7 +1726,7 @@ function json(res: any, body: unknown, status = 200) {
   res.end(JSON.stringify(body));
 }
 
-function readBody(req: any): Promise<string> {
+export function readBody(req: any): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = "";
     req.on("data", (chunk: Buffer) => {
@@ -1742,5 +1843,4 @@ function parseIntent(body: unknown): AgentIntent {
   }
 }
 
-void randomUUID;
 void TESTNET_PASSPHRASE;

@@ -572,6 +572,7 @@ test("sqlite mode: sessions persist to disk; users round-trip", async () => {
 
 test("SQLite session retention removes expired rows by the indexed expiry", async () => {
   const path = join(tmpdir(), `authtest-retention-${process.pid}-${Date.now()}.db`);
+  const path = `/tmp/authtest-retention-${process.pid}-${Date.now()}.db`;
   const { server, baseUrl, authModule } = await createAuthTestServer({ dbPath: path });
   const db = new DatabaseSync(path);
   try {

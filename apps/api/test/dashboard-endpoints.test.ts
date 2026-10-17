@@ -161,6 +161,7 @@ test("GET /overview/attention counts statuses for the authenticated owner only",
       ["executing-a", "executing"],
       ["failed-a", "failed"],
       ["dead-letter-a", "dead_letter"],
+      ["cancelled-a", "cancelled"],
       ["submitted-a", "submitted"],
       ["confirmed-a", "confirmed"],
       ["failed-b", "failed"],
@@ -183,6 +184,7 @@ test("GET /overview/attention counts statuses for the authenticated owner only",
 });
 
 test("GET /overview/attention documents the current 200-approval truncation baseline", async () => {
+test("GET /overview/attention returns the exact pendingApprovals count above 200 approvals", async () => {
   const { baseUrl, close, approvalStore } = await startServer();
   try {
     for (let index = 0; index < 205; index++) {
@@ -193,6 +195,18 @@ test("GET /overview/attention documents the current 200-approval truncation base
     assert.equal(response.status, 200);
     // Baseline before issue #61: listByOwner is capped at 200, so this pins the current undercount.
     assert.equal(response.body.pendingApprovals, 200);
+    // Non-pending rows and another owner's rows must not affect the count.
+    for (let index = 0; index < 3; index++) {
+      await approvalStore.record(makeApproval("owner-a", `approved-${index}`, "approved"));
+    }
+    for (let index = 0; index < 2; index++) {
+      await approvalStore.record(makeApproval("owner-b", `other-pending-${index}`));
+    }
+
+    const response = await request(baseUrl, "/overview/attention");
+    assert.equal(response.status, 200);
+    // Counted in the store, not derived from a capped list: no silent truncation at 200.
+    assert.equal(response.body.pendingApprovals, 205);
   } finally {
     await close();
   }
@@ -241,4 +255,5 @@ test("GET /agents/:id/spending returns 404 when the agent belongs to another own
   } finally {
     await close();
   }
+});
 });
