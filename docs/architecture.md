@@ -128,3 +128,19 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 **Decision:** Sweep sessions 30 days after `expires_at` and daily-spending rows older than 90 UTC days, once per day. Each indexed delete is limited to 500 rows per table and runs as a short autocommit statement. Operators can set the two retention-day environment variables, change the interval, disable the worker, or set either day window to zero to retain that table forever. The idempotency table remains outside this policy and belongs to #109.
 
 **Consequences:** Transient storage is bounded over repeated sweeps without a schema migration or a long-held write transaction. A large backlog drains in batches. Recent expired sessions and the current spending day remain available; setting a zero window explicitly keeps all rows.
+
+## ADR-015: In-memory rate limiting for the credential endpoints
+
+**Status:** Accepted
+
+**Context:** The credential-taking endpoints (`/auth/login/email`, `/auth/register`, `/auth/stellar/challenge`, `/auth/stellar/verify`) are handled before the API-key gate and had no counter, cooldown, or per-source tracking, so passwords could be guessed without bound. The module's state is already in-memory (`UserStore`/`SessionStore` fall back to `Map`s, pending OAuth states and Stellar challenges live in `Map`s), the deployment is a single stateful Node process, and adding a runtime dependency is out of scope.
+
+**Decision:** Add a dependency-free sliding-window limiter (`apps/api/src/rate-limit.ts`) applied per credential endpoint. It is keyed by client IP (`req.socket.remoteAddress`, or the first `X-Forwarded-For` hop when `AUTH_TRUST_PROXY=1` is explicitly set), bounded in memory (window-pruned timestamps, per-key history capped at the limit, key map capped at `AUTH_RATE_LIMIT_MAX_KEYS` with oldest-first eviction), and safe to reset (a successful email sign-in clears the source). Over-limit requests get `429 { error: "rate_limited" }` with a `Retry-After` header, distinct from `401 invalid_credentials`. Limits and window are env-configurable (`AUTH_RATE_LIMIT_MAX`, `AUTH_RATE_LIMIT_WINDOW_SECONDS`) with conservative defaults of 10 attempts / 60s.
+
+**Consequences:**
+- Brute-force / credential-stuffing attempts are slowed and a client can distinguish "slow down" from "wrong password".
+- No new runtime dependency; no schema or persistence change.
+- **Locality constraint:** state is per-process and in-memory, so it is not shared across instances and resets on restart. Horizontally scaled deployments get `max × processes` effective rate; a shared store is a separate, larger change.
+- IP-keyed limits share a bucket behind NAT/proxies and can be evaded by rotating source addresses; CAPTCHA/MFA/account lockout remain out of scope.
+- The existing `401 invalid_credentials` response and user-enumeration defence are unchanged.
+
