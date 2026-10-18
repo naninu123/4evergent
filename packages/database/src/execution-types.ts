@@ -7,8 +7,9 @@ import type { AgentIntent, PolicyDecision, SimulationResult } from "@4evergent/s
  *   executing → in-flight, pipeline running
  *   submitted → pipeline returned txHash
  *   confirmed → on-chain confirmation observed (future; requires indexing)
- *   failed    → pipeline returned an error (eligible for retry if transient)
+ *   failed      → pipeline returned an error (eligible for retry if transient)
  *   dead_letter → exhausted retries / permanent failure
+ *   cancelled   → stopped by operator (terminal, not retried)
  */
 export const EXECUTION_STATUSES = [
   "queued",
@@ -17,6 +18,7 @@ export const EXECUTION_STATUSES = [
   "confirmed",
   "failed",
   "dead_letter",
+  "cancelled",
 ] as const;
 
 export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];
@@ -66,8 +68,8 @@ export interface ExecutionStore {
   get(id: string): Promise<ExecutionRecord | null>;
   getForOwner(id: string, ownerId: string): Promise<ExecutionRecord | null>;
   listDue(before: string, limit?: number): Promise<ExecutionRecord[]>;
-  listByOwner(ownerId: string, limit?: number): Promise<ExecutionRecord[]>;
-  listByAgent(agentId: string, limit?: number): Promise<ExecutionRecord[]>;
+  listByOwner(ownerId: string, limit?: number, offset?: number): Promise<ExecutionRecord[]>;
+  listByAgent(agentId: string, limit?: number, offset?: number): Promise<ExecutionRecord[]>;
   /** Owner-scoped list filtered by status in the store query. */
   listByOwnerAndStatus(ownerId: string, status: ExecutionStatus, limit?: number): Promise<ExecutionRecord[]>;
   /** Agent-scoped list filtered by status in the store query. */
