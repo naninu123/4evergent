@@ -128,6 +128,28 @@ test("AUTHZ: PATCH /agents/:id/status — invalid status", async () => {
   }
 });
 
+test("STATUS: PATCH rejects no-op transitions and keeps disabled terminal", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-paused", "owner-a", "paused"));
+  registerAgent(makeAgent("agent-disabled", "owner-a", "disabled"));
+  try {
+    const noOp = await patch(baseUrl, "/agents/agent-paused/status", { status: "paused" });
+    assert.equal(noOp.status, 409);
+    assert.match(noOp.body.error, /paused/);
+
+    const terminal = await patch(baseUrl, "/agents/agent-disabled/status", { status: "active" });
+    assert.equal(terminal.status, 409);
+    assert.match(terminal.body.error, /disabled/);
+
+    const check = await get(baseUrl, "/agents/agent-disabled");
+    assert.equal(check.body.status, "disabled");
+  } finally {
+    await close();
+  }
+});
+
 test("AUTHZ: GET /agents/:id — owner can read own agent", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
     authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),

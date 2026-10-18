@@ -171,8 +171,14 @@ Get one agent (owner-scoped). `404` if not found or not owned.
 
 Body: `{ "status": "active" | "paused" | "disabled" }`
 
+- Allowed transitions: `active` → `paused` or `disabled`; `paused` → `active`
+  or `disabled`. `disabled` is terminal.
+- Repeating the current status is rejected rather than treated as an idempotent
+  update.
 - `200` → `{ "id", "status" }`
 - `400` → invalid status / invalid JSON
+- `409` → transition not allowed, with the current and requested statuses in
+  the error
 - `404` → not found or not owned
 
 ---

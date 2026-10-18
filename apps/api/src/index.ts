@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { log, generateRequestId, runRequestIdContext } from "./logging.js";
 import type {
   AgentIntent,
+  AgentStatus,
   AuthorizationStatus,
   PolicyDecision,
   SimulationResult,
@@ -1034,12 +1035,24 @@ export async function createApiServer(options: ServerOptions) {
       return json(res, { error: "invalid JSON body" }, 400);
     }
     const status = (body as any)?.status;
-    if (!["active", "paused", "disabled"].includes(status)) {
+    if (typeof status !== "string" || !["active", "paused", "disabled"].includes(status)) {
       return json(res, { error: "invalid status" }, 400);
     }
-    const agent = await agentStore.update(agentId, { status: status as any });
+    const agent = await agentStore.get(agentId);
     if (!agent) return json(res, { error: "not found" }, 404);
-    return json(res, { id: agent.id, status: agent.status });
+    const allowedTransitions: Record<AgentStatus, readonly AgentStatus[]> = {
+      active: ["paused", "disabled"],
+      paused: ["active", "disabled"],
+      disabled: [],
+    };
+    if (!allowedTransitions[agent.status].includes(status as AgentStatus)) {
+      return json(res, {
+        error: `cannot change agent status from '${agent.status}' to '${status}'`,
+      }, 409);
+    }
+    const updated = await agentStore.update(agentId, { status: status as AgentStatus });
+    if (!updated) return json(res, { error: "not found" }, 404);
+    return json(res, { id: updated.id, status: updated.status });
   }
 
   async function handleListSchedules(ctx: RequestContext, req: any, res: any) {
