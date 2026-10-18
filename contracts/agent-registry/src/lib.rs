@@ -231,6 +231,24 @@ fn bump_ttl(env: &Env, key: &DataKey) {
     env.storage().instance().extend_ttl(threshold, max);
 }
 
+/// Persist the storage schema version on the first write path.
+///
+/// `version()` documents the version as living under [`DataKey::Version`] and
+/// falls back to [`STORAGE_SCHEMA_VERSION`] when the key is absent, which is the
+/// case for a freshly deployed instance and for records written before this
+/// surface existed. Stamping the key here makes the documented behavior true:
+/// after any successful mutation the stored value and the constant agree, and a
+/// future migration can compare them to detect a stale record layout.
+fn stamp_schema_version(env: &Env) -> bool {
+    let key = DataKey::Version;
+    if env.storage().persistent().has(&key) {
+        return false;
+    }
+    env.storage().persistent().set(&key, &STORAGE_SCHEMA_VERSION);
+    bump_ttl(env, &key);
+    true
+}
+
 #[contractimpl]
 impl AgentRegistry {
     /// Register a new agent. The caller becomes the owner. When
@@ -269,6 +287,7 @@ impl AgentRegistry {
         };
         env.storage().persistent().set(&key, &info);
         bump_ttl(&env, &key);
+        stamp_schema_version(&env);
         env.events().publish(
             (
                 String::from_str(&env, "agent"),
@@ -308,6 +327,7 @@ impl AgentRegistry {
         info.updated_at = env.ledger().timestamp();
         env.storage().persistent().set(&key, &info);
         bump_ttl(&env, &key);
+        stamp_schema_version(&env);
         env.events().publish(
             (
                 String::from_str(&env, "agent"),
@@ -336,6 +356,7 @@ impl AgentRegistry {
         info.updated_at = env.ledger().timestamp();
         env.storage().persistent().set(&key, &info);
         bump_ttl(&env, &key);
+        stamp_schema_version(&env);
         env.events().publish(
             (
                 String::from_str(&env, "agent"),
@@ -1379,20 +1400,30 @@ mod test {
 
     #[test]
     fn test_version_matches_constant() {
-        let (env, _cid, client) = setup();
+        let (env, cid, client) = setup();
         assert_eq!(client.version(), STORAGE_SCHEMA_VERSION);
-        // The version is persisted under DataKey::Version after a write path.
+        // A fresh instance has no persisted key yet: version() falls back to the
+        // constant, which is what the docs promise for a pre-versioning deploy.
+        let before: Option<u32> = env.as_contract(&cid, || {
+            env.storage().persistent().get(&DataKey::Version)
+        });
+        assert_eq!(before, None, "fresh instance must not have a stamped version");
+
         env.mock_all_auths();
         let owner = Address::generate(&env);
         let id = String::from_str(&env, "a1");
         register(&env, &client, &owner, &id, "A");
-        let persisted: u32 = env.as_contract(&_cid, || {
-            env.storage()
-                .persistent()
-                .get(&DataKey::Version)
-                .unwrap_or(STORAGE_SCHEMA_VERSION)
+
+        // The write path must have stamped DataKey::Version: assert on the raw
+        // entry so a missing key fails instead of silently falling back.
+        let persisted: Option<u32> = env.as_contract(&cid, || {
+            env.storage().persistent().get(&DataKey::Version)
         });
-        assert_eq!(persisted, STORAGE_SCHEMA_VERSION);
+        assert_eq!(
+            persisted,
+            Some(STORAGE_SCHEMA_VERSION),
+            "a successful mutation must persist DataKey::Version"
+        );
         assert_eq!(client.version(), STORAGE_SCHEMA_VERSION);
         // Sanity: the constant is non-zero so a default/zero value from a
         // future caller cannot be mistaken for a valid schema version.

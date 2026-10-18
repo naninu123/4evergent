@@ -26,7 +26,7 @@ The current Testnet deployment is recorded in [`docs/testnet.md`](./testnet.md).
 
 | Field | Value |
 |-------|-------|
-| Contract ID | `CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7` |
+| Contract ID | `CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7` |
 | Deployed | 2026-09-28 |
 | Wasm hash | `83656ffddd08a22e1977b6cf129af4d6515be7e8494d843ded1aa1c0ef3f8445` |
 | SDK | `soroban-sdk 22.0` |
@@ -79,36 +79,36 @@ This returns a new wasm hash (e.g. `<computed-hash>`). The hash is the identity 
 
 ```bash
 stellar contract upgrade \
-  --id CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 \
+  --id CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 \
   --wasm-hash <computed-hash> \
   --source <deployer-identity> \
   --network testnet
 ```
 
-The contract ID `CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7` is the deployed instance recorded in [`docs/testnet.md`](/testnet.md).
+The contract ID `CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7` is the deployed instance recorded in [`docs/testnet.md`](/testnet.md).
 
 ### 3.6 Verify the deployed wasm hash
 
 The wasm hash is not returned by a contract entrypoint. Use the contract-info command to read the hash that the network currently associates with the contract ID:
 
 ```bash
-stellar contract info hash --contract-id CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 --network testnet
+stellar contract info hash --contract-id CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 --network testnet
 ```
 
 The command prints the 32-byte SHA256 hash of the installed wasm as a hex string. Interpret it as follows:
 
-- The output must equal the hash returned by the `stellar contract install` step in §3.4 and the value recorded in the migration note. If it does not, the upgrade has not taken effect (or a stale hash was supplied) and the command in ç3.5 must be repeated.
+- The output must equal the hash returned by the `stellar contract install` step in §3.4 and the value recorded in the migration note. If it does not, the upgrade has not taken effect (or a stale hash was supplied) and the command in §3.5 must be repeated.
 - The output is the identity of the code only. It does not change when storage is written to, so it is the right value to compare against a release artifact.
-- To confirm the storage schema version, call the contract's exported `versio()` entrypoint separately (see §5):
+- To confirm the storage schema version, call the contract's exported `version()` entrypoint separately (see §5):
 
   ```bash
   stellar contract invoke \
-    --id CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 \
+    --id CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 \
     --network testnet \
     -- version
   ```
 
-  The returned u232 is the storage schema version described in §5. Together, the wasm hash and the schema version are the machine-readable contract surface a consumer can use to detect an old record.
+  The returned `u32` is the storage schema version described in §5. Together, the wasm hash and the schema version are the machine-readable contract surface a consumer can use to detect an old record.
 
 ---
 
@@ -126,9 +126,9 @@ The following was observed on Testnet during the executed wasm replacement:
 
 3. The `version()` entrypoint returned the new schema version after the replacement. This is the only observable difference between the old and new code from the consumer's perspective.
 
-### 4.2 TTA behavior
+### 4.2 TTL behavior
 
-The contract bumps TTLs on every mutation (`bump_ttl` in `contracts/agent-registry/src/lib.rs`). The TTL is attached to the storage entry, not to the wasm. Replacing the wasm does not reset or extend TTLs. Existing records remain readable until their TTL expires, at which point they are archived and must be restored before use. See [#19](https://github.com/naninu123/4evergent/issues/19) for the open question on TWL policy.
+The contract bumps TTLs on every mutation (`bump_ttl` in `contracts/agent-registry/src/lib.rs`). The TTL is attached to the storage entry, not to the wasm. Replacing the wasm does not reset or extend TTLs. Existing records remain readable until their TTL expires, at which point they are archived and must be restored before use. See [#19](https://github.com/naninu123/4evergent/issues/19) for the open question on TTL policy.
 
 ### 4.3 What a consumer must do after a wasm replacement
 
@@ -151,11 +151,11 @@ pub fn version(env: Env) -> u32 {
     env.storage()
         .persistent()
         .get(&DataKey::Version)
-        .unwrap_or_else(STORAGE_SCHEMA_VERSION)
+        .unwrap_or(STORAGE_SCHEMA_VERSION)
 }
 ```
 
-The version is written into persistent storage under `DataKey::Version` on the first mutation. This means a consumer can either call `version()` or read the storage key directly.
+`register`, `update_metadata`, and `deactivate` each stamp `DataKey::Version` before returning, so the key exists after any successful mutation. A consumer can either call `version()` or read the storage key directly; the two agree once a mutation has run, and both report `1` on an instance that has never been written to. The test `test_version_matches_constant` asserts the raw storage entry, so it fails if the stamp is ever dropped.
 
 ### 5.2 How a consumer detects an old record
 
@@ -204,7 +204,7 @@ A wasm replacement that is driven from inside the contract would go through an `
 
 ### 6.3 Reproducible example of the intended permissions
 
-The following demonstrates that a non-admin account cannot replace the wasm, while the admin can. It was run on Testnet against the contract ID in ±2.
+The following demonstrates that a non-admin account cannot replace the wasm, while the admin can. It was run on Testnet against the contract ID in §2.
 
 1. Create a second, funded identity that is *not* the contract admin:
 
@@ -217,7 +217,7 @@ The following demonstrates that a non-admin account cannot replace the wasm, whi
 
    ```bash
    stellar contract upgrade \
-     --id CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 \
+     --id CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 \
      --wasm-hash <computed-hash> \
      --source not-admin \
      --network testnet
@@ -228,10 +228,10 @@ The following demonstrates that a non-admin account cannot replace the wasm, whi
 3. Confirm the hash is unchanged:
 
    ```bash
-   stellar contract info hash --contract-id CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 --network testnet
+   stellar contract info hash --contract-id CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 --network testnet
    ```
 
-   The output must still equal the pre-upgrade hash (the value in ±2).
+   The output must still equal the pre-upgrade hash (the value in §2).
 
 4. Repeat the upgrade with the admin identity (the `deployer-identity` from §3.1) and confirm the hash now matches the newly installed wasm.
 
@@ -247,7 +247,7 @@ The pattern in this document is demonstrated on Testnet only. Mainnet would addi
 2. **A wasm hash review process**. The hash must be published and reviewed before the upgrade transaction is signed.
 3. **A versioned release artifact**. The wasm must be built from a tagged commit and the hash must be recorded in the release notes.
 4. **A migration plan** for existing records. On Testnet the contract holds no real value; on mainnet a schema change must be accompanied by a migration entrypoint and a rollback plan.
-5. **A TWL policy**. See [#19](https://github.com/naninu123/4evergent/issues/19). The current contract bumps TTLs on every mutation but the documents do not state a mainnet TTL budget.
+5. **A TTL policy**. See [#19](https://github.com/naninu123/4evergent/issues/19). The current contract bumps TTLs on every mutation but the documents do not state a mainnet TTL budget.
 
 ---
 
@@ -282,6 +282,6 @@ Every future schema change must record the following in its PR description and i
 
 ## 10. Open questions
 
-- TWL policy for existing records across a wasm replacement is tracked in [#19](https://github.com/naninu123/4evergent/issues/19). This document does not restate an answer.
-- Lifecycle events are out of scope for this change. The contract in this PR does not emit lifecycle events from `register`, `update_metadata`, or `deactivate`; the only contract surface added here is the version surface described in ±5. If lifecycle events ([#5](https://github.com/naninu123/4evergent/issues/5)) land first, this upgrade document should be updated to mention that events are emitted per the new contract version.
+- TTL policy for existing records across a wasm replacement is tracked in [#19](https://github.com/naninu123/4evergent/issues/19). This document does not restate an answer.
+- Lifecycle events are unchanged by this change. The `register`, `update_metadata`, and `deactivate` entrypoints already publish one contract event each on `main`, and this PR neither adds nor removes any of them; the only contract surface added here is the version surface described in §5. If lifecycle events ([#5](https://github.com/naninu123/4evergent/issues/5)) are extended later, this upgrade document should be updated to describe the new event payloads.
 - A general-purpose proxy or governance system is out of scope. The minimal pattern in this document is the deliverable.
