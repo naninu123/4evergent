@@ -140,6 +140,22 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 - Mainnet would additionally require a multi-sig or governance approval for the upgrade authorizer, a formal release/version record, and a rollback plan; none of these are implemented here.
 - The full procedure, CLI commands, storage observations, and migration note template live in `docs/contract-upgrades.md`.
 
+## ADR-015: agent-registry rewritten from scaffold to deployed contract
+
+**Status:** Accepted | 2026-09-28
+
+**Context:** `contracts/agent-registry` was originally committed as an unimplemented scaffold: `DESIGN.md` described intent and API mapping only, with no authorization, no validation, and no state semantics. The contract has since been implemented and deployed to Testnet (see `docs/testnet.md` for the contract ID and wasm hash). The scaffold-era `DESIGN.md` still claimed "No implementation yet" and described a contract that no longer exists, misleading contributors who read it first.
+
+**Decision:** Treat `contracts/agent-registry/src/lib.rs` as the source of truth and rewrite `contracts/agent-registry/DESIGN.md` as a post-rewrite design document grounded in the deployed code. The rewrite documents the four entrypoints (`register`, `update_metadata`, `deactivate`, `query`), the `AgentInfo`/`DataKey` data model, the 9-variant `Error` enum, and the TTL policy. Authorization was added to all three mutating entrypoints: each calls `caller.require_auth()` as its first statement, and `register` additionally calls `stellar_address.require_auth()` to bind the on-chain identity to the Stellar account. Open design questions (events #5, id character set #4, validation hardening #8, anti-squatting #7, upgrade path #104, deactivate irreversibility #6, TTL policy #19) are referenced, not decided.
+
+**Consequences:**
+- `DESIGN.md` matches the deployed contract; every claim is checkable against `src/lib.rs` with file+line citations.
+- The pre-rewrite scaffold description is removed; the deployed contract is the only documented behaviour.
+- Authorization is now part of the documented contract surface: mutating entrypoints require the owner's signature, and `register` binds the agent to the Stellar address that authorized it.
+- Open questions remain explicitly open; the document does not present #6, #7, or #19 as settled.
+- No contract behaviour, validation, events, TTL, or permissions-crate code was changed by this decision; it is documentation-only.
+- Deploy commands and the authoritative contract ID/wasm hash stay in `docs/testnet.md` and are linked, not duplicated.
+
 ## ADR-016: Bounded missed schedule runs
 
 **Status:** Accepted
