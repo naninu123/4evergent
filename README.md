@@ -62,29 +62,29 @@ Stellar is purpose-built for asset issuance and payments with native low-fee, fa
 
 ```
 4evergent/
-├── apps/
-│   ├── web/              # React + TS frontend (agent dashboard)
-│   ├── api/              # Express-style backend API
-│   └── cli/              # Operator CLI (HTTP client) — see [docs/cli.md](docs/cli.md)
-├── packages/
-│   ├── agent-core/      # Agent runtime, intent validation, Stellar adapter
-│   ├── policy/           # Deterministic authorization engine
-│   ├── stellar/          # Transaction construction + simulation + submission + reconciliation + network guard
-│   ├── database/         # In-memory + SQLite stores (activity, approvals, agents, executions)
-│   └── shared/           # Shared types & schemas
+├── apps/
+├── web/              # React + TS frontend (agent dashboard)
+ ├── api/              # Express-style backend API
+ ├── cli/              # Operator CLI (HTTP client) — see [docs/cli.md](docs/cli.md)
+—── packages/
+ ├── agent-core/      # Agent runtime, intent validation, Stellar adapter
+—── policy/           # Deterministic authorization engine
+—── stellar/          # Transaction construction + simulation + submission + reconciliation + network guard
+—── database/         # In-memory + SQLite stores (activity, approvals, agents, executions)
+—── shared/           # Shared types & schemas
 ├── contracts/            # Rust workspace (own Cargo.lock, pinned toolchain)
-│   ├── agent-registry/   # Soroban contract (agent identity on-chain) — deployed on Testnet
-│   └── permissions/      # Soroban authorization primitives (experimental, not in workspace)
+—── agent-registry/   # Soroban contract (agent identity on-chain) — deployed on Testnet
+└── permissions/      # Soroban authorization primitives (experimental, not in workspace)
 ├── docs/
-│   ├── architecture.md
-│   ├── security-model.md
-│   ├── capabilities.md
-│   ├── roadmap.md
-│   ├── testnet.md
-│   ├── contract-upgrades.md
-│   └── cli.md
+ ├── architecture.md
+ ├── security-model.md
+ ├── capabilities.md
+ ├── roadmap.md
+ ├── testnet.md
+ ├── contract-upgrades.md
+ └── cli.md
 └── README.md
-`h``
+```
 
 **MVP vertical slice** (verified, runnable):
 
@@ -109,7 +109,7 @@ Key guarantees:
 - **Approval thresholds**: amounts above a configurable limit require human approval.
 - **Key management**: private keys never in source, env examples, logs, or tests.
 - **Frontend/backend trust boundary**: the frontend never receives secret material; all signing happens server-side through a hardened path.
-- **API authentication**: development mode auto-authenticates a single owner; production mode requires `Authorization: Bearer <key>` with keys configured server-side via `API_KEYS` (format `key:ownerId[:subject]`, comma-separated). See [docs/security-model.md](docs/security-model.md) — API Authentication.
+- **API authentication**: development mode auto-authenticates a single owner; production mode requires `Authorization: Bearer <key>` with keys configured server-side via `API_KEYS (format `key:ownerId[:subject]`, comma-separated). See [docs/security-model.md](docs/security-model.md) — API Authentication.
 
 ## Local development
 
@@ -199,7 +199,7 @@ The MVP is validated against the testnet Horizon API. See [docs/testnet.md](docs
 
 1. Add the new intent type to `packages/shared/src/types.ts` (extend the `AgentIntent` union).
 2. Add validation logic to `IntentValidator` in `packages/agent-core/src/`.
-3. Add a corresponding policy rule entry in `packages/policy/src/types.ts`.
+3. Add a corresponding policy rule entry in `packages/policy/src/types.t`.
 4. Add the transaction builder in `packages/stellar/src/`.
 5. Write unit + integration tests for steps 2–4.
 6. Document the capability in `docs/capabilities.md`.
@@ -212,9 +212,9 @@ Agents can have persistent schedules that automatically execute typed intents on
 
 ```bash
 # Create a schedule
-curl  -X POST http://localhost:3000/agents/<agent-id>/schedules \
+curl -X POST http://localhost:3000/agents/<agent-id>/schedules \
   -H "Content-Type: application/json" \
-  -d {
+  -d '{
     "intent": { "type": "payment", "asset": "XLM", "destination": "G...", "amount": "10", "reason": "daily payout" },
     "scheduleExpression": "0 * * * *",
     "timezone": "UTC"
@@ -247,62 +247,4 @@ Install the published command with:
 npm install --global @4evergent/cli
 ```
 
-Configure `FOREGENT_API_URL` and, when using production authentication,
-`FOREGENT_API_KEY` in the shell where you run the command. See
-[the CLI guide](docs/cli.md) for configuration and available commands.
-
-```bash
-# Configure the API connection in the shell where you run the CLI
-export FOREGENT_API_URL=http://localhost:3000
-export FOREGENT_API_KEY=your-api-key
-
-# Use the installed command
-4evergent health
-4evergent agent list
-4evergent agent pause <id>
-4evergent approval list
-4evergent approval approve <id>
-4evergent execution list
-4evergent policy get <agent-id>
-4evergent activity list <agent-id>
-4evergent schedule list <agent-id>
-4evergent intent submit <agent-id> <type> [args...]
-```
-
-To run the source version from a repository checkout:
-
-```bash
-pnpm --filter @4evergent/cli build
-npx tsx apps/cli/src/cli.ts health
-```
-
-See [docs/cli.md](docs/cli.md) for full command reference.
-
-## Contract upgrades
-
-The deployed `agent-registry` Soroban contract can be upgraded in place without changing its contract ID, and existing storage entries survive the wasm replacement. The full procedure, the storage-schema version policy, and the migration-note template are documented in [docs/contract-upgrades.md](docs/contract-upgrades.md). The chosen policy is recorded as an ADR in [docs/architecture.md](docs/architecture.md).
-
-## Roadmap
-
-| Phase | Goal | Status |
-|-------|------|--------|
-| 1 | Agent identity, policy engine, intent validation, Stellar read adapter, activity logging | ✅ Shipped |
-| 2 | Full transaction pipeline (construct → simulate → authorize → sign → submit) with Signer abstraction | ✅ Shipped |
-| 3 | Persistent SQLite stores, approval/reject HTTP endpoints, daily limit enforcement | ✅ Shipped |
-| 4 | React web dashboard + read-only API | ✅ Shipped |
-| 5 | Soroban AgentRegistry contract | ✅ Compiled, tested, deployed on Stellar Testnet |
-| 6 | Soroban Permissions contract | Intentionally not deployed (needs its own DESIGN pass) |
-| 7 | Multi-agent capability discovery & economy | Future |
-| 8 | Agent scheduling & automation | ✅ Shipped |
-| 9 | Persistent execution queue with retry & dead-letter | ✅ Shipped |
-| 10 | Execution queue crash recovery | ✅ Shipped |
-| 11 | Agent self-serve creation | ✅ Shipped |
-| 12 | Trustline & non-XLM asset support | ✅ Shipped |
-| 13-18 | Reliability hardening (atomic claim, idompotency, ambiguous submission, pre-check, docs) | ✅ Shipped |
-| 19 | Operator CLI v1 (health, agent lifecycle, approval, execution) | ✅ Shipped |
-
----
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+Configure `FOREGENT_API_URL` and, when using production authentication, an API key via the client environment. See [docs/cli.md](docs/cli.md) for the full command reference.

@@ -33,7 +33,7 @@ export variables in your shell for those (`export STELLAR_TESTNET_SECRET_KEY=...
 
 ```bash
 # Run live smoke test (no secrets required, only reads Horizon root)
-npx tsx packages/stellar/test/live-smoke.ts
+nxts tsx packages/stellar/test/live-smoke.ts
 ```
 
 This verifies:
@@ -66,6 +66,7 @@ a.getAccount('<YOUR_PUBLIC_KEY>').then(acc => {
   console.log('Balances:', acc.balances);
 });
 "
+"
 ```
 
 ### 6. Run tests (deterministic, no secrets required)
@@ -83,7 +84,7 @@ pnpm --filter @4evergent/api start
 # Submit intent for simulation/approval
 curl -X POST http://localhost:3000/agents/<agent-id>/intents \
   -H "Content-Type: application/json" \
-  -d '{"type":"payment","asset":"XLM","destination":"G...","amount":"0.001","reason":"test"}'
+  -d '{"type":"payment","asset":"XLM","destination":"G","amount":"0.001","reason":"test"}'
 ```
 
 Intent will be simulated against real Testnet Horizon. If policy allows and no approval required, it will be submitted ONLY if `LIVE_SUBMIT=1`.
@@ -92,7 +93,7 @@ Intent will be simulated against real Testnet Horizon. If policy allows and no a
 
 ```bash
 # Stop server, restart with LIVE_SUBMIT=1
-LIVE_SUBMIT=1 pnpm --filter @4evergent/api start
+CIVE_SUBMIT=1 pnpm --filter @4evergent/api start
 ```
 
 ### 9. Execute Testnet transaction
@@ -111,7 +112,7 @@ Or check on [Stellar Expert](https://stellar.expert/explorer/testnet) with your 
 
 ```bash
 # Without secrets — only verify network + simulation
-npx tsx packages/stellar/test/live-smoke.ts
+nxts tsx packages/stellar/test/live-smoke.ts
 ```
 
 ## Live End-to-End Test
@@ -126,11 +127,11 @@ reconciliation). Runs against the real Stellar Testnet.
 
 # 1. Fund a testnet account (once):
 #    node -e "const {Keypair}=require('@stellar/stellar-sdk'); const k=Keypair.random(); console.log(k.secret());" > /tmp/stellar-secret
-#    curl "https://friendbot.stellar.org?addr=<PUBLIC_KEY_FROM_ABOVE>"
+#    curl "https://friendbot.stellar.org?addr=<PUBLIC_KEY_FROM/ABOVE>"
 
 # 2. Run live E2E:
 STELLAR_TESTNET_SECRET_KEY=$(cat /tmp/stellar-secret) LIVE_SUBMIT=1 \
-  npx tsx packages/stellar/test/live-e2e.ts
+  nxts tsx packages/stellar/test/live-e2e.ts
 ```
 
 Expected output (all 8 steps pass):
@@ -212,7 +213,7 @@ Artifact: `contracts/target/wasm32-unknown-unknown/release/agent_registry.wasm`.
 
 Create and fund a throwaway testnet identity. The secret key stays in the local
 CLI config (`~/.config/stellar/identity/`, mode `0600`) — never commit it, never
-print it, and `.gitignore` already covers `.env*`:
+print it, and `.gitignore` already covers `.env$`:
 
 ```bash
 stellar keys generate deployer --network testnet --fund
@@ -228,33 +229,43 @@ stellar contract deploy \
   --source deployer --network testnet --alias agent_registry
 ```
 
-`--network testnet` is required and there is no mainnet path in this repo. The
-command prints the contract ID; it also stores the ID under the alias in the
+`--network testnet` required and there is no mainnet path in this repo. The command prints the contract ID; it also stores the ID under the alias in the
 local CLI config.
 
 ### Verify
 
+Set `CONTRACT_ID` to the deployed contract ID from the deployment record above
+(or the ID printed by `stellar contract deploy`):
+
 ```bash
+CONTRACT_ID=CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7
+
 # read-only call (query returns null for an id that was never registered)
-stellar contract invoke --id  --source deployer --network testnet --send=no \
+stellar contract invoke --id "$CONTRACT_ID" --source deployer --network testnet --send=no \
   -- query --id not_registered
 
 # write then read back
-stellar contract invoke --id  --source deployer --network testnet \
-  -- register --caller $(stellar keys address deployer) --id deploy_smoke \
-    --display_name "Deploy Smoke" --stellar_address $(stellar keys address deployer) \
+stellar contract invoke --id "$CONTRACT_ID" --source deployer --network testnet \
+  -- register --caller $(stellar-keys address deployer) --id deploy_smoke \
+    --display_name "Deploy Smoke" --stellar_address $(stellar-keys address deployer) \
     --capabilities '["pay"]'
-stellar contract invoke --id  --source deployer --network testnet --send=no \
+stellar contract invoke --id "$CONTRACT_ID" --source deployer --network testnet --send=no \
   -- query --id deploy_smoke
 
-# confirm the on-chain wasm matches the local build (sha256 == wasm hash above)
-stellar contract fetch --id  --network testnet --out-file /tmp/fetched.wasm
-sha256sum /tmp/fetched.wasm
+# confirm the on-chain wasm hash matches the local build
+stellar contract info hash --contract-id "$CONTRACT_ID" --network testnet
 ```
 
+The `stellar contract info hash` command prints the hash of the WASM currently
+installed for the contract instance. It must equal the local build hash from the
+deployment record above (`83656ffddd08a22e1977b6cf129af4d6515be7e8494d843ded1aa1c0ef3f8445`).
+If the hashes differ, the instance is running a different WASM than the one you
+built — re-build with the pinned toolchain and redeploy, or confirm that an
+expected upgrade has already been applied.
+
 Verified on 2026-09-28: `query` on an unknown id returned `null`; after
-`register`, `query` returned the record with `"active": true`; the fetched wasm
-sha256 equalled `83656ffddd08a22e1977b6cf129af4d6515be7e8494d843ded1aa1c0ef3f8445`.
+`register`, `query` returned the record with `"active": true`; the `stellar contract
+info hash` output equalled `83656ffddd08a22e1977b6cf129af4d6515be7e8494d843ded1aa1c0ef3f8445`.
 
 For redeploying a new wasm over this existing contract ID (preserving storage), see the upgrade walkthrough in [`docs/contract-upgrades.md`](contract-upgrades.md).
 
@@ -275,7 +286,7 @@ A faster reconciliation loop is handy for a testnet demo; a slower one reduces H
 - **Network validation**: Only Testnet URL + passphrase accepted. Mainnet explicitly rejected.
 - **Live submission gate**: `LIVE_SUBMIT=1` required. Default = disabled.
 - **Secret isolation**: Private key never in database, logs, API responses, error messages.
-- **Atomic claim**: `updateIfStatus(queued→executing)` CAS prevents concurrent execution.
+- **Atomic claim**: `updateIfStatus(queued→sexecuting)` CAS prevents concurrent execution.
 - **Idempotency**: `Idempotency-Key` header prevents duplicate financial execution.
 - **Pre-check**: Horizon lookup before blind retry prevents duplicate submission.
 

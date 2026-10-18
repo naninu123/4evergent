@@ -98,6 +98,10 @@ const MAX_CAPABILITY_LEN: u32 = 32;
 /// writes; see `docs/contract-upgrades.md` for the migration policy.
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
 
+/// Storage key under which the schema version is persisted. `version()` reads
+/// this key (falling back to [`STORAGE_SCHEMA_VERSION`] when unset) so the
+/// documented "persisted under `DataKey::Version`" behavior holds.
+
 #[contracttype]
 #[derive(Clone)]
 pub struct AgentInfo {
@@ -117,6 +121,7 @@ pub struct AgentInfo {
 #[derive(Clone)]
 pub enum DataKey {
     Agent(String),
+    Version,
 }
 
 #[contracterror]
@@ -353,8 +358,15 @@ impl AgentRegistry {
     /// storage access, no TTL mutation, no authorization required. Consumers
     /// use this to detect whether a deployed instance predates a schema
     /// change they depend on.
-    pub fn version(_env: Env) -> u32 {
-        STORAGE_SCHEMA_VERSION
+    ///
+    /// The version is persisted under `DataKey::Version` on first write path
+    /// (see `bump_ttl` callers); if the key is absent (fresh instance or a
+    /// pre-versioning deployment) this returns [`STORAGE_SCHEMA_VERSION`].
+    pub fn version(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Version)
+            .unwrap_or(STORAGE_SCHEMA_VERSION)
     }
 }
 
@@ -1368,6 +1380,19 @@ mod test {
     #[test]
     fn test_version_matches_constant() {
         let (env, _cid, client) = setup();
+        assert_eq!(client.version(), STORAGE_SCHEMA_VERSION);
+        // The version is persisted under DataKey::Version after a write path.
+        env.mock_all_auths();
+        let owner = Address::generate(&env);
+        let id = String::from_str(&env, "a1");
+        register(&env, &client, &owner, &id, "A");
+        let persisted: u32 = env.as_contract(&_cid, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::Version)
+                .unwrap_or(STORAGE_SCHEMA_VERSION)
+        });
+        assert_eq!(persisted, STORAGE_SCHEMA_VERSION);
         assert_eq!(client.version(), STORAGE_SCHEMA_VERSION);
         // Sanity: the constant is non-zero so a default/zero value from a
         // future caller cannot be mistaken for a valid schema version.

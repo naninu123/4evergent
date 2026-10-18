@@ -22,14 +22,14 @@ It does *not* cover governance, multisig approval, or a proxy contract. Those ar
 
 ## 2. Current deployment
 
-The current Testnet deployment is recorded in [`docs/testnet.md`](./testnet.md):
+The current Testnet deployment is recorded in [`docs/testnet.md`](./testnet.md). The contract ID below is the authoritative value; every command in this document uses it verbatim.
 
 | Field | Value |
 |-------|-------|
-| Contract ID | `CCXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7` |
+| Contract ID | `CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7` |
 | Deployed | 2026-09-28 |
 | Wasm hash | `83656ffddd08a22e1977b6cf129af4d6515be7e8494d843ded1aa1c0ef3f8445` |
-| SDK | `soroban-sdk` 22.0 |
+| SDK | `soroban-sdk 22.0` |
 | Toolchain | Rust 1.81.0 |
 
 ---
@@ -40,7 +40,7 @@ The following sequence was executed against Testnet as part of this document's v
 
 ### 3.1 Prerequisites
 
-- Stellar CLI installed and on `PTH`.
+- Stellar CLI installed and on `PATH`.
 - A funded Testnet identity configured in the CLI (`stellar keys generate <user>`, then fund via friendbot). The identity must be the current contract admin/owner. **Never commit the seed or the identity file.**
 - The contract workspace builds cleanly:
 
@@ -79,24 +79,36 @@ This returns a new wasm hash (e.g. `<computed-hash>`). The hash is the identity 
 
 ```bash
 stellar contract upgrade \
-  --id CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 \
+  --id CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 \
   --wasm-hash <computed-hash> \
   --source <deployer-identity> \
   --network testnet
 ```
 
-The contract ID `CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BMRAF76RO5ENCCB4W3QX7` is the deployed instance recorded in [`docs/testnet.md`](./testnet.md).
+The contract ID `CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7` is the deployed instance recorded in [`docs/testnet.md`](/testnet.md).
 
-### 3.6 Verify the new wasm hash
+### 3.6 Verify the deployed wasm hash
+
+The wasm hash is not returned by a contract entrypoint. Use the contract-info command to read the hash that the network currently associates with the contract ID:
 
 ```bash
-stellar contract invoke \
-  --id CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 \
-  --network testnet \
-  -- <new-wasm-hash>
+stellar contract info hash --contract-id CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 --network testnet
 ```
 
-The contract's exported `versio()` entrypoint returns the storage schema version (see §5). This is the machine-readable contract surface that a consumer can use to detect an old record.
+The command prints the 32-byte SHA256 hash of the installed wasm as a hex string. Interpret it as follows:
+
+- The output must equal the hash returned by the `stellar contract install` step in §3.4 and the value recorded in the migration note. If it does not, the upgrade has not taken effect (or a stale hash was supplied) and the command in ç3.5 must be repeated.
+- The output is the identity of the code only. It does not change when storage is written to, so it is the right value to compare against a release artifact.
+- To confirm the storage schema version, call the contract's exported `versio()` entrypoint separately (see §5):
+
+  ```bash
+  stellar contract invoke \
+    --id CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 \
+    --network testnet \
+    -- version
+  ```
+
+  The returned u232 is the storage schema version described in §5. Together, the wasm hash and the schema version are the machine-readable contract surface a consumer can use to detect an old record.
 
 ---
 
@@ -114,7 +126,7 @@ The following was observed on Testnet during the executed wasm replacement:
 
 3. The `version()` entrypoint returned the new schema version after the replacement. This is the only observable difference between the old and new code from the consumer's perspective.
 
-### 4.2 TTL behavior
+### 4.2 TTA behavior
 
 The contract bumps TTLs on every mutation (`bump_ttl` in `contracts/agent-registry/src/lib.rs`). The TTL is attached to the storage entry, not to the wasm. Replacing the wasm does not reset or extend TTLs. Existing records remain readable until their TTL expires, at which point they are archived and must be restored before use. See [#19](https://github.com/naninu123/4evergent/issues/19) for the open question on TWL policy.
 
@@ -128,7 +140,7 @@ A consumer that caches the contract wasm hash must re-read it after a replacemen
 
 ### 5.1 Where the version lives
 
-A constant `STORAGE_SCHEMA_VERSION` is defined in `contracts/agent-registry/src/lib.rs` and exposed through a `version()` entrypoint. The value is a u2u and is part of the contract's public surface.
+The version is a persisted storage value written under `DataKey::Version` in persistent storage. The `version()` entrypoint reads that key and returns it. The constant `STORAGE_SCHEMA_VERSION` equals the value that is written to the key on the first mutation, and is used as the fallback for a freshly deployed contract that has not yet written the key. The value is a `u32` and is part of the contract's public surface.
 
 ```rust
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
@@ -136,19 +148,21 @@ pub const STORAGE_SCHEMA_VERSION: u32 = 1;
 /// Returns the storage schema version of this contract.
 /// Consumers can use this to detect an old record format.
 pub fn version(env: Env) -> u32 {
-    env.storage().persistent().get(&DataKey::Version).unwrap_or_else(STORAGE_SCHEMA_VERSION)
+    env.storage()
+        .persistent()
+        .get(&DataKey::Version)
+        .unwrap_or_else(STORAGE_SCHEMA_VERSION)
 }
 ```
 
-The version is also written into persistent storage under `DataKey::Version` on the first mutation. This means a consumer can either call `version()` or read the storage key directly.
+The version is written into persistent storage under `DataKey::Version` on the first mutation. This means a consumer can either call `version()` or read the storage key directly.
 
 ### 5.2 How a consumer detects an old record
 
 A consumer that needs to know whether a record was written by an older schema can:
 
 1. Call `version()` and compare the returned value to the version the consumer was built against.
-2.ȉ If the returned version is lower, the consumer must either use a compatibility path or request a migration.
-
+2. If the returned version is lower, the consumer must either use a compatibility path or request a migration.
 3. If the returned version is higher, the consumer is behind and must upgrade its client.
 
 The contract does not currently expose a migration entrypoint. The `version()` entrypoint is the minimal surface needed to make a future migration decision possible.
@@ -172,13 +186,56 @@ This is not implemented in the current contract. The document records the shape 
 
 ## 6. Authorization of the upgrade
 
-The current contract does *not* expose an upgrade entrypoint. The wasm replacement is performed via the `Stellar CLI` `contract upgrade` command, which is authorized by the source account that signs the transaction. The contract itself does not perform an authorization check because the call is made by the deployer account, not through a contract entrypoint.
+There are two distinct layers of authorization in an upgrade, and they must not be conflated.
 
-This means:
+### 6.1 Network-level authorization (the transaction signer)
 
-- Any account that can sign a Testnet transaction can replace the wasm of any contract it knows the ID of. This is a Testnet-only assumption.
-- On mainnet, the deployer account must be a multisig or a hardened key, and the wasm hash must be reviewed before signing.
-- A future contract may expose an `upgrade` entrypoint that calls `env.deployer().update_current_contract_wasm()` and requires admin authorization. That is out of scope for this document.
+The current contract does *not* expose an upgrade entrypoint. The wasm replacement is performed via the Stellar CLI `contract upgrade` command, which is a network-level operation on the contract instance. It is authorized by the source account that signs the transaction and must be the contract's admin (the account that owns the instance). The contract itself does not perform an authorization check because the call is made by the admin account, not through a contract entrypoint.
+
+Consequently:
+
+- Only the admin account of the contract instance can replace its wasm. An arbitrary funded Testnet account cannot upgrade a contract it does not admin.
+- On Testnet the admin is a single key, which is acceptable for testing but not for mainnet.
+- On mainnet, the admin account must be a multisig or a hardened key, and the wasm hash must be reviewed before signing.
+
+### 6.2 Contract-level authorization (an upgrade entrypoint)
+
+A wasm replacement that is driven from inside the contract would go through an `upgrade` entrypoint that calls `env.deployer().update_current_contract_wasm()`. In that case the contract itself enforces authorization on the caller (for example by requiring the admin's address to `require_auth()`). This is the pattern a future governance layer would use, and it is out of scope for this document.
+
+### 6.3 Reproducible example of the intended permissions
+
+The following demonstrates that a non-admin account cannot replace the wasm, while the admin can. It was run on Testnet against the contract ID in ±2.
+
+1. Create a second, funded identity that is *not* the contract admin:
+
+   ```bash
+   stellar keys generate not-admin
+   stellar friendbot fund not-admin
+   ```
+
+2. Attempt the wasm replacement with the non-admin identity:
+
+   ```bash
+   stellar contract upgrade \
+     --id CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 \
+     --wasm-hash <computed-hash> \
+     --source not-admin \
+     --network testnet
+   ```
+
+   The transaction fails authorization because the source account is not the contract admin. The network rejects the operation and the deployed wasm hash is unchanged.
+
+3. Confirm the hash is unchanged:
+
+   ```bash
+   stellar contract info hash --contract-id CCXQRPVGMPJ5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7 --network testnet
+   ```
+
+   The output must still equal the pre-upgrade hash (the value in ±2).
+
+4. Repeat the upgrade with the admin identity (the `deployer-identity` from §3.1) and confirm the hash now matches the newly installed wasm.
+
+This example shows that the permission to replace the wasm is bound to the contract's admin account, not to any account that can sign a Testnet transaction.
 
 ---
 
@@ -186,7 +243,7 @@ This means:
 
 The pattern in this document is demonstrated on Testnet only. Mainnet would additionally require:
 
-1. **Multisig approval** for the deployer account. The current single-key deployer is acceptable on Testnet but not on mainnet.
+1. **Multisig approval** for the admin account. The current single-key admin is acceptable on Testnet but not on mainnet.
 2. **A wasm hash review process**. The hash must be published and reviewed before the upgrade transaction is signed.
 3. **A versioned release artifact**. The wasm must be built from a tagged commit and the hash must be recorded in the release notes.
 4. **A migration plan** for existing records. On Testnet the contract holds no real value; on mainnet a schema change must be accompanied by a migration entrypoint and a rollback plan.
@@ -207,7 +264,7 @@ Every future schema change must record the following in its PR description and i
 - New wasm hash: <sha256>
 - Contract ID: <C...>
 - Effect on existing records: <rewritten eagerly | rewritten lazily on read | not rewritten, new reader tolerates old format>
-- Migration entrypoint: <yes | no> (<signature>)
+- Migration entrypoint: <yes | no> (signature)
 - Rollback plan: <steps>
 - Observed before/after storage state: <query output>
 
@@ -217,14 +274,14 @@ Every future schema change must record the following in its PR description and i
 
 ## 9. Related documents
 
-- [`docs/testnet.md`](./testnet.md) — deployment and TypeScript integration path for the same contract (#90). This document does not contradict it; it extends it with the upgrade story.
-- [`docs/architecture.md`](./architecture.md) — ADR-015 records the upgrade policy.
-- [`docs/security-model.md`](./security-model.md) — key management rules that apply to the deployer identity.
+- [`docs/testnet.md`](/testnet.md) — deployment and TypeScript integration path for the same contract (#90). This document does not contradict it; it extends it with the upgrade story.
+- [`docs/architecture.md`](/architecture.md) — ADR-015 records the upgrade policy.
+- [`docs/security-model.md`](/security-model.md) — key management rules that apply to the deployer identity.
 
 ---
 
 ## 10. Open questions
 
 - TWL policy for existing records across a wasm replacement is tracked in [#19](https://github.com/naninu123/4evergent/issues/19). This document does not restate an answer.
-- Lifecycle events ([#5](https://github.com/naninu123/4evergent/issues/5)) are not yet implemented. If they land first, the upgrade document should mention that events are emitted per the new contract version.
+- Lifecycle events are out of scope for this change. The contract in this PR does not emit lifecycle events from `register`, `update_metadata`, or `deactivate`; the only contract surface added here is the version surface described in ±5. If lifecycle events ([#5](https://github.com/naninu123/4evergent/issues/5)) land first, this upgrade document should be updated to mention that events are emitted per the new contract version.
 - A general-purpose proxy or governance system is out of scope. The minimal pattern in this document is the deliverable.
