@@ -248,3 +248,58 @@ npm install --global @4evergent/cli
 ```
 
 Configure `FOREGENT_API_URL` and, when using production authentication, an API key via the client environment. See [docs/cli.md](docs/cli.md) for the full command reference.
+
+```bash
+# Configure the API connection in the shell where you run the CLI
+export FOREGENT_API_URL=http://localhost:3000
+export FOREGENT_API_KEY=your-api-key
+
+# Use the installed command
+4evergent health
+4evergent agent list
+4evergent agent pause <id>
+4evergent approval list
+4evergent approval approve <id>
+4evergent execution list
+4evergent policy get <agent-id>
+4evergent activity list <agent-id>
+4evergent schedule list <agent-id>
+4evergent intent submit <agent-id> <type> [args...]
+4evergent completion <bash|zsh>
+```
+
+Shell completion for Bash and Zsh can be generated with `4evergent completion bash` or `4evergent completion zsh`; see [Shell completion](docs/cli.md#shell-completion) for installation instructions.
+
+To run the source version from a repository checkout:
+
+```bash
+pnpm --filter @4evergent/cli build
+npx tsx apps/cli/src/cli.ts health
+```
+
+See [docs/cli.md](docs/cli.md) for full command reference.
+
+## Roadmap
+
+| Phase | Goal | Status |
+|-------|------|--------|
+| 1 | Agent identity, policy engine, intent validation, Stellar read adapter, activity logging | ✅ Shipped |
+| 2 | Full transaction pipeline (construct → simulate → authorize → sign → submit) with Signer abstraction | ✅ Shipped |
+| 3 | Persistent SQLite stores, approval/reject HTTP endpoints, daily limit enforcement | ✅ Shipped |
+| 4 | React web dashboard + read-only API | ✅ Shipped |
+| 5 | Soroban AgentRegistry contract | ✅ Compiled, tested, deployed on Stellar Testnet |
+| 6 | Soroban Permissions contract | Intentionally not deployed (needs its own DESIGN pass) |
+| 7 | Multi-agent capability discovery & economy | Future |
+| 8 | Agent scheduling & automation | ✅ Shipped |
+| 9 | Persistent execution queue with retry & dead-letter | ✅ Shipped |
+| 10 | Execution queue crash recovery | ✅ Shipped |
+| 11 | Agent self-serve creation | ✅ Shipped |
+| 12 | Trustline & non-XLM asset support | ✅ Shipped |
+| 13-18 | Reliability hardening (atomic claim, idempotency, ambiguous submission, pre-check, docs) | ✅ Shipped |
+| 19 | Operator CLI v1 (health, agent lifecycle, approval, execution) | ✅ Shipped |
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).

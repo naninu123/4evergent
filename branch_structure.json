@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "fix/issue-104-document-and-test-a-contract-upgrade-pattern",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "fix/issue-104-document-and-test-a-contract-upgrade-pattern": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "fix/issue-104-document-and-test-a-contract-upgrade-pattern",
+    "origin"
+  ]
+}
