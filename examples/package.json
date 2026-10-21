@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Runnable walkthrough scripts for the @4evergent/* packages. Documentation, not tests.",
+  "scripts": {
+    "smoke": "tsx policy-evaluation.ts && tsx intent-validation.ts && tsx in-memory-stores.ts && tsx pipeline-walkthrough.ts"
+  },
   "dependencies": {
     "@4evergent/agent-core": "workspace:*",
     "@4evergent/database": "workspace:*",
