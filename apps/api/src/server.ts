@@ -15,6 +15,7 @@
  *   RECONCILIATION_INTERVAL_MS  — Reconciliation worker interval in ms (default: 30000)
  *   EXECUTION_QUEUE_INTERVAL_MS — Execution queue worker interval in ms (default: 10000)
  *   SCHEDULER_INTERVAL_MS       — Scheduler poll interval in ms (default: 60000)
+ *   SHUTDOWN_TIMEOUT_MS         — Graceful shutdown drain timeout in ms (default: 10000; alias: DRAIN_TIMEOUT_MS)
  *
  * LIVE_SUBMIT must be explicitly set to "1" to enable real Testnet submission.
  *
@@ -29,6 +30,21 @@
  *     A non-loopback bind WITHOUT API_KEYS is refused at startup unless
  *     ALLOW_DEV_AUTH=1 is explicitly set — the API never serves unauthenticated
  *     traffic on a public interface by accident.
+ *
+ * SHUTDOWN LIFECYCLE:
+ *   On SIGTERM or SIGINT:
+ *     1. Worker loops (scheduler, execution queue, reconciler, data retention)
+ *        are stopped immediately via server.close() to halt polling and prevent claiming new work.
+ *     2. Active HTTP keep-alive connections are aborted/closed, and the HTTP server stops
+ *        accepting new requests.
+ *     3. In-flight executions currently executing are abandoned upon process exit;
+ *        they are NOT awaited. The ExecutionRecoveryService automatically detects
+ *        and recovers any stuck claimed executions on the subsequent startup. This
+ *        decision avoids unbounded shutdown delays caused by slow or stalled external
+ *        RPC/network calls.
+ *     4. A drain timeout (default: 10s, configurable via SHUTDOWN_TIMEOUT_MS or
+ *        DRAIN_TIMEOUT_MS) guarantees the process force-exits (exit code 1) if server.close() hangs.
+ *     5. Re-entrant signals during an active shutdown are ignored (idempotent).
  */
 
 import { createApiServer } from "./index.js";
@@ -67,6 +83,22 @@ export function parseIntervalEnv(name: string, value: string | undefined): numbe
   return parsed;
 }
 
+/**
+ * Parse graceful shutdown drain timeout in milliseconds.
+ * Returns fallback (default 10,000ms) if unset or empty.
+ * Throws on non-numeric or non-positive values so invalid configuration fails fast.
+ */
+export function parseShutdownTimeout(value: string | undefined, fallback = 10_000): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(
+      `Invalid shutdown timeout: expected a positive number of milliseconds, got '${value}'.`
+    );
+  }
+  return parsed;
+}
+
 export interface WorkerIntervals {
   reconciliationIntervalMs: number | undefined;
   executionQueueIntervalMs: number | undefined;
@@ -91,11 +123,13 @@ function parseApiKeys(envVar: string | undefined): Record<string, { ownerId: str
     const parts = entry.split(":");
     if (parts.length < 2) {
       console.error(`FATAL: Invalid API_KEYS format. Expected key:ownerId[:subject], got: ${entry}`);
+      // Fatal configuration error during startup before server or workers are initialized; no worker shutdown required.
       process.exit(1);
     }
     const [key, ownerId, subject] = parts;
     if (!key || !ownerId) {
       console.error(`FATAL: API key and ownerId are required. Got: ${entry}`);
+      // Fatal configuration error during startup before server or workers are initialized; no worker shutdown required.
       process.exit(1);
     }
     keys[key] = { ownerId, subject: subject || `key:${key.slice(0, 8)}` };
@@ -146,6 +180,80 @@ export function decideAuthMode(input: {
   };
 }
 
+export interface ShutdownOptions {
+  drainTimeoutMs?: number;
+  onExit?: (code: number) => void;
+  logger?: {
+    log: (msg: string) => void;
+    error: (msg: string, ...args: any[]) => void;
+  };
+  processObj?: NodeJS.Process;
+}
+
+export interface ShutdownRegistration {
+  shutdown: (signal: string) => Promise<void>;
+  unregister: () => void;
+}
+
+/**
+ * Register SIGTERM and SIGINT graceful shutdown handlers on the given process.
+ *
+ * Lifecycle:
+ * - Worker loops (scheduler, execution queue, reconciler, data retention) are stopped via server.close().
+ * - In-flight executions are abandoned upon process exit rather than awaited, to prevent
+ *   unbounded shutdown delays on external network stalls. Any interrupted executions are
+ *   subsequently recovered by ExecutionRecoveryService on the next startup.
+ * - Idempotent: subsequent signals received while shutdown is already in progress are ignored.
+ * - Drain timeout: if server.close() does not complete within drainTimeoutMs (default: 10s),
+ *   a fatal log is emitted and the process force-exits with code 1.
+ */
+export function registerShutdownHandlers(
+  server: { close: () => Promise<void> },
+  options: ShutdownOptions = {}
+): ShutdownRegistration {
+  const drainTimeoutMs = options.drainTimeoutMs ?? 10_000;
+  const exitFn = options.onExit ?? ((code: number) => process.exit(code));
+  const logger = options.logger ?? console;
+  const proc = options.processObj ?? process;
+
+  let shuttingDown = false;
+
+  async function shutdown(signal: string): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.log(`[4evergent] ${signal} received — shutting down`);
+
+    const timer = setTimeout(() => {
+      logger.error(`[4evergent] Shutdown timeout of ${drainTimeoutMs}ms exceeded — forcing exit`);
+      exitFn(1);
+    }, drainTimeoutMs);
+
+    try {
+      await server.close();
+      clearTimeout(timer);
+      exitFn(0);
+    } catch (err) {
+      clearTimeout(timer);
+      logger.error(`[4evergent] Error during shutdown:`, err);
+      exitFn(1);
+    }
+  }
+
+  const sigtermHandler = () => void shutdown("SIGTERM");
+  const sigintHandler = () => void shutdown("SIGINT");
+
+  proc.on("SIGTERM", sigtermHandler);
+  proc.on("SIGINT", sigintHandler);
+
+  return {
+    shutdown,
+    unregister: () => {
+      proc.off("SIGTERM", sigtermHandler);
+      proc.off("SIGINT", sigintHandler);
+    },
+  };
+}
+
 async function main() {
   const horizonUrl = process.env.STELLAR_HORIZON_URL || TESTNET_HORIZON_URL;
   const port = Number(process.env.PORT || 3000);
@@ -158,6 +266,19 @@ async function main() {
     workerIntervals = readWorkerIntervals(process.env);
   } catch (err: any) {
     console.error(`FATAL: ${err.message}`);
+    // Fatal configuration error during startup before server or workers are initialized; no worker shutdown required.
+    process.exit(1);
+  }
+
+  let drainTimeoutMs: number;
+  try {
+    drainTimeoutMs = parseShutdownTimeout(
+      process.env.SHUTDOWN_TIMEOUT_MS ?? process.env.DRAIN_TIMEOUT_MS,
+      10_000
+    );
+  } catch (err: any) {
+    console.error(`FATAL: ${err.message}`);
+    // Fatal configuration error during startup before server or workers are initialized; no worker shutdown required.
     process.exit(1);
   }
 
@@ -166,6 +287,7 @@ async function main() {
     console.error(
       `FATAL: STELLAR_HORIZON_URL must point to Testnet (got: ${horizonUrl}). Mainnet execution is not supported.`
     );
+    // Fatal configuration error during startup before server or workers are initialized; no worker shutdown required.
     process.exit(1);
   }
 
@@ -174,6 +296,7 @@ async function main() {
     signer = new TestnetLocalSigner(TESTNET_PASSPHRASE);
   } catch (err: any) {
     console.error(`FATAL: ${err.message}`);
+    // Fatal signer initialization error during startup before server or workers are initialized; no worker shutdown required.
     process.exit(1);
   }
 
@@ -188,6 +311,7 @@ async function main() {
 
   if (decision.mode === "refuse") {
     console.error(`FATAL: ${decision.reason}`);
+    // Fatal auth configuration refusal before server or workers are initialized; no worker shutdown required.
     process.exit(1);
   }
 
@@ -241,8 +365,9 @@ async function main() {
   console.log(`[4evergent] Database: ${dbPath ?? "in-memory"}`);
   console.log(`[4evergent] Live submission: ${process.env.LIVE_SUBMIT === "1" ? "ENABLED" : "disabled"}`);
 
+  let server: Awaited<ReturnType<typeof createApiServer>> | null = null;
   try {
-    const server = await createApiServer({
+    server = await createApiServer({
       port,
       horizonUrl,
       signer,
@@ -269,8 +394,19 @@ async function main() {
 
     await server.listen(port, host);
     console.log(`[4evergent] Server listening on http://${host}:${port}`);
+
+    registerShutdownHandlers(server, { drainTimeoutMs });
   } catch (err: any) {
     console.error(`FATAL: ${err.message}`);
+    // If the server was created before failure (e.g. server.listen() threw EADDRINUSE),
+    // ensure background workers are stopped before exiting.
+    if (server) {
+      try {
+        await server.close();
+      } catch (closeErr) {
+        console.error(`[4evergent] Error while closing server during fatal startup failure:`, closeErr);
+      }
+    }
     process.exit(1);
   }
 }
