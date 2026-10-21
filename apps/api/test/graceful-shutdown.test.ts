@@ -7,7 +7,6 @@ import { dirname, join } from "node:path";
 import {
   parseShutdownTimeout,
   registerShutdownHandlers,
-  type ShutdownOptions,
 } from "../src/server.js";
 import { createApiServer } from "../src/index.js";
 import { DevAuthProvider } from "@4evergent/shared";
