@@ -10,8 +10,8 @@
     "pnpm": ">=9"
   },
   "scripts": {
-    "build": "node api.js && pnpm -r build",
-    "dev": "node api.js && pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
     "dev:watch": "pnpm --filter @4evergent/api dev",
     "test": "pnpm -r test",
     "test:coverage": "node scripts/test-coverage.mjs",
