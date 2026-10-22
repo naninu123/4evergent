@@ -14,6 +14,7 @@
 
 import { exit } from "node:process";
 import { createRequire } from "node:module";
+import { createInterface } from "node:readline/promises";
 import { COMMAND_TREE, COMMANDS_HELP, buildCommandTree, dispatchCommand } from "./commands.js";
 import { generateCompletion } from "./completion.js";
 
@@ -233,6 +234,40 @@ async function cmdAgentStatus(agentId: string, status: "active" | "paused" | "di
       body: JSON.stringify({ status }),
     });
     console.log(`Agent ${body.id} status: ${body.status}`);
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdAgentDelete(args: string[]) {
+  const [agentId, ...flags] = args;
+  if (!agentId || flags.some((flag) => flag !== "--yes")) {
+    console.error("Usage: 4evergent agent delete <id> [--yes]");
+    return 1;
+  }
+
+  if (!flags.includes("--yes")) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error("Agent deletion requires confirmation; pass --yes to confirm.");
+      return 1;
+    }
+    const readline = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const answer = await readline.question(`Delete agent ${agentId} and its schedules? [y/N] `);
+      if (answer.trim().toLowerCase() !== "y" && answer.trim().toLowerCase() !== "yes") {
+        console.log("Agent deletion cancelled.");
+        return 1;
+      }
+    } finally {
+      readline.close();
+    }
+  }
+
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" });
+    console.log(`Agent deleted: ${body.id ?? agentId} (schedules deleted: ${body.schedulesDeleted ?? 0})`);
     return 0;
   } catch (err: any) {
     console.error(`Error: ${err.message}`);
@@ -909,10 +944,28 @@ export const dispatcherTree = buildCommandTree({
   },
 });
 
+const agentDeleteCommand = {
+  name: "delete",
+  description: "Delete an agent and its schedules",
+  args: [{ name: "id", description: "Agent ID" }],
+  flags: ["--yes"],
+};
+COMMAND_TREE.agent!.subcommands!.delete = agentDeleteCommand;
+Object.assign(dispatcherTree.agent!, {
+  usage: "Usage: 4evergent agent <list|get|create|pause|resume|disable|delete> [id] [--yes]",
+});
+dispatcherTree.agent!.subcommands!.delete = {
+  ...agentDeleteCommand,
+  run: (args) => cmdAgentDelete(args),
+};
+
 async function main(): Promise<number> {
   return dispatchCommand(dispatcherTree, argv, {
     version: VERSION,
-    helpText: COMMANDS_HELP,
+    helpText: COMMANDS_HELP.replace(
+      "  agent list | get <id> | create <name> | pause <id> | resume <id> | disable <id>",
+      "  agent list | get <id> | create <name> | pause <id> | resume <id> | disable <id> | delete <id> [--yes]",
+    ),
   });
 }
 

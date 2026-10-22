@@ -49,6 +49,7 @@ is optional when the API is running in development authentication mode.
 4evergent agent pause <id>                  Pause agent (rejects new intents)
 4evergent agent resume <id>                 Resume agent (active)
 4evergent agent disable <id>                Disable agent
+4evergent agent delete <id> [--yes]         Delete agent and its schedules (prompts for confirmation)
 4evergent approval list                     List pending approvals
 4evergent approval get <id>                 Show approval detail
 4evergent approval approve <id>             Approve an intent

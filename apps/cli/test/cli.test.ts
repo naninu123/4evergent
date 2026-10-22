@@ -979,6 +979,23 @@ test("CLI v3: agent create → API key never appears in output", () => {
   assert.ok(!r.stdout.includes("«redacted:sk-…»"));
 });
 
+test("CLI: agent delete --yes calls DELETE and reports the result", () => {
+  const r = run(["agent", "delete", "agent-1", "--yes"], {
+    responses: [{ match: "/agents/agent-1", status: 200, body: { deleted: true, id: "agent-1", schedulesDeleted: 2 } }],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /Agent deleted: agent-1/);
+  assert.match(r.stdout, /schedules deleted: 2/);
+  assert.equal(r.requests[0]?.method, "DELETE");
+});
+
+test("CLI: agent delete without --yes refuses non-interactive deletion", () => {
+  const r = run(["agent", "delete", "agent-1"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /requires confirmation/);
+  assert.deepEqual(r.requests, []);
+});
+
 test("CLI: no command → usage lists all eight top-level commands", () => {
   const r = run([]);
   assert.equal(r.code, 1);

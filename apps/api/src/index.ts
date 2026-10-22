@@ -710,6 +710,9 @@ export async function createApiServer(options: ServerOptions) {
     if (method === "GET" && /^\/agents\/[^/]+$/.test(url)) {
       return handleGetAgent(requestScopedCtx, req, res);
     }
+    if (method === "DELETE" && /^\/agents\/[^/]+$/.test(url)) {
+      return handleDeleteAgent(requestScopedCtx, req, res);
+    }
     if (method === "GET" && /^\/agents\/[^/]+\/activity(\?.*)?$/.test(url)) {
       return handleAgentActivity(requestScopedCtx, req, res);
     }
@@ -1014,6 +1017,29 @@ export async function createApiServer(options: ServerOptions) {
       createdAt: agent.createdAt,
       updatedAt: agent.updatedAt,
     });
+  }
+
+  async function handleDeleteAgent(ctx: RequestContext, req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)$/);
+    const agentId = match?.[1];
+    if (!agentId) return apiError(res, "INVALID_PATH_PARAM");
+    const agent = await agentStore.getForOwner(agentId, ctx.ownerId!);
+    if (!agent) return apiError(res, "AGENT_NOT_FOUND");
+
+    let schedulesDeleted = 0;
+    let agentSchedules = await schedules.listByAgent(agentId, 100);
+    while (agentSchedules.length > 0) {
+      for (const schedule of agentSchedules) {
+        if (await schedules.delete(schedule.id)) schedulesDeleted++;
+      }
+      agentSchedules = await schedules.listByAgent(agentId, 100);
+    }
+
+    const deleted = await agentStore.delete(agentId);
+    if (!deleted) return apiError(res, "AGENT_NOT_FOUND");
+    agents.delete(agentId);
+    return json(res, { deleted: true, id: agentId, schedulesDeleted });
   }
 
   async function handleGetAgentSpending(ctx: RequestContext, req: any, res: any) {

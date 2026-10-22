@@ -2,6 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { clearAgents, createApiServer } from "../src/index.js";
 import { DevAuthProvider } from "@4evergent/shared";
+import { InMemoryScheduleStore } from "@4evergent/database";
 import type { Signer } from "@4evergent/stellar";
 import type { PolicyRules } from "@4evergent/shared";
 import type { AddressInfo } from "node:net";
@@ -40,7 +41,7 @@ function makeAgent(id: string, ownerId: string, status = "active") {
   };
 }
 
-async function startServer(opts: { authProvider: DevAuthProvider }) {
+async function startServer(opts: { authProvider: DevAuthProvider; scheduleStore?: InMemoryScheduleStore }) {
   const server = await createApiServer({
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
@@ -48,6 +49,7 @@ async function startServer(opts: { authProvider: DevAuthProvider }) {
     policyRules: BASE_RULES,
     deferExecution: true,
     authProvider: opts.authProvider,
+    scheduleStore: opts.scheduleStore,
   });
 
   return new Promise<{
@@ -77,6 +79,11 @@ async function patch(baseUrl: string, path: string, body: unknown) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  return { status: res.status, body: await res.json() };
+}
+
+async function remove(baseUrl: string, path: string) {
+  const res = await fetch(`${baseUrl}${path}`, { method: "DELETE" });
   return { status: res.status, body: await res.json() };
 }
 
@@ -151,6 +158,59 @@ test("AUTHZ: GET /agents/:id — non-owner cannot read", async () => {
   try {
     const res = await get(baseUrl, "/agents/agent-b");
     assert.equal(res.status, 404);
+  } finally {
+    await close();
+  }
+});
+
+test("DELETE /agents/:id — non-owner gets 404 and agent remains", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-b", "owner-b"));
+  try {
+    const deleted = await remove(baseUrl, "/agents/agent-b");
+    assert.equal(deleted.status, 404);
+    assert.equal((await get(baseUrl, "/agents/agent-b")).status, 404);
+  } finally {
+    await close();
+  }
+});
+
+test("DELETE /agents/:id — deletes disabled agent and schedules, then list and get omit it", async () => {
+  const schedules = new InMemoryScheduleStore();
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+    scheduleStore: schedules,
+  });
+  registerAgent(makeAgent("agent-a", "owner-a", "disabled"));
+  const now = new Date().toISOString();
+  await schedules.create({
+    id: "schedule-a",
+    agentId: "agent-a",
+    ownerId: "owner-a",
+    status: "active",
+    intent: {
+      type: "payment",
+      asset: "XLM",
+      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      amount: "1",
+      reason: "delete test",
+    },
+    scheduleExpression: "0 * * * *",
+    timezone: "UTC",
+    nextRunAt: "2099-01-01T00:00:00Z",
+    lastRunAt: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  try {
+    const deleted = await remove(baseUrl, "/agents/agent-a");
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(deleted.body, { deleted: true, id: "agent-a", schedulesDeleted: 1 });
+    assert.equal((await get(baseUrl, "/agents")).body.agents.some((agent: any) => agent.id === "agent-a"), false);
+    assert.equal((await get(baseUrl, "/agents/agent-a")).status, 404);
+    assert.equal(await schedules.get("schedule-a"), null);
   } finally {
     await close();
   }

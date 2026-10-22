@@ -224,6 +224,16 @@ Body: `{ "status": "active" | "paused" | "disabled" }`
 - `400` → invalid status / invalid JSON
 - `404` → not found or not owned
 
+### DELETE /agents/:id
+
+Delete an agent owned by the authenticated caller. Agents may be deleted in
+any status, including `disabled`. Schedules belonging to the agent are also
+deleted so they cannot run without their agent; historical activity and
+execution records are retained.
+
+- `200` → `{ "deleted": true, "id": string, "schedulesDeleted": number }`
+- `404` → agent not found or not owned
+
 ---
 
 ## Intents
