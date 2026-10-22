@@ -1,4 +1,4 @@
-import { Horizon, type Transaction } from "@stellar/stellar-sdk";
+import { Horizon, type Asset, type Transaction } from "@stellar/stellar-sdk";
 import type { SimulationResult } from "@4evergent/shared";
 
 /**
@@ -14,7 +14,8 @@ import type { SimulationResult } from "@4evergent/shared";
  *  - the transaction envelope XDR is well-formed (round-trip),
  *  - the source account exists,
  *  - the transaction sequence number is exactly the on-chain sequence + 1,
- *  - the source account's XLM balance covers amount + fee + minimum reserve,
+ *  - the source account has enough of the payment asset, and its XLM balance
+ *    covers fee + minimum reserve,
  *  - the destination is a valid G... address (validated by TransactionBuilder),
  *  - the transaction fee is >= network base fee.
  *
@@ -86,23 +87,57 @@ export class StellarSimulator {
       );
     }
 
-    // 6. Balance precondition for XLM payments.
+    // 6. Payment-asset balance and XLM fee/reserve preconditions.
     const warnings: string[] = [];
-    const xlmBalance = (account.balances as { asset_type: string; balance: string }[]).find(
-      (b) => b.asset_type === "native"
-    );
-    if (xlmBalance) {
-      const payment = paymentAmount(transaction);
-      const totalCost = payment + Number(transaction.fee) / 1e7;
-      const available = Number(xlmBalance.balance) - reserveFor(account);
-      if (totalCost > available) {
+    const payment = paymentAmount(transaction);
+    const balances = (account.balances ?? []) as HorizonBalance[];
+    const xlmBalance = balances.find((balance) => balance.asset_type === "native");
+    const reserve = reserveFor(account);
+    const xlmAvailable = Number(xlmBalance?.balance ?? 0) - reserve;
+    const feeXlm = Number(transaction.fee) / 1e7;
+
+    if (payment?.asset.isNative()) {
+      const totalCost = payment.amount + feeXlm;
+      if (totalCost > xlmAvailable) {
         return fail(
           transaction.fee,
           ops,
-          `Insufficient balance: payment ${payment} XLM + fee exceeds available ${available.toFixed(7)} XLM`
+          `Insufficient balance: payment ${payment.amount} XLM + fee exceeds available ${xlmAvailable.toFixed(7)} XLM`
         );
       }
-      if (available - totalCost < 1) {
+      if (xlmAvailable - totalCost < 1) {
+        warnings.push("Remaining balance after transaction is under 1 XLM");
+      }
+    } else if (payment) {
+      const assetName = payment.asset.getCode();
+      const matchingBalance = balances.find((balance) => matchesAsset(balance, payment.asset));
+      const assetAvailable = Number(matchingBalance?.balance ?? 0);
+      if (payment.amount > assetAvailable) {
+        return fail(
+          transaction.fee,
+          ops,
+          `Insufficient balance: payment ${payment.amount} ${assetName} exceeds available ${assetAvailable.toFixed(7)} ${assetName}`
+        );
+      }
+      if (feeXlm > xlmAvailable) {
+        return fail(
+          transaction.fee,
+          ops,
+          `Insufficient XLM balance: fee ${feeXlm.toFixed(7)} XLM + reserve ${reserve.toFixed(7)} XLM exceeds balance ${Number(xlmBalance?.balance ?? 0).toFixed(7)} XLM`
+        );
+      }
+      if (xlmAvailable - feeXlm < 1) {
+        warnings.push("Remaining balance after transaction is under 1 XLM");
+      }
+    } else if (xlmBalance) {
+      if (feeXlm > xlmAvailable) {
+        return fail(
+          transaction.fee,
+          ops,
+          `Insufficient balance: fee ${feeXlm.toFixed(7)} XLM + reserve ${reserve.toFixed(7)} XLM exceeds balance ${Number(xlmBalance.balance).toFixed(7)} XLM`
+        );
+      }
+      if (xlmAvailable - feeXlm < 1) {
         warnings.push("Remaining balance after transaction is under 1 XLM");
       }
     }
@@ -120,13 +155,24 @@ function fail(fee: string, operations: number, error: string): SimulationResult 
   return { success: false, fee, operations, warnings: [], error };
 }
 
-function paymentAmount(transaction: Transaction): number {
-  for (const op of transaction.operations) {
-    if (op.type === "payment") {
-      return Number(op.amount);
-    }
-  }
-  return 0;
+type HorizonBalance = {
+  asset_type: string;
+  asset_code?: string;
+  asset_issuer?: string;
+  balance: string;
+};
+
+function paymentAmount(transaction: Transaction): { amount: number; asset: Asset } | null {
+  const operation = transaction.operations.find((op) => op.type === "payment");
+  if (!operation || operation.type !== "payment") return null;
+  return { amount: Number(operation.amount), asset: operation.asset };
+}
+
+function matchesAsset(balance: HorizonBalance, asset: Asset): boolean {
+  if (asset.isNative()) return balance.asset_type === "native";
+  return (balance.asset_type === "credit_alphanum4" || balance.asset_type === "credit_alphanum12") &&
+    balance.asset_code === asset.getCode() &&
+    balance.asset_issuer === asset.getIssuer();
 }
 
 function reserveFor(account: any): number {
