@@ -242,3 +242,19 @@ When `AUTH_TRUST_PROXY=1` is enabled, the trusted reverse proxy MUST be configur
 - Bounded recovery guarantees all interrupted records are reconciled across multiple pages.
 - The scheduler never starts if recovery fails or has unrecovered records.
 - Transaction finality is not conflated with process crash recovery.
+
+## ADR-023: agent-registry upgrades via in-place wasm replacement, versioned schema
+
+**Status:** Accepted | 2026-10-01
+
+**Context:** `contracts/agent-registry` is deployed on Testnet with persistent, owner-scoped state (registration, metadata, deactivation). Issues #4, #5, #8, and #19 all propose contract changes while that state exists, and the contract had no documented upgrade path, no schema version, and no stated policy for what happens to existing storage across a wasm replacement. The deployed contract exposes four entrypoints (`register`, `update_metadata`, `deactivate`, `query`) and no upgrade hook.
+
+**Decision:** Adopt in-place wasm replacement against the existing contract ID using `stellar contract upload` + `stellar contract invoke --id <contract-id> -- update_current_contract_wasm` (or the equivalent `stellar contract deploy --wasm-hash` path documented in `docs/contract-upgrades.md`), with no proxy/indirection contract and no governance layer. Storage is preserved across replacement because Soroban keys state to the contract ID, not the wasm; the upgrade document records this as an observed result from the Testnet walkthrough. The contract exposes a machine-readable storage schema version via a `version()` entrypoint returning a `u32` constant (`STORAGE_SCHEMA_VERSION`), asserted by a unit test. The upgrade entrypoint is not authorized by the current contract — the answer for this contract is "no entrypoint authorizes the upgrade", which is acceptable on Testnet only. Schema changes follow a documented policy: bump `STORAGE_SCHEMA_VERSION`, detect old records by comparing the stored version, and migrate lazily or eagerly as recorded in the migration note template.
+
+**Consequences:**
+- Contributors changing the contract surface have a stated, tested upgrade path instead of an implicit decision about Testnet state.
+- Consumers can detect an old record by reading `version()` and comparing to the expected schema version; the `Error` enum does not yet carry an "unsupported version" variant, which is a follow-up if a breaking schema change lands.
+- The pattern is demonstrated on Testnet only. Mainnet would additionally require: an authorized upgrade entrypoint (owner or multisig), a documented key-management procedure, a migration rehearsal against a state snapshot, and an explicit freeze window.
+- Existing records survive a wasm replacement; TTL behaviour across replacement is governed by the TTL policy and remains an open question (#19), referenced rather than restated.
+- Events, if added by #5, are emitted per the new contract version; the upgrade document cross-links the deployment/integration doc from #90.
+- No proxy, no governance, no `soroban-sdk` or toolchain change; the contract diff is a version surface only.

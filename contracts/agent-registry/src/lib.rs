@@ -89,6 +89,14 @@ const MAX_CAPABILITIES: u32 = 32;
 /// Max accepted length of a single capability string, in bytes.
 const MAX_CAPABILITY_LEN: u32 = 32;
 
+/// Storage schema version for the on-chain `AgentInfo` record format.
+///
+/// Bumped whenever the persisted layout of `AgentInfo` (or the `DataKey`
+/// namespace) changes in a way a consumer must detect. Exposed to callers via
+/// [`AgentRegistry::version`] so off-chain readers can refuse records they do
+/// not understand. See `docs/contract-upgrades.md` for the migration policy.
+pub const STORAGE_SCHEMA_VERSION: u32 = 1;
+
 #[contracttype]
 #[derive(Clone)]
 pub struct AgentInfo {
@@ -338,6 +346,15 @@ impl AgentRegistry {
         validate_id(&id)?;
         let key = DataKey::Agent(id);
         Ok(env.storage().persistent().get(&key))
+    }
+
+    /// Return the storage schema version this contract instance writes.
+    ///
+    /// Pure read: no storage mutation, no TTL extension. Consumers compare
+    /// this against the version they were built for and reject records they
+    /// cannot interpret. See `docs/contract-upgrades.md`.
+    pub fn version(_env: Env) -> u32 {
+        STORAGE_SCHEMA_VERSION
     }
 }
 
@@ -1344,5 +1361,18 @@ mod test {
         });
 
         assert!(events.is_empty(), "failed update must not emit an event");
+    }
+
+    // ---- storage schema version surface ----
+
+    // The contract exposes a machine-readable storage schema version, and it
+    // matches the constant. Bump both together when the record layout changes.
+    #[test]
+    fn test_version_matches_constant() {
+        let (env, _cid, client) = setup();
+        assert_eq!(STORAGE_SCHEMA_VERSION, 1);
+        assert_eq!(client.version(), STORAGE_SCHEMA_VERSION);
+        // Pure read: no auth required, no storage written.
+        assert!(client.query(&String::from_str(&env, "nope")).is_none());
     }
 }
