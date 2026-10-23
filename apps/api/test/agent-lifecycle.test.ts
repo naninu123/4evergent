@@ -128,6 +128,28 @@ test("AUTHZ: PATCH /agents/:id/status — invalid status", async () => {
   }
 });
 
+test("STATUS: disabled agent rejects later status transitions", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-a", "owner-a"));
+  try {
+    const disabled = await patch(baseUrl, "/agents/agent-a/status", { status: "disabled" });
+    assert.equal(disabled.status, 200);
+    assert.equal(disabled.body.status, "disabled");
+
+    const reactivated = await patch(baseUrl, "/agents/agent-a/status", { status: "active" });
+    assert.equal(reactivated.status, 409);
+    assert.equal(reactivated.body.currentStatus, "disabled");
+    assert.equal(reactivated.body.requestedStatus, "active");
+
+    const check = await get(baseUrl, "/agents/agent-a");
+    assert.equal(check.body.status, "disabled");
+  } finally {
+    await close();
+  }
+});
+
 test("AUTHZ: GET /agents/:id — owner can read own agent", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
     authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),

@@ -25,6 +25,7 @@ import type {
   ScheduleRecord,
   ApprovalRecord,
   ActivityRecord,
+  AgentStore,
 } from "@4evergent/database";
 
 declare const fetch: typeof globalThis.fetch;
@@ -151,7 +152,7 @@ const ROUTES: RouteContract[] = [
       init: {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "active" }),
+        body: JSON.stringify({ status: "paused" }),
       },
     }),
   },
@@ -390,6 +391,7 @@ interface Harness {
     approvals: ApprovalStore;
     executions: ExecutionStore;
     schedules: ScheduleStore;
+    agent: AgentStore;
   };
 }
 
@@ -454,7 +456,7 @@ async function startHarness(withQueue = false, withAuth = true): Promise<Harness
       resolve({
         baseUrl: `http://127.0.0.1:${addr.port}`,
         close: () => server.close(),
-        stores: { activity, approvals, executions, schedules },
+        stores: { activity, approvals, executions, schedules, agent: agentStore },
       });
     });
   });
@@ -796,6 +798,7 @@ test("every non-auth route's success path returns its documented status code and
       // Re-seed into the server's OWN stores before every probe, so
       // destructive routes (PATCH/DELETE) never break the ones after them.
       const ids = await seedFixtures(stores);
+      await stores.agent.update(ids.agentId, { status: "active" });
       void ids;
 
       const probe = route.sample ? route.sample(ids) : { path: route.path };

@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
-import type { Agent } from "@4evergent/shared";
+import type { Agent, AgentStatus } from "@4evergent/shared";
 import { getSharedConnection } from "./shared-connection.js";
-import type { AgentStore, CreateAgentInput } from "./agent-types.js";
+import { getAllowedPreviousAgentStatuses, type AgentStatusTransitionResult, type AgentStore, type CreateAgentInput } from "./agent-types.js";
 
 const MAX_LIMIT = 200;
 
@@ -58,6 +58,23 @@ export class InMemoryAgentStore implements AgentStore {
     }
     this.records.set(id, updated);
     return updated;
+  }
+
+  async transitionStatus(id: string, status: AgentStatus): Promise<AgentStatusTransitionResult> {
+    const existing = this.records.get(id);
+    if (!existing) return { updated: false, reason: "not_found" };
+    if (!getAllowedPreviousAgentStatuses(status).includes(existing.status)) {
+      return { updated: false, reason: "invalid_transition", currentStatus: existing.status };
+    }
+
+    const updated: Agent = {
+      ...existing,
+      status,
+      active: status === "active",
+      updatedAt: new Date().toISOString(),
+    };
+    this.records.set(id, updated);
+    return { updated: true, agent: updated };
   }
 
   async delete(id: string): Promise<boolean> {
@@ -207,6 +224,28 @@ export class SQLiteAgentStore implements AgentStore {
         metadata_json: JSON.stringify(updated.metadata),
       } as any);
     return updated;
+  }
+
+  async transitionStatus(id: string, status: AgentStatus): Promise<AgentStatusTransitionResult> {
+    const allowedPreviousStatuses = getAllowedPreviousAgentStatuses(status);
+    const placeholders = allowedPreviousStatuses.map(() => "?").join(", ");
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE agents
+         SET status = ?, active = ?, updated_at = ?
+         WHERE id = ? AND status IN (${placeholders})`
+      )
+      .run(status, status === "active" ? 1 : 0, now, id, ...allowedPreviousStatuses);
+
+    if (result.changes > 0) {
+      const row = this.db.prepare("SELECT * FROM agents WHERE id = ?").get(id) as unknown as AgentRow | undefined;
+      if (row) return { updated: true, agent: rowToAgent(row) };
+    }
+
+    const current = await this.get(id);
+    if (!current) return { updated: false, reason: "not_found" };
+    return { updated: false, reason: "invalid_transition", currentStatus: current.status };
   }
 
   async delete(id: string): Promise<boolean> {
