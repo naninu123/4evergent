@@ -31,6 +31,7 @@ export interface AgentStore {
   get(id: string): Promise<Agent | null>;
   getForOwner(id: string, ownerId: string): Promise<Agent | null>;
   listByOwner(ownerId: string, limit?: number): Promise<Agent[]>;
+  listByCapability(ownerId: string, capability: string, limit?: number): Promise<Agent[]>;
   update(id: string, patch: Partial<Agent>): Promise<Agent | null>;
   transitionStatus(id: string, status: AgentStatus): Promise<AgentStatusTransitionResult>;
   delete(id: string): Promise<boolean>;

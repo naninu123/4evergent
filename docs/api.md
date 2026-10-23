@@ -17,7 +17,7 @@ All endpoints except `GET /health` require authentication.
   See [security-model.md](security-model.md) — API Authentication.
 
 Unauthenticated requests to protected endpoints return
-`{"error":"unauthorized"}` with status `401`.
+`{"code":"UNAUTHORIZED","error":"unauthorized"}` with status `401`.
 
 ## User Authentication (Browser Sessions)
 
@@ -117,10 +117,39 @@ authenticated `ownerId`. Access to another owner's resource returns
 
 ## General error behavior
 
-Errors are ad-hoc JSON — most follow `{"error": "<message>"}` with an
-appropriate 4xx/5xx status, but some endpoints return message-shaped
-bodies (noted where they differ). Unknown paths return
-`{"error":"not found"}` with `404`. Request bodies are limited to 1 MB.
+Every error response is JSON of the form `{"code": "<CODE>", "error": "<message>"}`
+with an appropriate 4xx/5xx status. `code` is the stable, machine-readable
+contract; `error` is human-readable and may change. `VALIDATION_ERROR` may also
+carry a `details` field with field-specific messages. Unknown paths return
+`{"code":"NOT_FOUND","error":"Not found"}` with `404`. Approve and reject errors additionally keep
+the approval fields (`approvalId`, `activityId`, `status`, `message`). Request bodies are limited to 1 MB.
+
+### Error codes
+
+| Code | HTTP | Description |
+|---|---|---|
+| `UNAUTHORIZED` | 401 | Missing or invalid credentials. |
+| `CSRF_FAILED` | 403 | Session request failed the CSRF header check. |
+| `NOT_FOUND` | 404 | Unknown route. |
+| `AGENT_NOT_FOUND` | 404 | The agent does not exist or is not owned by the caller. |
+| `APPROVAL_NOT_FOUND` | 404 | The approval does not exist or is not owned by the caller. |
+| `EXECUTION_NOT_FOUND` | 404 | The execution does not exist or is not owned by the caller. |
+| `SCHEDULE_NOT_FOUND` | 404 | The schedule does not exist or is not owned by the caller. |
+| `ACTIVITY_NOT_FOUND` | 404 | The activity record does not exist or is not owned by the caller. |
+| `EXECUTION_QUEUE_DISABLED` | 404 | The execution queue is not enabled on this server. |
+| `INVALID_PATH_PARAM` | 400 | A path identifier is missing or malformed. |
+| `INVALID_JSON` | 400 | The request body is not valid JSON. |
+| `VALIDATION_ERROR` | 400 | A field failed validation; see message and optional details. |
+| `RAW_TRANSACTION_REJECTED` | 400 | Raw transaction payloads are not accepted. |
+| `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key header is too long. |
+| `IDEMPOTENCY_CONFLICT` | 409 | The Idempotency-Key was already used with a different intent. |
+| `AGENT_NOT_ACTIVE` | 409 | The agent is paused or disabled. |
+| `INVALID_EXECUTION_STATE` | 409 | The execution status does not allow the requested action. |
+| `MAX_RETRIES_REACHED` | 409 | The execution has used all retry attempts. |
+| `APPROVAL_INVALID_STATE` | 409 | The approval status does not allow the requested approve or reject. |
+| `SCHEDULE_INVALID_TRANSITION` | 409 | The schedule status does not allow the requested pause, resume or disable. |
+| `EXECUTION_CONFLICT` | 409 | The execution changed concurrently. |
+| `APPROVAL_EXPIRED` | 410 | The approval passed its expiry before it was approved. |
 
 ---
 
@@ -161,7 +190,27 @@ Body: `{ "displayName": string (required, ≤100 chars, trimmed), "description"?
 
 ### GET /agents
 
-List caller's agents. Returns `{ "agents": AgentRecord[] }`.
+List caller's agents, with optional filtering by capability and limit clamping.
+
+Query parameters:
+- `capability` (string, optional): Filter agents by exact capability match. Case-sensitive.
+- `limit` (number, optional): Maximum agents to return (clamped between 1 and 200, default 200).
+
+Returns `{ "agents": AgentRecord[] }`.
+
+Each returned `AgentRecord` includes its full `capabilities` string array. If no agents match the given `capability` (or the caller owns no agents), the endpoint returns `200` with `{ "agents": [] }` — never `404` or `500`.
+
+Filtering is executed directly in the store layer (both SQLite and InMemory), preserving owner isolation: a query never returns agents owned by another caller, and filtering operates across the owner's full agent set before the limit is applied.
+
+### Capability Discovery
+
+To support multi-agent capability discovery and agent-to-agent negotiation (Phase 7 prerequisite), agents advertise their capabilities as string arrays (`capabilities: string[]`), which can be queried via `GET /agents?capability=<name>`.
+
+Match semantics:
+- **Exact match**: The query matches agent capabilities exactly. Substrings or prefixes (e.g. querying `pay` to match `payment`) are rejected to avoid ambiguous matches.
+- **Case-sensitive**: Identifiers must match case exactly (`payment` does not match `Payment`).
+- **Store-level filtering**: Filtering is executed in the store query (`SQLiteAgentStore` via `EXISTS (SELECT 1 FROM json_each(agents.capabilities_json) WHERE value = ?)` and `InMemoryAgentStore` via array membership). Filtering does not rely on post-filtering a capped handler list.
+- **Empty results**: If no agents have the specified capability, returns `200` with `{ "agents": [] }`.
 
 ### GET /agents/:id
 
@@ -230,12 +279,14 @@ identity is taken from the authenticated principal's `subject`.
 
 - `200` → `{ approvalId, activityId, agentId:"", status:"approved",
   message }` — execution is enqueued (persistent queue) or deferred
-- `409` → invalid state transition (e.g. already approved)
-- `410` → approval expired
-- `404` → not found or not owned (response body is approval-response
-  shaped with status `rejected`, not `{"error"}`)
+- `409` → `APPROVAL_INVALID_STATE` (e.g. already approved)
+- `410` → `APPROVAL_EXPIRED`
+- `404` → `APPROVAL_NOT_FOUND` (not found or not owned)
 
-Raw XDR in body → `400` with `{"message": ...}` (message-shaped).
+Each error body carries `code` and `error` plus the approval-response fields
+(`approvalId`, `activityId`, `status`, `message`).
+
+Raw XDR in body → `400` `RAW_TRANSACTION_REJECTED`.
 
 ### POST /approvals/:id/reject
 
@@ -398,6 +449,22 @@ Delete a schedule. `200` → `{ "deleted": true }`.
 Transition schedule status (`paused` / `active` / `disabled`).
 `200` → `{ "schedule" }`.
 
+The current status is validated before writing. A transition that is not
+legal, including a no-op, returns `409` with
+`{ "error": "cannot <action> schedule in status '<current>'" }` and the
+schedule is left unchanged. No-ops are rejected rather than treated as
+idempotent so callers get a signal that nothing changed.
+
+| Current status | pause | resume | disable |
+|---|---|---|---|
+| `active` | `200` (paused) | `409` | `200` (disabled) |
+| `paused` | `409` | `200` (active) | `200` (disabled) |
+| `disabled` | `409` | `200` (active) | `409` |
+
+`disabled` is reversible: `resume` is accepted from `disabled`, which matches
+the dashboard's Resume button. Making it terminal would be a design decision
+for the maintainers (see #6 and #7 for the agent-side equivalent).
+
 ### Missed schedule runs
 
 An occurrence due now or no more than five minutes ago follows the normal
@@ -460,7 +527,7 @@ summaries and are not counted as failed or dead-letter executions in overview co
 
 Queue summary for the caller's executions. Returns
 `{ "running": boolean, "byStatus": Record<string, number> }`.
-`404` with `{"error":"execution queue not enabled"}` if the queue is off.
+`404` with `{"code":"EXECUTION_QUEUE_DISABLED",...}` if the queue is off.
 
 ---
 
@@ -554,6 +621,57 @@ Response `200`:
 | `stuckExecutions` | Executions in `executing` state (may be hung). |
 
 ---
+
+## Typed TypeScript client
+
+The private workspace package [`@4evergent/client`](../packages/client/README.md)
+provides a typed, dependency-free client for these routes. It uses Node.js 22+
+built-in `fetch`, accepts a base URL and optional bearer token, and throws
+`ApiError` with the HTTP status and parsed API error body for non-2xx responses.
+Authentication and `/auth/*` flows remain the caller's responsibility.
+
+The client follows the documented API surface with these method names:
+
+| Documented route | Client method |
+|---|---|
+| `GET /health` | `health` |
+| `POST /agents` | `createAgent` |
+| `GET /agents` | `listAgents` |
+| `GET /agents/:id` | `getAgent` |
+| `PATCH /agents/:id/status` | `updateAgentStatus` |
+| `POST /agents/:id/intents` | `submitIntent` |
+| `GET /approvals` | `listApprovals` |
+| `GET /approvals/:id` | `getApproval` |
+| `GET /agents/:id/approvals` | `listAgentApprovals` |
+| `POST /approvals/:id/approve` | `approve` |
+| `POST /approvals/:id/reject` | `reject` |
+| `GET /agents/:id/activity` | `listAgentActivity` |
+| `GET /agents/:id/activity/:activityId` | `getAgentActivity` |
+| `GET /activity` | `listActivity` |
+| `GET /agents/:id/policy` | `getPolicy` |
+| `PUT /agents/:id/policy` | `updatePolicy` |
+| `POST /agents/:id/schedules` | `createSchedule` |
+| `GET /agents/:id/schedules` | `listSchedules` |
+| `GET /agents/:id/schedules/:scheduleId` | `getSchedule` |
+| `PATCH /agents/:id/schedules/:scheduleId` | `updateSchedule` |
+| `DELETE /agents/:id/schedules/:scheduleId` | `deleteSchedule` |
+| `POST /agents/:id/schedules/:scheduleId/pause` | `pauseSchedule` |
+| `POST /agents/:id/schedules/:scheduleId/resume` | `resumeSchedule` |
+| `POST /agents/:id/schedules/:scheduleId/disable` | `disableSchedule` |
+| `GET /agents/:id/executions` | `listAgentExecutions` |
+| `GET /executions` | `listExecutions` |
+| `GET /executions/:id` | `getExecution` |
+| `POST /executions/:id/retry` | `retryExecution` |
+| `POST /executions/:id/cancel` | `cancelExecution` |
+| `GET /agent-queue` | `queueStatus` |
+| `GET /agents/:id/spending` | `getAgentSpending` |
+| `GET /overview/attention` | `overviewAttention` |
+
+Schedule pause, resume, and disable are separate methods because they are
+separate documented action paths. Shared domain types such as `Agent`,
+`AgentIntent`, `ActivityRecord`, and `PolicyRules` come from
+`@4evergent/shared`; record and response types absent from shared are declared
+in the client package.
 
 ## Notes
 
