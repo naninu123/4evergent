@@ -82,6 +82,8 @@ interface FixtureIds {
   executionId: string;
   queuedExecutionId: string;
   scheduleId: string;
+  /** A paused schedule: resume is only legal from paused/disabled. */
+  pausedScheduleId: string;
   missingId: string;
 }
 
@@ -340,7 +342,7 @@ const ROUTES: RouteContract[] = [
     auth: "protected",
     status: 200,
     keys: ["schedule"],
-    sample: (ids) => ({ path: `/agents/${ids.agentId}/schedules/${ids.scheduleId}/resume`, init: { method: "POST" } }),
+    sample: (ids) => ({ path: `/agents/${ids.agentId}/schedules/${ids.pausedScheduleId}/resume`, init: { method: "POST" } }),
   },
   {
     method: "POST",
@@ -595,6 +597,8 @@ async function seedFixtures(stores: {
 
   const schedule = makeSchedule();
   await stores.schedules.create(schedule);
+  const pausedSchedule = makeSchedule({ status: "paused" });
+  await stores.schedules.create(pausedSchedule);
 
   return {
     agentId: AGENT_ID,
@@ -603,6 +607,7 @@ async function seedFixtures(stores: {
     executionId: execution.id,
     queuedExecutionId: queuedExecution.id,
     scheduleId: schedule.id,
+    pausedScheduleId: pausedSchedule.id,
     missingId: crypto.randomUUID(),
   };
 }

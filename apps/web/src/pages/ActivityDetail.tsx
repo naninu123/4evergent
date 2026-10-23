@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { describeApiError } from '../apiErrors';
 import type { ActivityRecord, ExecutionRecord } from '../types';
 import { Skeleton, EmptyState, IntentAmount, DetailCard, Section, StatusBadge, Address } from '../components';
 
@@ -11,10 +12,13 @@ export default function ActivityDetail() {
   const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!agentId || !activityId) return;
     let cancelled = false;
+    setLoading(true);
+    setError(null);
     api.activityDetail(agentId, activityId)
       .then((r) => {
         if (cancelled) return;
@@ -26,16 +30,18 @@ export default function ActivityDetail() {
         }
       })
       .catch((e: any) => {
-        if (!cancelled) setError(e.message ?? 'Failed to load activity');
+        if (!cancelled) setError(describeApiError(e, 'Failed to load activity'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [agentId, activityId]);
+  }, [agentId, activityId, reloadKey]);
+
+  const retry = () => setReloadKey((k) => k + 1);
 
   if (loading) return <Skeleton label="Loading activity..." />;
-  if (error) return <div className="error-banner">{error}</div>;
+  if (error) return <EmptyState title="Failed to load activity" message={error} error={true} actionLabel="Retry" onAction={retry} />;
   if (!activity) return (
     <EmptyState title="Activity not found" message="This activity does not exist or you do not have access." />
   );
