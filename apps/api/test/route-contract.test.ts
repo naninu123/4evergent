@@ -307,7 +307,7 @@ const ROUTES: RouteContract[] = [
     sample: (ids) => ({ path: `/executions/${ids.executionId}` }),
   },
   { method: "GET", path: "/agent-queue", auth: "protected", status: 200, keys: ["running", "byStatus"], needsQueue: true },
-  { method: "GET", path: "/overview/attention", auth: "protected", status: 200, keys: ["pendingApprovals", "failedExecutions"] },
+  { method: "GET", path: "/overview/attention", auth: "protected", status: 200, keys: ["pendingApprovals", "failedExecutions", "agentCounts"] },
   {
     method: "POST",
     path: "/executions/:id/retry",

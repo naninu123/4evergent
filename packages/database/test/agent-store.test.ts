@@ -421,6 +421,49 @@ function testStores(name: string, makeStore: () => StoreFactoryResult) {
       cleanup?.();
     }
   });
+
+  test(`${name}: countByOwner returns correct counts per status`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      await store.create({ displayName: "A1", ownerId: "owner-a", status: "active" });
+      await store.create({ displayName: "A2", ownerId: "owner-a", status: "active" });
+      await store.create({ displayName: "P1", ownerId: "owner-a", status: "paused" });
+      await store.create({ displayName: "D1", ownerId: "owner-a", status: "disabled" });
+
+      const counts = await store.countByOwner("owner-a");
+      assert.equal(counts.active, 2);
+      assert.equal(counts.paused, 1);
+      assert.equal(counts.disabled, 1);
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: countByOwner is owner-scoped and does not leak other owners`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      await store.create({ displayName: "Mine",  ownerId: "owner-a", status: "active" });
+      await store.create({ displayName: "Other", ownerId: "owner-b", status: "active" });
+      await store.create({ displayName: "Other", ownerId: "owner-b", status: "paused" });
+
+      const counts = await store.countByOwner("owner-a");
+      assert.equal(counts.active, 1);
+      assert.equal(counts.paused, 0);
+      assert.equal(counts.disabled, 0);
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: countByOwner returns zeros for an owner with no agents`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      const counts = await store.countByOwner("nonexistent-owner");
+      assert.deepEqual(counts, { active: 0, paused: 0, disabled: 0 });
+    } finally {
+      cleanup?.();
+    }
+  });
 }
 
 testStores("InMemoryAgentStore", () => ({

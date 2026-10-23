@@ -89,6 +89,14 @@ export class InMemoryAgentStore implements AgentStore {
     return { updated: true, agent: updated };
   }
 
+  async countByOwner(ownerId: string): Promise<Record<AgentStatus, number>> {
+    const result: Record<AgentStatus, number> = { active: 0, paused: 0, disabled: 0 };
+    for (const a of this.records.values()) {
+      if (a.ownerId === ownerId) result[a.status] = (result[a.status] ?? 0) + 1;
+    }
+    return result;
+  }
+
   async delete(id: string): Promise<boolean> {
     return this.records.delete(id);
   }
@@ -277,6 +285,20 @@ export class SQLiteAgentStore implements AgentStore {
     const current = await this.get(id);
     if (!current) return { updated: false, reason: "not_found" };
     return { updated: false, reason: "invalid_transition", currentStatus: current.status };
+  }
+
+  async countByOwner(ownerId: string): Promise<Record<AgentStatus, number>> {
+    const rows = this.db
+      .prepare(
+        "SELECT status, COUNT(*) as count FROM agents WHERE owner_id = ? GROUP BY status"
+      )
+      .all(ownerId) as unknown as Array<{ status: string; count: number }>;
+    const result: Record<AgentStatus, number> = { active: 0, paused: 0, disabled: 0 };
+    for (const row of rows) {
+      const s = row.status as AgentStatus;
+      if (s in result) result[s] = row.count;
+    }
+    return result;
   }
 
   async delete(id: string): Promise<boolean> {

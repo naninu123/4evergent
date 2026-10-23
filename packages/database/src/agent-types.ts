@@ -34,5 +34,7 @@ export interface AgentStore {
   listByCapability(ownerId: string, capability: string, limit?: number): Promise<Agent[]>;
   update(id: string, patch: Partial<Agent>): Promise<Agent | null>;
   transitionStatus(id: string, status: AgentStatus): Promise<AgentStatusTransitionResult>;
+  /** Count agents grouped by status for an owner. */
+  countByOwner(ownerId: string): Promise<Record<AgentStatus, number>>;
   delete(id: string): Promise<boolean>;
 }
