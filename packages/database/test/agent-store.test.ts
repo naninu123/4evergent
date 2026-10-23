@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { unlinkSync } from "node:fs";
+import { unlinkSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryAgentStore, SQLiteAgentStore } from "../src/agent-store.js";
+import { InMemoryAgentStore, SQLiteAgentStore, MAX_LIMIT } from "../src/agent-store.js";
 import { closeSharedConnection } from "../src/shared-connection.js";
 import type { CreateAgentInput } from "../src/agent-types.js";
 
@@ -112,35 +112,43 @@ function testStores(name: string, makeStore: () => InMemoryAgentStore | SQLiteAg
   });
 
   test(`${name}: concurrent status transitions use the current stored status`, async () => {
-    const store = makeStore();
-    const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
+    const { store, cleanup } = makeStore();
+    try {
+      const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
 
-    const [disabled, pause] = await Promise.all([
-      store.transitionStatus(agent.id, "disabled"),
-      store.transitionStatus(agent.id, "paused"),
-    ]);
+      const [disabled, pause] = await Promise.all([
+        store.transitionStatus(agent.id, "disabled"),
+        store.transitionStatus(agent.id, "paused"),
+      ]);
 
-    assert.equal(disabled.updated, true);
-    assert.deepEqual(pause, {
-      updated: false,
-      reason: "invalid_transition",
-      currentStatus: "disabled",
-    });
-    assert.equal((await store.get(agent.id))?.status, "disabled");
+      assert.equal(disabled.updated, true);
+      assert.deepEqual(pause, {
+        updated: false,
+        reason: "invalid_transition",
+        currentStatus: "disabled",
+      });
+      assert.equal((await store.get(agent.id))?.status, "disabled");
+    } finally {
+      cleanup?.();
+    }
   });
 
   test(`${name}: disabled agents cannot transition back to active`, async () => {
-    const store = makeStore();
-    const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
-    await store.transitionStatus(agent.id, "disabled");
+    const { store, cleanup } = makeStore();
+    try {
+      const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
+      await store.transitionStatus(agent.id, "disabled");
 
-    const result = await store.transitionStatus(agent.id, "active");
-    assert.deepEqual(result, {
-      updated: false,
-      reason: "invalid_transition",
-      currentStatus: "disabled",
-    });
-    assert.equal((await store.get(agent.id))?.status, "disabled");
+      const result = await store.transitionStatus(agent.id, "active");
+      assert.deepEqual(result, {
+        updated: false,
+        reason: "invalid_transition",
+        currentStatus: "disabled",
+      });
+      assert.equal((await store.get(agent.id))?.status, "disabled");
+    } finally {
+      cleanup?.();
+    }
   });
 
   test(`${name}: delete removes record`, async () => {
@@ -404,6 +412,49 @@ function testStores(name: string, makeStore: () => InMemoryAgentStore | SQLiteAg
       }
       const list = await store.listByCapability("owner-a", "payment", -5);
       assert.equal(list.length, 1);
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: countByOwner returns correct counts per status`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      await store.create({ displayName: "A1", ownerId: "owner-a", status: "active" });
+      await store.create({ displayName: "A2", ownerId: "owner-a", status: "active" });
+      await store.create({ displayName: "P1", ownerId: "owner-a", status: "paused" });
+      await store.create({ displayName: "D1", ownerId: "owner-a", status: "disabled" });
+
+      const counts = await store.countByOwner("owner-a");
+      assert.equal(counts.active, 2);
+      assert.equal(counts.paused, 1);
+      assert.equal(counts.disabled, 1);
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: countByOwner is owner-scoped and does not leak other owners`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      await store.create({ displayName: "Mine",  ownerId: "owner-a", status: "active" });
+      await store.create({ displayName: "Other", ownerId: "owner-b", status: "active" });
+      await store.create({ displayName: "Other", ownerId: "owner-b", status: "paused" });
+
+      const counts = await store.countByOwner("owner-a");
+      assert.equal(counts.active, 1);
+      assert.equal(counts.paused, 0);
+      assert.equal(counts.disabled, 0);
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: countByOwner returns zeros for an owner with no agents`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      const counts = await store.countByOwner("nonexistent-owner");
+      assert.deepEqual(counts, { active: 0, paused: 0, disabled: 0 });
     } finally {
       cleanup?.();
     }

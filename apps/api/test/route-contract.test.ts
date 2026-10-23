@@ -154,7 +154,12 @@ const ROUTES: RouteContract[] = [
       init: {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "paused" }),
+        // active → disabled is valid from both "active" and "paused", so this
+        // succeeds regardless of what an earlier iteration left the agent in
+        // (the loop always resets to "active" via stores.agent.update, but
+        // using a transition valid from any non-disabled state makes the test
+        // robust against ordering edge-cases).
+        body: JSON.stringify({ status: "disabled" }),
       },
     }),
   },
@@ -302,7 +307,7 @@ const ROUTES: RouteContract[] = [
     sample: (ids) => ({ path: `/executions/${ids.executionId}` }),
   },
   { method: "GET", path: "/agent-queue", auth: "protected", status: 200, keys: ["running", "byStatus"], needsQueue: true },
-  { method: "GET", path: "/overview/attention", auth: "protected", status: 200, keys: ["pendingApprovals", "failedExecutions"] },
+  { method: "GET", path: "/overview/attention", auth: "protected", status: 200, keys: ["pendingApprovals", "failedExecutions", "agentCounts"] },
   {
     method: "POST",
     path: "/executions/:id/retry",
@@ -1013,6 +1018,31 @@ test("unknown /auth/* route returns 404, not 401", async () => {
     assert.equal(res.status, 404);
     const body = await res.json();
     assert.ok(body.error, "404 body must carry an error field");
+  } finally {
+    await close();
+  }
+});
+
+test("PATCH /agents/:id/status returns 409 for a rejected transition (disabled is terminal)", async () => {
+  // Verifies that invalid transitions are rejected with the correct status code
+  // and response shape, preserving coverage for the 409 path that the success-
+  // path probe in the ROUTES table no longer exercises.
+  const { baseUrl, close, stores } = await startHarness();
+  try {
+    // Seed the agent and move it to disabled (valid: active → disabled).
+    await stores.agent.update(AGENT_ID, { status: "disabled" });
+
+    // Attempt to reactivate a disabled agent — forbidden by transition rules.
+    const res = await apiFetch(`${baseUrl}/agents/${AGENT_ID}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "active" }),
+    });
+
+    assert.equal(res.status, 409, "disabled → active must be rejected with 409");
+    const body = await res.json();
+    assert.equal(body.currentStatus, "disabled");
+    assert.equal(body.requestedStatus, "active");
   } finally {
     await close();
   }

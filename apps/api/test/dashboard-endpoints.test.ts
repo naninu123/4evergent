@@ -122,6 +122,7 @@ async function startServer(opts: {
     approvalStore,
     executionStore,
     agentId,
+    agentStore: server.agentStore,
   };
 }
 
@@ -134,7 +135,7 @@ async function request(baseUrl: string, path: string, token?: string) {
 }
 
 test("GET /overview/attention returns zero dashboard counters for a fresh owner", async () => {
-  const { baseUrl, close } = await startServer();
+  const { baseUrl, close } = await startServer({ registerAgent: false });
   try {
     const response = await request(baseUrl, "/overview/attention");
     assert.equal(response.status, 200);
@@ -144,6 +145,7 @@ test("GET /overview/attention returns zero dashboard counters for a fresh owner"
       deadLetterExecutions: 0,
       retryingExecutions: 0,
       stuckExecutions: 0,
+      agentCounts: { active: 0, paused: 0, disabled: 0 },
     });
   } finally {
     await close();
@@ -177,6 +179,7 @@ test("GET /overview/attention counts statuses for the authenticated owner only",
       deadLetterExecutions: 1,
       retryingExecutions: 1,
       stuckExecutions: 1,
+      agentCounts: { active: 1, paused: 0, disabled: 0 },
     });
   } finally {
     await close();
@@ -246,6 +249,56 @@ test("GET /agents/:id/spending returns 404 when the agent belongs to another own
   try {
     const response = await request(baseUrl, `/agents/${agentId}/spending`, "owner-b-token");
     assert.equal(response.status, 404);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /overview/attention agentCounts reflects agents in each status for the authenticated owner", async () => {
+  const { baseUrl, close, agentStore } = await startServer({ registerAgent: false });
+  try {
+    // Register one agent per status; all owned by "owner-a" (the default principal).
+    await agentStore.create({
+      displayName: "Active Agent",
+      ownerId: "owner-a",
+      status: "active",
+    });
+    await agentStore.create({
+      displayName: "Paused Agent",
+      ownerId: "owner-a",
+      status: "paused",
+    });
+    await agentStore.create({
+      displayName: "Disabled Agent",
+      ownerId: "owner-a",
+      status: "disabled",
+    });
+
+    const response = await request(baseUrl, "/overview/attention");
+    assert.equal(response.status, 200);
+    assert.equal(response.body.agentCounts.active, 1);
+    assert.equal(response.body.agentCounts.paused, 1);
+    assert.equal(response.body.agentCounts.disabled, 1);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /overview/attention agentCounts are owner-scoped and do not leak another owner's agents", async () => {
+  const { baseUrl, close, agentStore } = await startServer({ registerAgent: false });
+  try {
+    // Create one agent for owner-a and several for owner-b. Only owner-a's
+    // agent must appear in the agentCounts when authenticated as owner-a.
+    await agentStore.create({ displayName: "My Agent",    ownerId: "owner-a", status: "active" });
+    await agentStore.create({ displayName: "Other Active", ownerId: "owner-b", status: "active" });
+    await agentStore.create({ displayName: "Other Paused",  ownerId: "owner-b", status: "paused" });
+
+    const response = await request(baseUrl, "/overview/attention");
+    assert.equal(response.status, 200);
+    // owner-a has exactly 1 active agent; owner-b's counts must not bleed in.
+    assert.equal(response.body.agentCounts.active, 1);
+    assert.equal(response.body.agentCounts.paused, 0);
+    assert.equal(response.body.agentCounts.disabled, 0);
   } finally {
     await close();
   }

@@ -1335,12 +1335,18 @@ export async function createApiServer(options: ServerOptions) {
     const pendingApprovals = await approvals.countByOwner(ownerId, "pending_approval");
     const execCounts: Record<ExecutionStatus, number> =
       await executionStore.countByOwner(ownerId);
+    const agentStatusCounts = await agentStore.countByOwner(ownerId);
     return json(res, {
       pendingApprovals,
       failedExecutions: execCounts.failed ?? 0,
       deadLetterExecutions: execCounts.dead_letter ?? 0,
       retryingExecutions: execCounts.queued ?? 0,
       stuckExecutions: execCounts.executing ?? 0,
+      agentCounts: {
+        active: agentStatusCounts.active,
+        paused: agentStatusCounts.paused,
+        disabled: agentStatusCounts.disabled,
+      },
     });
   }
 
