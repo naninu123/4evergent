@@ -72,6 +72,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@4evergent/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@stellar/freighter-api':
         specifier: 6.0.1
         version: 6.0.1

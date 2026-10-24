@@ -6,6 +6,11 @@
 - **pnpm >= 9** (workspace package manager)
 - Rust toolchain (for Soroban contracts, Phase 3+)
 
+Contracts CI enforces `cargo fmt --all --check` and
+`cargo clippy --workspace --all-targets --locked -- -D warnings` from `contracts/`
+using the pinned Rust toolchain. Run both before opening a contracts PR; see
+[Working on contracts](../CONTRIBUTING.md#working-on-contracts) for setup.
+
 ## Full Testnet Execution Workflow
 
 ### 1. Install dependencies

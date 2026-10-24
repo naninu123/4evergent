@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - "contracts/**"
+      - ".github/workflows/contracts-ci.yml"
   pull_request:
     branches: [main]
     paths:
       - "contracts/**"
+      - ".github/workflows/contracts-ci.yml"
   workflow_dispatch:
 
 permissions:
@@ -28,6 +30,7 @@ jobs:
         with:
           toolchain: 1.81.0
           targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
 
       - name: Cache Cargo registry and target
         uses: Swatinem/rust-cache@v2
@@ -36,6 +39,14 @@ jobs:
 
       - name: Build (wasm32-unknown-unknown)
         run: cargo build --workspace --locked --manifest-path contracts/Cargo.toml --target wasm32-unknown-unknown
+
+      - name: Check formatting
+        working-directory: contracts
+        run: cargo fmt --all --check
+
+      - name: Clippy (deny warnings)
+        working-directory: contracts
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test
         run: cargo test --workspace --locked --manifest-path contracts/Cargo.toml
