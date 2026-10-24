@@ -111,6 +111,21 @@ Every capability must include:
 
 Run cargo from inside `contracts/` (`cd contracts && cargo test`) so `contracts/rust-toolchain.toml` (pinned 1.81.0) applies. The wasm target is `wasm32-unknown-unknown`. `contracts/Cargo.lock` is committed on purpose — builds are reproducible via `--locked`; use `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo generate-lockfile` when dependencies change so the MSRV-aware resolver keeps versions 1.81-compatible.
 
+Before opening a contracts PR, run the same formatting and lint checks as CI:
+
+```bash
+cd contracts
+rustup component add rustfmt clippy
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+```
+
+Contracts CI runs formatting and Clippy after the wasm build, in the existing
+contracts job. Formatting differences and Clippy warnings fail CI. Run
+`cargo fmt --all` to apply formatting locally. The root `pnpm verify` command
+covers Node packages only; run these Rust commands separately.
+
 ## Code style
 
 - TypeScript with strict mode enabled.

@@ -150,8 +150,8 @@ fn validate_id(id: &String) -> Result<(), Error> {
     let mut bytes = [0u8; MAX_ID_LEN as usize];
     id.copy_into_slice(&mut bytes[..len]);
     for (index, byte) in bytes[..len].iter().enumerate() {
-        let lowercase = (b'a'..=b'z').contains(&byte);
-        let digit = (b'0'..=b'9').contains(&byte);
+        let lowercase = byte.is_ascii_lowercase();
+        let digit = byte.is_ascii_digit();
         let allowed_punctuation = matches!(byte, b'.' | b'_' | b'-');
         if (index == 0 && !lowercase && !digit)
             || (index > 0 && !lowercase && !digit && !allowed_punctuation)
