@@ -482,7 +482,11 @@ test("SQLiteAgentStore: persistence across instances", async () => {
   const dbPath = temporaryDatabasePath();
   try {
     const store1 = new SQLiteAgentStore(dbPath);
-    const created = await store1.create({ displayName: "Persisted", ownerId: "owner-a" });
+    const created = await store1.create({
+      displayName: "Persisted",
+      ownerId: "owner-a",
+      capabilities: ["payment"],
+    });
     closeSharedConnection(dbPath);
 
     const store2 = new SQLiteAgentStore(dbPath);
