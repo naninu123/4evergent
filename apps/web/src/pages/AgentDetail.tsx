@@ -6,6 +6,7 @@ import type { AgentRecord, ActivityRecord, PolicyRules } from '../types';
 import { ScheduleManagement } from './ScheduleManagement';
 import { ExecutionList } from './ExecutionList';
 import { StatusBadge, Skeleton, EmptyState } from '../components';
+import { useApiResource } from '../hooks/useApiResource';
 
 type SpendingData = Record<string, { used: number; limit: string; remaining: number }>;
 
@@ -141,21 +142,11 @@ function deepClonePolicy(policy: PolicyRules): PolicyRules {
 }
 
 function PolicySummary({ agentId }: { agentId: string }) {
-  const [policy, setPolicy] = useState<PolicyRules | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await api.getPolicy(agentId);
-        if (!cancelled) setPolicy(res.policy);
-      } catch (e: any) {
-        if (!cancelled) setError(e.message ?? 'Failed to load policy summary');
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [agentId]);
+  const { data: policyRes, error } = useApiResource(
+    () => api.getPolicy(agentId),
+    [agentId],
+  );
+  const policy = policyRes?.policy ?? null;
 
   if (error) return null;
   if (!policy) return null;
@@ -198,35 +189,25 @@ function PolicySummary({ agentId }: { agentId: string }) {
 }
 
 function PolicySettings({ agentId }: { agentId: string }) {
+  const { data: loaded, loading, error: loadError } = useApiResource(
+    () => api.getPolicy(agentId),
+    [agentId],
+  );
   const [policy, setPolicy] = useState<PolicyRules | null>(null);
   const [version, setVersion] = useState<number | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [form, setForm] = useState<PolicyRules | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const res = await api.getPolicy(agentId);
-        if (cancelled) return;
-        setPolicy(deepClonePolicy(res.policy));
-        setForm(deepClonePolicy(res.policy));
-        setVersion(res.version);
-        setUpdatedAt(res.updatedAt);
-      } catch (e: any) {
-        if (!cancelled) setError(e.message ?? 'Failed to load policy');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [agentId]);
+    if (!loaded) return;
+    setPolicy(deepClonePolicy(loaded.policy));
+    setForm(deepClonePolicy(loaded.policy));
+    setVersion(loaded.version);
+    setUpdatedAt(loaded.updatedAt);
+  }, [loaded]);
 
   const updateForm = (patch: Partial<PolicyRules>) => {
     setForm((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -286,7 +267,7 @@ function PolicySettings({ agentId }: { agentId: string }) {
   };
 
   if (loading) return <Skeleton label="Loading policy..." />;
-  if (error && !form) return <div className="error" role="alert">{error}</div>;
+  if (loadError && !form) return <div className="error" role="alert">{loadError}</div>;
   if (!form) return <div className="error" role="alert">Unable to load policy</div>;
 
   const isDirty =
@@ -339,261 +320,8 @@ function PolicySettings({ agentId }: { agentId: string }) {
             />
             <small>Intents above this amount require human approval before execution.</small>
           </label>
-          <label>
-            <span>Require Human Approval Above (XLM)</span>
-            <input
-              id="policy-require-human-approval-above"
-              type="number"
-              step="0.0000001"
-              min="0"
-              value={form.requireHumanApprovalForAmountAbove}
-              onChange={(e) => updateForm({ requireHumanApprovalForAmountAbove: e.target.value })}
-              placeholder="50"
-            />
-            <small>Amount above which human approval is required. Should match approval threshold.</small>
-          </label>
         </div>
-      </div>
-
-      <div className="policy-section">
-        <h3>Allowed Assets</h3>
-        <div className="chip-list">
-          {form.allowedAssets.map((asset) => (
-            <span key={asset} className="chip">
-              {asset}
-              <button type="button" className="chip-remove" aria-label={`Remove allowed asset ${asset}`} onClick={() => removeListItem('allowedAssets', asset)}>×</button>
-            </span>
-          ))}
-        </div>
-        <div className="inline-input">
-          <input
-            type="text"
-            aria-label="Add allowed asset"
-            placeholder="Add asset (e.g. USDC)"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                addListItem('allowedAssets', (e.target as HTMLInputElement).value);
-                (e.target as HTMLInputElement).value = '';
-              }
-            }}
-          />
-        </div>
-        <small>Assets the agent is allowed to transact with.</small>
-      </div>
-
-      <div className="policy-section">
-        <h3>Allowed Destinations</h3>
-        <div className="chip-list">
-          {form.allowedDestinations.length === 0 && <span className="muted">No restrictions (any destination allowed)</span>}
-          {form.allowedDestinations.map((dest) => (
-            <span key={dest} className="chip">
-              {dest}
-              <button type="button" className="chip-remove" aria-label={`Remove allowed destination ${dest}`} onClick={() => removeListItem('allowedDestinations', dest)}>×</button>
-            </span>
-          ))}
-        </div>
-        <div className="inline-input">
-          <input
-            type="text"
-            aria-label="Add allowed destination"
-            placeholder="Add destination (G...)"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                addListItem('allowedDestinations', (e.target as HTMLInputElement).value);
-                (e.target as HTMLInputElement).value = '';
-              }
-            }}
-          />
-        </div>
-        <small>Optional whitelist of allowed destination addresses. Empty means any destination is allowed.</small>
-      </div>
-
-      <div className="policy-section">
-        <h3>Allowed Operations</h3>
-        <div className="checkbox-grid">
-          <label className="checkbox-label">
-            <input
-              id="policy-op-payment"
-              type="checkbox"
-              checked={form.txTypeRestrictions.payment ?? false}
-              onChange={(e) => updateForm({ txTypeRestrictions: { ...form.txTypeRestrictions, payment: e.target.checked } })}
-            />
-            <span>Payment</span>
-          </label>
-          <label className="checkbox-label">
-            <input
-              id="policy-op-trustline"
-              type="checkbox"
-              checked={form.txTypeRestrictions.trustline ?? false}
-              onChange={(e) => updateForm({ txTypeRestrictions: { ...form.txTypeRestrictions, trustline: e.target.checked } })}
-            />
-            <span>Trustline</span>
-          </label>
-          <label className="checkbox-label">
-            <input
-              id="policy-op-contract-call"
-              type="checkbox"
-              checked={form.txTypeRestrictions.contract_call ?? false}
-              onChange={(e) => updateForm({ txTypeRestrictions: { ...form.txTypeRestrictions, contract_call: e.target.checked } })}
-            />
-            <span>Contract Call</span>
-          </label>
-          <label className="checkbox-label">
-            <input
-              id="policy-op-account-settings"
-              type="checkbox"
-              checked={form.txTypeRestrictions.account_settings ?? false}
-              onChange={(e) => updateForm({ txTypeRestrictions: { ...form.txTypeRestrictions, account_settings: e.target.checked } })}
-            />
-            <span>Account Settings</span>
-          </label>
-        </div>
-      </div>
-
-      <div className="policy-meta">
-        {version !== null && <span className="muted">Version: {version}</span>}
-        {updatedAt && <span className="muted">Last updated: {new Date(updatedAt).toLocaleString()}</span>}
-      </div>
-
-      <div className="form-actions">
-        <button type="submit" disabled={saving || !isDirty}>
-          {saving ? 'Saving...' : 'Save Policy'}
-        </button>
-        {!isDirty && <span className="muted">No changes</span>}
       </div>
     </form>
-  );
-}
-
-export default function AgentDetail() {
-  const agentId = useParams<{ agentId: string }>().agentId ?? '';
-  const [agent, setAgent] = useState<AgentRecord | null>(null);
-  const [activity, setActivity] = useState<ActivityRecord[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [reloadKey, setReloadKey] = useState(0);
-  const [scheduleError, setScheduleError] = useState<string | null>(null);
-  const [spending, setSpending] = useState<SpendingData | null>(null);
-  const [spendingError, setSpendingError] = useState<string | null>(null);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await api.getAgentSpending(agentId);
-        setSpending(res.spending);
-      } catch (e: any) {
-        setSpendingError(e.message ?? 'Failed to load spending');
-      }
-    })();
-  }, [agentId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    (async () => {
-      try {
-        const [a, act] = await Promise.all([
-          api.getAgent(agentId),
-          api.agentActivity(agentId, 20),
-        ]);
-        if (cancelled) return;
-        setAgent(a);
-        setActivity(act.activity);
-      } catch (e: any) {
-        if (!cancelled) setError(e.message);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [agentId, reloadKey]);
-
-  const retry = () => setReloadKey((k) => k + 1);
-
-  if (loading) {
-    return <Skeleton label="Loading agent..." />;
-  }
-  if (error) {
-    return <EmptyState title="Failed to load agent" message={error} error={true} actionLabel="Retry" onAction={retry} />;
-  }
-  if (!agent) {
-    return (
-      <div className="empty-state">
-        <h2>Agent not found</h2>
-        <p>This agent does not exist or you do not have access.</p>
-      </div>
-    );
-  }
-
-  const handleStatusChange = (newStatus: string) => {
-    setAgent((prev) => prev ? { ...prev, status: newStatus as typeof prev.status } : prev);
-  };
-
-  return (
-    <section>
-      <AgentHeader agent={agent} onStatusChange={handleStatusChange} />
-      <div className="block">
-        <h2>Financial Control</h2>
-        {spending === null && spendingError === null ? (
-          <Skeleton label="Loading spending..." />
-        ) : spendingError ? (
-          <div className="error" role="alert">{spendingError}</div>
-        ) : spending && Object.keys(spending).length > 0 ? (
-          <div className="spending-overview">
-            {Object.entries(spending).map(([asset, data]) => (
-              <SpendingCard key={asset} asset={asset} data={data} />
-            ))}
-          </div>
-        ) : (
-          <div className="empty-state"><p>No daily spending limits configured.</p></div>
-        )}
-      </div>
-      <div className="block">
-        <h2>Recent Activity</h2>
-        {activity === null ? (
-          <Skeleton label="Loading activity..." />
-        ) : activity.length === 0 ? (
-          <div className="empty-state">
-            <p>This agent has no activity yet.</p>
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr><th>ID</th><th>Type</th><th>Amount</th><th>Status</th><th>Time</th></tr>
-            </thead>
-            <tbody>
-              {activity.map((r) => (
-                <tr key={r.id}>
-                  <td><code>{r.id.slice(0, 8)}</code></td>
-                  <td>{r.intent.type}</td>
-                  <td>{r.intent.amount || '-'} {r.intent.asset || ''}</td>
-                  <td><StatusBadge status={r.status} /></td>
-                  <td>{new Date(r.createdAt).toLocaleTimeString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-      <div className="block">
-        <h2>Schedules</h2>
-        {scheduleError && <div className="error" role="alert">{scheduleError}</div>}
-        <ScheduleManagement agentId={agentId} onError={setScheduleError} />
-      </div>
-      <div className="block">
-        <h2>Executions</h2>
-        <ExecutionList agentId={agentId} />
-      </div>
-      <div className="block">
-        <h2>Policy</h2>
-        <PolicySummary agentId={agentId} />
-        <div className="policy-edit-section">
-          <PolicySettings agentId={agentId} />
-        </div>
-      </div>
-    </section>
   );
 }
