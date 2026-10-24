@@ -269,7 +269,15 @@ export async function createApiServer(options: ServerOptions) {
     (options.dbPath ? new SQLiteExecutionStore(options.dbPath) : new InMemoryExecutionStore());
 
   // --- Execution recovery setup ---
-  const recoveryService = new ExecutionRecoveryService(executionStore);
+  const recoveryPreCheck = async (txHash: string) => {
+    const status = await adapter.getTransactionStatus(txHash);
+    if (status === "confirmed" || status === "failed") return "found" as const;
+    if (status === "not_found") return "not_found" as const;
+    return "network_error" as const;
+  };
+  const recoveryService = new ExecutionRecoveryService(executionStore, {
+    preCheck: recoveryPreCheck,
+  });
   let executionQueue: ExecutionQueue | null = null;
   let reconciler: import("@4evergent/stellar").TransactionStatusReconciler | null = null;
 
@@ -1732,28 +1740,73 @@ export async function createApiServer(options: ServerOptions) {
     // fails closed when HOST is non-loopback and API_KEYS is unset.
     listen: (port: number, host: string = "127.0.0.1") =>
       new Promise<void>((resolve) => server.listen(port, host, resolve)),
-    close: () => new Promise<void>((resolve) => {
-      if (scheduler) {
-        scheduler.stop();
-        console.log("[scheduler] stopped");
-      }
-      if (executionQueue) {
-        executionQueue.stop();
-        console.log("[execution-queue] stopped");
-      }
-      if (reconciler) {
-        reconciler.stop();
-        console.log("[reconciler] stopped");
-      }
-      if (retentionTimer) {
-        clearInterval(retentionTimer);
-        retentionTimer = null;
-      }
-      // Abort lingering keep-alive connections so the server actually shuts
-      // down (Node's http close() waits for active sockets otherwise).
-      server.closeAllConnections?.();
-      server.close(() => resolve());
-    }),
+    close: (options?: { drainTimeoutMs?: number }) =>
+      new Promise<void>((resolve, reject) => {
+        // 1. Stop accepting new requests and prevent workers from claiming new work.
+        if (scheduler) {
+          scheduler.stop();
+          console.log("[scheduler] stopped");
+        }
+        if (executionQueue) {
+          executionQueue.stop();
+          console.log("[execution-queue] stopped");
+        }
+        if (reconciler) {
+          reconciler.stop();
+          console.log("[reconciler] stopped");
+        }
+        if (retentionTimer) {
+          clearInterval(retentionTimer);
+          retentionTimer = null;
+        }
+
+        // Close idle keep-alive connections so idle sockets do not keep the server open,
+        // while allowing in-flight HTTP requests to complete.
+        server.closeIdleConnections?.();
+        const idleInterval = setInterval(() => {
+          server.closeIdleConnections?.();
+        }, 20);
+
+        let drainTimer: NodeJS.Timeout | null = null;
+        let completed = false;
+
+        const finish = () => {
+          if (completed) return;
+          completed = true;
+          clearInterval(idleInterval);
+          if (drainTimer) {
+            clearTimeout(drainTimer);
+            drainTimer = null;
+          }
+          resolve();
+        };
+
+        const drainTimeout = options?.drainTimeoutMs;
+        if (drainTimeout !== undefined && drainTimeout > 0) {
+          drainTimer = setTimeout(() => {
+            if (completed) return;
+            // 3. Force-close remaining connections and terminate outstanding work after timeout expires.
+            server.closeAllConnections?.();
+            executionQueue?.abortInFlight();
+            finish();
+          }, drainTimeout);
+        }
+
+        // 2. Allow active HTTP requests and in-flight executions to finish within the configured drain timeout.
+        const httpClose = new Promise<void>((r) => {
+          server.close(() => r());
+        });
+        const queueDrain = executionQueue ? executionQueue.drain(drainTimeout) : Promise.resolve();
+
+        Promise.all([httpClose, queueDrain])
+          .then(() => {
+            finish();
+          })
+          .catch((err) => {
+            if (drainTimer) clearTimeout(drainTimer);
+            reject(err);
+          });
+      }),
     registerAgent: (agent: Agent) => {
       agents.set(agent.id, agent);
       void agentStore.create({

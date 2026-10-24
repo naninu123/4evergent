@@ -1,8 +1,13 @@
 import type { ExecutionStore } from "@4evergent/database";
 
+export type PreCheckResult = "found" | "not_found" | "network_error";
+export type PreCheckFn = (txHash: string) => Promise<PreCheckResult>;
+
 export interface RecoveryOptions {
   /** Override clock for deterministic testing. */
   now?: () => Date;
+  /** Pre-check function to verify transaction status before blind retry */
+  preCheck?: PreCheckFn;
 }
 
 export interface RecoveryResult {
@@ -43,12 +48,14 @@ export interface RecoveryResult {
  */
 export class ExecutionRecoveryService {
   private now: () => Date;
+  private preCheck?: PreCheckFn;
 
   constructor(
     private store: ExecutionStore,
     private options: RecoveryOptions = {}
   ) {
     this.now = options.now ?? (() => new Date());
+    this.preCheck = options.preCheck;
   }
 
   /**
@@ -81,16 +88,59 @@ export class ExecutionRecoveryService {
           if (!current || current.status !== "executing") continue;
 
           // CONSERVATIVE RECOVERY:
-          // If txHash is present, the transaction may have been submitted to the
-          // network before crash. Do NOT blindly move to failed/retry — leave it
-          // for reconciliation to determine actual on-chain status.
-          // Only executions WITHOUT txHash are safe to recover immediately.
-          if (current.txHash) {
-            // Leave as executing; reconciliation will handle it
+          // If txHash or submittedHash is present, the transaction may have been submitted to the
+          // network before crash or shutdown. Do NOT blindly move to failed/retry without
+          // pre-checking transaction status.
+          const candidateHash = current.submittedHash ?? current.txHash;
+          if (candidateHash) {
+            if (this.preCheck) {
+              let preCheckResult: PreCheckResult;
+              try {
+                preCheckResult = await this.preCheck(candidateHash);
+              } catch {
+                result.skipped++;
+                continue;
+              }
+
+              if (preCheckResult === "found") {
+                // Transaction exists on-chain! Move to "submitted" so reconciler can confirm/fail it
+                await this.store.update(record.id, {
+                  status: "submitted",
+                  txHash: candidateHash,
+                  error: null,
+                  startedAt: null,
+                  updatedAt: now.toISOString(),
+                });
+                result.recovered++;
+                result.recoveredIds.push(record.id);
+                continue;
+              }
+
+              if (preCheckResult === "not_found") {
+                // Transaction definitely not on-chain: safe to move to "failed" for retry under policy
+                await this.store.update(record.id, {
+                  status: "failed",
+                  nextRetryAt: now.toISOString(),
+                  startedAt: null,
+                  updatedAt: now.toISOString(),
+                });
+                result.recovered++;
+                result.recoveredIds.push(record.id);
+                continue;
+              }
+
+              // Ambiguous submission (network error): do NOT blind retry
+              result.skipped++;
+              continue;
+            }
+
+            // Ambiguous submission without pre-check available: do NOT blind retry
             result.skipped++;
             continue;
           }
 
+          // No txHash and no submittedHash: the execution never reached network submission.
+          // Safe to recover immediately.
           await this.store.update(record.id, {
             status: "failed",
             nextRetryAt: now.toISOString(),
