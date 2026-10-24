@@ -1,18 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtempSync, rmSync } from "node:fs";
-import { InMemoryAgentStore, SQLiteAgentStore, MAX_LIMIT } from "../src/agent-store.js";
+import { InMemoryAgentStore, SQLiteAgentStore } from "../src/agent-store.js";
 import { closeSharedConnection } from "../src/shared-connection.js";
-import type { CreateAgentInput, AgentStore } from "../src/agent-types.js";
+import type { CreateAgentInput } from "../src/agent-types.js";
 
-interface StoreFactoryResult {
-  store: AgentStore;
-  cleanup?: () => void;
+function temporaryDatabasePath(): string {
+  return join(tmpdir(), `4evergent-agent-store-${crypto.randomUUID()}.db`);
 }
 
-function testStores(name: string, makeStore: () => StoreFactoryResult) {
+function removeTemporaryDatabase(dbPath: string): void {
+  closeSharedConnection(dbPath);
+  try {
+    unlinkSync(dbPath);
+  } catch {
+    // The database file may not have been created if setup failed.
+  }
+}
+
+function testStores(name: string, makeStore: () => InMemoryAgentStore | SQLiteAgentStore) {
   test(`${name}: create and get`, async () => {
     const { store, cleanup } = makeStore();
     try {
@@ -101,6 +109,38 @@ function testStores(name: string, makeStore: () => StoreFactoryResult) {
     } finally {
       cleanup?.();
     }
+  });
+
+  test(`${name}: concurrent status transitions use the current stored status`, async () => {
+    const store = makeStore();
+    const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
+
+    const [disabled, pause] = await Promise.all([
+      store.transitionStatus(agent.id, "disabled"),
+      store.transitionStatus(agent.id, "paused"),
+    ]);
+
+    assert.equal(disabled.updated, true);
+    assert.deepEqual(pause, {
+      updated: false,
+      reason: "invalid_transition",
+      currentStatus: "disabled",
+    });
+    assert.equal((await store.get(agent.id))?.status, "disabled");
+  });
+
+  test(`${name}: disabled agents cannot transition back to active`, async () => {
+    const store = makeStore();
+    const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
+    await store.transitionStatus(agent.id, "disabled");
+
+    const result = await store.transitionStatus(agent.id, "active");
+    assert.deepEqual(result, {
+      updated: false,
+      reason: "invalid_transition",
+      currentStatus: "disabled",
+    });
+    assert.equal((await store.get(agent.id))?.status, "disabled");
   });
 
   test(`${name}: delete removes record`, async () => {
@@ -388,12 +428,11 @@ testStores("SQLiteAgentStore", () => {
 });
 
 test("SQLiteAgentStore: persistence across instances", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "4evergent-agent-store-persist-"));
-  const dbPath = join(dir, "persist.db");
+  const dbPath = temporaryDatabasePath();
   try {
     const store1 = new SQLiteAgentStore(dbPath);
-    const created = await store1.create({ displayName: "Persisted", ownerId: "owner-a", capabilities: ["payment"] });
-    store1.close();
+    const created = await store1.create({ displayName: "Persisted", ownerId: "owner-a" });
+    closeSharedConnection(dbPath);
 
     const store2 = new SQLiteAgentStore(dbPath);
     const fetched = await store2.get(created.id);
@@ -408,7 +447,29 @@ test("SQLiteAgentStore: persistence across instances", async () => {
     assert.equal(byCap[0].id, created.id);
     store2.close();
   } finally {
-    closeSharedConnection(dbPath);
-    rmSync(dir, { recursive: true, force: true });
+    removeTemporaryDatabase(dbPath);
+  }
+});
+
+test("SQLiteAgentStore: concurrent status transitions use the current stored status", async () => {
+  const dbPath = temporaryDatabasePath();
+  try {
+    const store = new SQLiteAgentStore(dbPath);
+    const agent = await store.create({ displayName: "Concurrent", ownerId: "owner-a" });
+
+    const [disabled, pause] = await Promise.all([
+      store.transitionStatus(agent.id, "disabled"),
+      store.transitionStatus(agent.id, "paused"),
+    ]);
+
+    assert.equal(disabled.updated, true);
+    assert.deepEqual(pause, {
+      updated: false,
+      reason: "invalid_transition",
+      currentStatus: "disabled",
+    });
+    assert.equal((await store.get(agent.id))?.status, "disabled");
+  } finally {
+    removeTemporaryDatabase(dbPath);
   }
 });
