@@ -124,6 +124,12 @@ export interface ServerOptions {
   /** Origin allowed for credentialed CORS (the browser app origin). */
   corsOrigin?: string;
   authorizationService?: AuthorizationService;
+  /** Readiness probes share one bounded, briefly cached dependency check. */
+  readiness?: {
+    timeoutMs?: number;
+    cacheMs?: number;
+    fetcher?: typeof globalThis.fetch;
+  };
   /** Enable the background scheduler to execute due schedules. */
   scheduler?: {
     enabled?: boolean;
@@ -243,6 +249,67 @@ export async function createApiServer(options: ServerOptions) {
   // Phase 28J: PolicyEngine in API uses the SAME resolver
   const policy = new PolicyEngine(options.policyRules, store as any, getRules);
   const adapter = new StellarAdapter(options.horizonUrl);
+
+  const readinessTimeoutMs = options.readiness?.timeoutMs ?? 2_000;
+  const readinessCacheMs = options.readiness?.cacheMs ?? 5_000;
+  for (const [name, value] of Object.entries({ readinessTimeoutMs, readinessCacheMs })) {
+    if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be positive`);
+  }
+  type DependencyChecks = { horizon: "ok" | "fail"; database: "ok" | "fail" };
+  let readinessCache: { checks: DependencyChecks; expiresAt: number } | null = null;
+  let readinessInFlight: Promise<DependencyChecks> | null = null;
+
+  async function boundedCheck(check: (signal: AbortSignal) => Promise<unknown>): Promise<"ok" | "fail"> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.resolve().then(() => check(controller.signal)),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error("Readiness check timed out"));
+          }, readinessTimeoutMs);
+        }),
+      ]);
+      return "ok";
+    } catch {
+      // Public responses expose status only, never dependency errors or records.
+      return "fail";
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  function dependencyReadiness(): Promise<DependencyChecks> {
+    if (readinessCache && Date.now() < readinessCache.expiresAt) {
+      return Promise.resolve(readinessCache.checks);
+    }
+    if (readinessInFlight) return readinessInFlight;
+    readinessInFlight = (async () => {
+      const [horizon, database] = await Promise.all([
+        boundedCheck(async signal => {
+          const fetcher = options.readiness?.fetcher ?? globalThis.fetch;
+          const probeAdapter = new StellarAdapter(options.horizonUrl,
+            (input, init) => fetcher(input, { ...init, signal }));
+          await probeAdapter.getNetworkInfo();
+        }),
+        boundedCheck(async () => {
+          // Exercise the actual configured stores, including injected/in-memory
+          // stores, rather than a new connection that could hide a broken handle.
+          await Promise.all([
+            store.listAll(1), approvals.listAll(1),
+            schedules.listByOwner("", 1), executionStore.listByOwner("", 1),
+            agentStore.listByOwner("", 1), policyConfigStore.listByOwner(""),
+          ]);
+        }),
+      ]);
+      const checks = { horizon, database };
+      readinessCache = { checks, expiresAt: Date.now() + readinessCacheMs };
+      return checks;
+    })().finally(() => { readinessInFlight = null; });
+    return readinessInFlight;
+  }
 
   // Phase 28I: Agent existence check with persistent fallback.
   // Mirrors ResourceAuthorizationService.resolveAgent so handlers can find
@@ -699,6 +766,23 @@ export async function createApiServer(options: ServerOptions) {
       // Health check is public
       if (method === "GET" && url === "/health") {
         return json(res, { status: "ok", signerAccountId: options.signer.getAccountId() });
+      }
+
+      // Public readiness: bounded/cached dependency reads, fresh worker status.
+      if (method === "GET" && url === "/health/ready") {
+        return dependencyReadiness().then(dependencies => {
+          const checks = {
+            ...dependencies,
+            executionQueue: options.executionQueue?.enabled
+              ? (executionQueue?.isRunning() ? "ok" : "fail") : "disabled",
+            scheduler: options.scheduler?.enabled
+              ? (scheduler?.isRunning() ? "ok" : "fail") : "disabled",
+          };
+          const status = dependencies.horizon === "fail" || dependencies.database === "fail"
+            ? "unavailable"
+            : checks.executionQueue === "fail" || checks.scheduler === "fail" ? "degraded" : "ok";
+          return json(res, { status, checks }, status === "ok" ? 200 : 503);
+        });
       }
 
       // CSRF guard: a valid session principal that failed the custom-header

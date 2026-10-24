@@ -1902,6 +1902,144 @@
           }
         }
       }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Readiness probe (public, bounded and cached dependency checks)",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "All enabled components are ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "checks"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "degraded",
+                        "unavailable"
+                      ]
+                    },
+                    "checks": {
+                      "type": "object",
+                      "required": [
+                        "horizon",
+                        "database",
+                        "executionQueue",
+                        "scheduler"
+                      ],
+                      "properties": {
+                        "horizon": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail"
+                          ]
+                        },
+                        "database": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail"
+                          ]
+                        },
+                        "executionQueue": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail",
+                            "disabled"
+                          ]
+                        },
+                        "scheduler": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail",
+                            "disabled"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable or enabled worker stopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "checks"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "degraded",
+                        "unavailable"
+                      ]
+                    },
+                    "checks": {
+                      "type": "object",
+                      "required": [
+                        "horizon",
+                        "database",
+                        "executionQueue",
+                        "scheduler"
+                      ],
+                      "properties": {
+                        "horizon": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail"
+                          ]
+                        },
+                        "database": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail"
+                          ]
+                        },
+                        "executionQueue": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail",
+                            "disabled"
+                          ]
+                        },
+                        "scheduler": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail",
+                            "disabled"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

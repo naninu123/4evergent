@@ -6,7 +6,7 @@ credentials.
 
 ## Authentication
 
-All endpoints except `GET /health` require authentication.
+All endpoints except `GET /health` and `GET /health/ready` require authentication.
 
 - **Development mode** (default): `DevAuthProvider` authenticates every
   request as the development owner (`DEV_OWNER_ID`, default `operator`).
@@ -174,6 +174,40 @@ the Bearer integration surface. The document lists them under
 ### GET /health
 
 Public (no authentication). Returns `{"status":"ok","signerAccountId":"G..."}`.
+This liveness response stays unconditional and performs no dependency checks.
+
+### GET /health/ready
+
+Public (no authentication), for orchestrator readiness probes. Returns only component
+statuses; no account balances, stored records, dependency errors, or credentials:
+
+```json
+{
+  "status": "ok",
+  "checks": {
+    "horizon": "ok",
+    "database": "ok",
+    "executionQueue": "disabled",
+    "scheduler": "disabled"
+  }
+}
+```
+
+- `200`, `status: "ok"`: every enabled check passes.
+- `503`, `status: "unavailable"`: Horizon or a configured store fails.
+- `503`, `status: "degraded"`: dependencies pass but an enabled worker is stopped.
+- Dependency statuses are `"ok"` or `"fail"`. Queue/scheduler also allow
+  `"disabled"` when not enabled; disabled workers do not affect readiness.
+
+Horizon uses the configured URL and a read-only network-info request. Database
+availability exercises bounded reads on the actual activity, approval, schedule,
+execution, agent, and policy stores (SQLite, injected, or in-memory); it does not
+prove that writes will succeed. Dependency checks run concurrently with a 2-second
+budget each, abort network requests on timeout, and cache successes **and failures**
+for 5 seconds. Concurrent probes share one check. Worker status is read fresh on
+every response. `ServerOptions.readiness` permits timeout/cache durations and a
+fetcher override for offline tests. Signer funding and dashboard changes remain
+outside this readiness contract.
 
 ---
 

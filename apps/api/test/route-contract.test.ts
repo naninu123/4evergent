@@ -90,6 +90,7 @@ const AGENT_ID = "contract-agent";
 
 const ROUTES: RouteContract[] = [
   // ---- Public routes (no principal required) ----
+  { method: "GET", path: "/health/ready", auth: "public", status: 200, keys: ["status", "checks"] },
   { method: "GET", path: "/health", auth: "public", status: 200, keys: ["status", "signerAccountId"] },
   { method: "GET", path: "/auth/config", auth: "public", status: 200, keys: ["email", "google", "stellar", "registration"] },
   { method: "POST", path: "/auth/register", auth: "public", status: 201, keys: ["subject"] },
@@ -414,6 +415,9 @@ async function startHarness(withQueue = false, withAuth = true): Promise<Harness
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: new MockSigner("contract-agent"),
+    readiness: { fetcher: async () => new Response(JSON.stringify({
+      network_passphrase: "Test SDF Network ; September 2015",
+    })) },
     policyRules: {
       maxTxAmount: { XLM: "1000" },
       requireHumanApprovalForAmountAbove: "10",
