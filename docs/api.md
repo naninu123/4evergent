@@ -144,6 +144,7 @@ the approval fields (`approvalId`, `activityId`, `status`, `message`). Request b
 | `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key header is too long. |
 | `IDEMPOTENCY_CONFLICT` | 409 | The Idempotency-Key was already used with a different intent. |
 | `AGENT_NOT_ACTIVE` | 409 | The agent is paused or disabled. |
+| `AGENT_STATUS_CONFLICT` | 409 | The agent's current status does not allow the requested status transition. |
 | `INVALID_EXECUTION_STATE` | 409 | The execution status does not allow the requested action. |
 | `MAX_RETRIES_REACHED` | 409 | The execution has used all retry attempts. |
 | `APPROVAL_INVALID_STATE` | 409 | The approval status does not allow the requested approve or reject. |
@@ -223,6 +224,10 @@ Body: `{ "status": "active" | "paused" | "disabled" }`
 - `200` → `{ "id", "status" }`
 - `400` → invalid status / invalid JSON
 - `404` → not found or not owned
+- `409` → illegal status transition. The body keeps the documented error
+  envelope plus the conflict details, e.g.
+  `{ "code": "AGENT_STATUS_CONFLICT", "error": "invalid status transition", "currentStatus": "disabled", "requestedStatus": "active" }`.
+  A `disabled` agent cannot transition back to `active`.
 
 ---
 

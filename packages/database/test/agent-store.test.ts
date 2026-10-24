@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { unlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryAgentStore, SQLiteAgentStore } from "../src/agent-store.js";
+import { InMemoryAgentStore, SQLiteAgentStore, MAX_LIMIT } from "../src/agent-store.js";
 import { closeSharedConnection } from "../src/shared-connection.js";
 import type { CreateAgentInput } from "../src/agent-types.js";
 
@@ -112,7 +112,7 @@ function testStores(name: string, makeStore: () => InMemoryAgentStore | SQLiteAg
   });
 
   test(`${name}: concurrent status transitions use the current stored status`, async () => {
-    const store = makeStore();
+    const { store } = makeStore();
     const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
 
     const [disabled, pause] = await Promise.all([
@@ -130,7 +130,7 @@ function testStores(name: string, makeStore: () => InMemoryAgentStore | SQLiteAg
   });
 
   test(`${name}: disabled agents cannot transition back to active`, async () => {
-    const store = makeStore();
+    const { store } = makeStore();
     const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
     await store.transitionStatus(agent.id, "disabled");
 
@@ -431,7 +431,7 @@ test("SQLiteAgentStore: persistence across instances", async () => {
   const dbPath = temporaryDatabasePath();
   try {
     const store1 = new SQLiteAgentStore(dbPath);
-    const created = await store1.create({ displayName: "Persisted", ownerId: "owner-a" });
+    const created = await store1.create({ displayName: "Persisted", ownerId: "owner-a", capabilities: ["payment"] });
     closeSharedConnection(dbPath);
 
     const store2 = new SQLiteAgentStore(dbPath);

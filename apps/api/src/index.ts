@@ -1118,16 +1118,18 @@ export async function createApiServer(options: ServerOptions) {
     }
     const status = (body as { status?: unknown })?.status;
     if (status !== "active" && status !== "paused" && status !== "disabled") {
-      return json(res, { error: "invalid status" }, 400);
+      return apiError(res, "VALIDATION_ERROR", { message: "invalid status" });
     }
     const result = await agentStore.transitionStatus(agentId, status);
     if (!result.updated) {
-      if (result.reason === "not_found") return json(res, { error: "not found" }, 404);
-      return json(res, {
-        error: "invalid status transition",
-        currentStatus: result.currentStatus,
-        requestedStatus: status,
-      }, 409);
+      if (result.reason === "not_found") return apiError(res, "AGENT_NOT_FOUND");
+      // Conflict: retain the machine-readable envelope (code/error) alongside the
+      // conflict details, matching the approvalError convention of keeping
+      // domain context at the top level of an error response.
+      return apiError(res, "AGENT_STATUS_CONFLICT", {
+        message: "invalid status transition",
+        extra: { currentStatus: result.currentStatus, requestedStatus: status },
+      });
     }
     return json(res, { id: result.agent.id, status: result.agent.status });
   }
@@ -1810,10 +1812,18 @@ function makeActivity(
   };
 }
 
-function apiError(res: any, code: ApiErrorCode, opts: { message?: string; details?: unknown } = {}) {
+function apiError(
+  res: any,
+  code: ApiErrorCode,
+  opts: { message?: string; details?: unknown; extra?: Record<string, unknown> } = {},
+) {
   const def = API_ERRORS[code];
   const body: Record<string, unknown> = { code, error: opts.message ?? def.message };
   if (opts.details !== undefined) body.details = opts.details;
+  // `extra` spreads additional top-level fields into the documented envelope,
+  // e.g. conflict details such as currentStatus/requestedStatus. Optional and
+  // unused by existing callers, so behavior is unchanged for them.
+  if (opts.extra) Object.assign(body, opts.extra);
   return json(res, body, def.status);
 }
 
