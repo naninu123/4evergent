@@ -125,6 +125,27 @@ importers:
         specifier: ^2.0.5
         version: 2.1.9(@types/node@22.20.3)(jsdom@25.0.1)
 
+  examples:
+    dependencies:
+      '@4evergent/agent-core':
+        specifier: workspace:*
+        version: link:../packages/agent-core
+      '@4evergent/database':
+        specifier: workspace:*
+        version: link:../packages/database
+      '@4evergent/policy':
+        specifier: workspace:*
+        version: link:../packages/policy
+      '@4evergent/shared':
+        specifier: workspace:*
+        version: link:../packages/shared
+      '@4evergent/stellar':
+        specifier: workspace:*
+        version: link:../packages/stellar
+      '@stellar/stellar-sdk':
+        specifier: ^13.0.0
+        version: 13.3.0
+
   packages/agent-core:
     dependencies:
       '@4evergent/shared':
