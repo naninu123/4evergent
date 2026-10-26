@@ -155,12 +155,7 @@ const ROUTES: RouteContract[] = [
       init: {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        // active → disabled is valid from both "active" and "paused", so this
-        // succeeds regardless of what an earlier iteration left the agent in
-        // (the loop always resets to "active" via stores.agent.update, but
-        // using a transition valid from any non-disabled state makes the test
-        // robust against ordering edge-cases).
-        body: JSON.stringify({ status: "disabled" }),
+        body: JSON.stringify({ status: "paused" }),
       },
     }),
   },

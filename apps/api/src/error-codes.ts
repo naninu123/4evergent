@@ -19,6 +19,7 @@ export const API_ERRORS = {
   IDEMPOTENCY_KEY_INVALID: { status: 400, message: "Idempotency-Key must be 256 characters or fewer", description: "The Idempotency-Key header is too long." },
   IDEMPOTENCY_CONFLICT: { status: 409, message: "Idempotency-Key already used with a different intent", description: "The Idempotency-Key was already used with a different intent." },
   AGENT_NOT_ACTIVE: { status: 409, message: "Agent is not active; new intents are rejected", description: "The agent is paused or disabled." },
+  AGENT_STATUS_CONFLICT: { status: 409, message: "Agent status does not allow this transition", description: "The agent's current status does not allow the requested status transition." },
   INVALID_EXECUTION_STATE: { status: 409, message: "Execution is in a state that does not allow this action", description: "The execution status does not allow the requested action." },
   MAX_RETRIES_REACHED: { status: 409, message: "Max retry attempts reached", description: "The execution has used all retry attempts." },
   APPROVAL_INVALID_STATE: { status: 409, message: "Approval is in a state that does not allow this action", description: "The approval status does not allow the requested approve or reject." },

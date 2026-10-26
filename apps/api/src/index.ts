@@ -1967,10 +1967,18 @@ function makeActivity(
   };
 }
 
-function apiError(res: any, code: ApiErrorCode, opts: { message?: string; details?: unknown } = {}) {
+function apiError(
+  res: any,
+  code: ApiErrorCode,
+  opts: { message?: string; details?: unknown; extra?: Record<string, unknown> } = {},
+) {
   const def = API_ERRORS[code];
   const body: Record<string, unknown> = { code, error: opts.message ?? def.message };
   if (opts.details !== undefined) body.details = opts.details;
+  // `extra` spreads additional top-level fields into the documented envelope,
+  // e.g. conflict details such as currentStatus/requestedStatus. Optional and
+  // unused by existing callers, so behavior is unchanged for them.
+  if (opts.extra) Object.assign(body, opts.extra);
   return json(res, body, def.status);
 }
 

@@ -1,16 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { unlinkSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryAgentStore, SQLiteAgentStore, MAX_LIMIT } from "../src/agent-store.js";
 import { closeSharedConnection } from "../src/shared-connection.js";
-import type { CreateAgentInput, AgentStore } from "../src/agent-types.js";
-
-interface StoreFactoryResult {
-  store: AgentStore;
-  cleanup?: () => void;
-}
+import type { CreateAgentInput } from "../src/agent-types.js";
 
 function temporaryDatabasePath(): string {
   return join(tmpdir(), `4evergent-agent-store-${crypto.randomUUID()}.db`);
@@ -25,7 +20,7 @@ function removeTemporaryDatabase(dbPath: string): void {
   }
 }
 
-function testStores(name: string, makeStore: () => StoreFactoryResult) {
+function testStores(name: string, makeStore: () => InMemoryAgentStore | SQLiteAgentStore) {
   test(`${name}: create and get`, async () => {
     const { store, cleanup } = makeStore();
     try {
@@ -114,6 +109,38 @@ function testStores(name: string, makeStore: () => StoreFactoryResult) {
     } finally {
       cleanup?.();
     }
+  });
+
+  test(`${name}: concurrent status transitions use the current stored status`, async () => {
+    const { store } = makeStore();
+    const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
+
+    const [disabled, pause] = await Promise.all([
+      store.transitionStatus(agent.id, "disabled"),
+      store.transitionStatus(agent.id, "paused"),
+    ]);
+
+    assert.equal(disabled.updated, true);
+    assert.deepEqual(pause, {
+      updated: false,
+      reason: "invalid_transition",
+      currentStatus: "disabled",
+    });
+    assert.equal((await store.get(agent.id))?.status, "disabled");
+  });
+
+  test(`${name}: disabled agents cannot transition back to active`, async () => {
+    const { store } = makeStore();
+    const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
+    await store.transitionStatus(agent.id, "disabled");
+
+    const result = await store.transitionStatus(agent.id, "active");
+    assert.deepEqual(result, {
+      updated: false,
+      reason: "invalid_transition",
+      currentStatus: "disabled",
+    });
+    assert.equal((await store.get(agent.id))?.status, "disabled");
   });
 
   test(`${name}: delete removes record`, async () => {
@@ -444,11 +471,7 @@ test("SQLiteAgentStore: persistence across instances", async () => {
   const dbPath = temporaryDatabasePath();
   try {
     const store1 = new SQLiteAgentStore(dbPath);
-    const created = await store1.create({
-      displayName: "Persisted",
-      ownerId: "owner-a",
-      capabilities: ["payment"],
-    });
+    const created = await store1.create({ displayName: "Persisted", ownerId: "owner-a", capabilities: ["payment"] });
     closeSharedConnection(dbPath);
 
     const store2 = new SQLiteAgentStore(dbPath);
