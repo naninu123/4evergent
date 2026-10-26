@@ -1124,13 +1124,18 @@ export async function createApiServer(options: ServerOptions) {
     } catch {
       return apiError(res, "INVALID_JSON");
     }
-    const status = (body as any)?.status;
-    if (!["active", "paused", "disabled"].includes(status)) {
-      return apiError(res, "VALIDATION_ERROR", { message: "invalid status" });
+    const status = (body as { status?: unknown })?.status;
+    if (status !== "active" && status !== "paused" && status !== "disabled") {
+      return apiError(res, "VALIDATION_ERROR", { message: "status must be one of: active, paused, disabled" });
     }
-    const agent = await agentStore.update(agentId, { status: status as any });
-    if (!agent) return apiError(res, "AGENT_NOT_FOUND");
-    return json(res, { id: agent.id, status: agent.status });
+    const result = await agentStore.transitionStatus(agentId, status);
+    if (!result.updated) {
+      if (result.reason === "not_found") return apiError(res, "AGENT_NOT_FOUND");
+      return apiError(res, "AGENT_STATUS_INVALID_TRANSITION", {
+        details: { currentStatus: result.currentStatus, requestedStatus: status },
+      });
+    }
+    return json(res, { id: result.agent.id, status: result.agent.status });
   }
 
   async function handleListSchedules(ctx: RequestContext, req: any, res: any) {

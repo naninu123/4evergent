@@ -147,6 +147,7 @@ the approval fields (`approvalId`, `activityId`, `status`, `message`). Request b
 | `INVALID_EXECUTION_STATE` | 409 | The execution status does not allow the requested action. |
 | `MAX_RETRIES_REACHED` | 409 | The execution has used all retry attempts. |
 | `APPROVAL_INVALID_STATE` | 409 | The approval status does not allow the requested approve or reject. |
+| `AGENT_STATUS_INVALID_TRANSITION` | 409 | The agent's current status does not allow the requested status transition; `details` carries `currentStatus` and `requestedStatus`. |
 | `SCHEDULE_INVALID_TRANSITION` | 409 | The schedule status does not allow the requested pause, resume or disable. |
 | `EXECUTION_CONFLICT` | 409 | The execution changed concurrently. |
 | `APPROVAL_EXPIRED` | 410 | The approval passed its expiry before it was approved. |
@@ -221,8 +222,13 @@ Get one agent (owner-scoped). `404` if not found or not owned.
 Body: `{ "status": "active" | "paused" | "disabled" }`
 
 - `200` → `{ "id", "status" }`
-- `400` → invalid status / invalid JSON
-- `404` → not found or not owned
+- `400` → invalid status (`VALIDATION_ERROR`) / invalid JSON (`INVALID_JSON`)
+- `404` → not found or not owned (`AGENT_NOT_FOUND`)
+- `409` → `AGENT_STATUS_INVALID_TRANSITION` — the current status does not
+  allow the requested transition. `details` carries `currentStatus` and
+  `requestedStatus` so clients can report why it was rejected.
+
+All error responses use the standard envelope `{"code","error","details"?}`.
 
 ---
 

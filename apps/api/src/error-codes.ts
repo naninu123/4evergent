@@ -22,6 +22,7 @@ export const API_ERRORS = {
   INVALID_EXECUTION_STATE: { status: 409, message: "Execution is in a state that does not allow this action", description: "The execution status does not allow the requested action." },
   MAX_RETRIES_REACHED: { status: 409, message: "Max retry attempts reached", description: "The execution has used all retry attempts." },
   APPROVAL_INVALID_STATE: { status: 409, message: "Approval is in a state that does not allow this action", description: "The approval status does not allow the requested approve or reject." },
+  AGENT_STATUS_INVALID_TRANSITION: { status: 409, message: "Agent status does not allow this transition", description: "The agent's current status does not allow the requested status transition; see details for currentStatus and requestedStatus." },
   SCHEDULE_INVALID_TRANSITION: { status: 409, message: "Schedule status does not allow this transition", description: "The schedule status does not allow the requested pause, resume or disable." },
   EXECUTION_CONFLICT: { status: 409, message: "Execution state changed; please refresh", description: "The execution changed concurrently." },
   APPROVAL_EXPIRED: { status: 410, message: "Approval expired", description: "The approval passed its expiry before it was approved." },

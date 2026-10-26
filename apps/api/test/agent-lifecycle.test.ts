@@ -110,6 +110,9 @@ test("AUTHZ: PATCH /agents/:id/status — non-owner cannot change status", async
   try {
     const res = await patch(baseUrl, "/agents/agent-b/status", { status: "paused" });
     assert.equal(res.status, 404);
+    // Contract: 404 uses the standard envelope, not an ad-hoc {error:"not found"}.
+    assert.equal(res.body.code, "AGENT_NOT_FOUND");
+    assert.equal(typeof res.body.error, "string");
   } finally {
     await close();
   }
@@ -123,6 +126,107 @@ test("AUTHZ: PATCH /agents/:id/status — invalid status", async () => {
   try {
     const res = await patch(baseUrl, "/agents/agent-a/status", { status: "bogus" });
     assert.equal(res.status, 400);
+    // Contract: ad-hoc 400 bodies are gone; the standard error envelope applies.
+    assert.equal(res.body.code, "VALIDATION_ERROR");
+    assert.equal(typeof res.body.error, "string");
+    assert.ok(res.body.error.includes("status"), `error should describe the bad status, got: ${res.body.error}`);
+    assert.equal("currentStatus" in res.body, false, "400 must not leak transition context");
+  } finally {
+    await close();
+  }
+});
+
+test("STATUS: disabled agent rejects later status transitions", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-a", "owner-a"));
+  try {
+    const disabled = await patch(baseUrl, "/agents/agent-a/status", { status: "disabled" });
+    assert.equal(disabled.status, 200);
+    assert.equal(disabled.body.status, "disabled");
+
+    const reactivated = await patch(baseUrl, "/agents/agent-a/status", { status: "active" });
+    assert.equal(reactivated.status, 409);
+    // Contract: 409 uses the standard error envelope. The transition context
+    // (currentStatus / requestedStatus) is carried under `details` so the
+    // top-level shape stays consistent with every other error response.
+    assert.equal(reactivated.body.code, "AGENT_STATUS_INVALID_TRANSITION");
+    assert.equal(typeof reactivated.body.error, "string");
+    assert.equal(reactivated.body.details.currentStatus, "disabled");
+    assert.equal(reactivated.body.details.requestedStatus, "active");
+
+    const check = await get(baseUrl, "/agents/agent-a");
+    assert.equal(check.body.status, "disabled");
+  } finally {
+    await close();
+  }
+});
+
+test("STATUS: concurrent PATCH /agents/:id/status — exactly one wins, other gets 409", async () => {
+  // Regression test for the race between agentStore.get() and agentStore.update().
+  // Two simultaneous requests to transition the same agent must not both succeed:
+  // the atomic transitionStatus() CAS ensures only one write lands.
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-a", "owner-a")); // starts "active"
+  try {
+    // Fire both requests in parallel. Both attempt active → paused.
+    const [r1, r2] = await Promise.all([
+      patch(baseUrl, "/agents/agent-a/status", { status: "paused" }),
+      patch(baseUrl, "/agents/agent-a/status", { status: "paused" }),
+    ]);
+
+    const statuses = [r1.status, r2.status].sort();
+    // Exactly one must succeed (200) and the other must be rejected (409).
+    assert.deepEqual(
+      statuses,
+      [200, 409],
+      `Expected one 200 and one 409, got ${r1.status} and ${r2.status}`,
+    );
+
+    // The winner must have returned paused.
+    const winner = r1.status === 200 ? r1 : r2;
+    assert.equal(winner.body.status, "paused");
+
+    // The loser must report the transition conflict.
+    const loser = r1.status === 409 ? r1 : r2;
+    assert.equal(loser.body.code, "AGENT_STATUS_INVALID_TRANSITION");
+    assert.equal(loser.body.details.currentStatus, "paused");
+    assert.equal(loser.body.details.requestedStatus, "paused");
+
+    // The final persisted state must be paused — not corrupted.
+    const check = await get(baseUrl, "/agents/agent-a");
+    assert.equal(check.body.status, "paused");
+  } finally {
+    await close();
+  }
+});
+
+// Contract test for the PATCH /agents/:id/status error envelope. Pins the
+// status code, machine-readable code, and the exact payload shape so a future
+// refactor cannot silently regress the 409 contract (or drop the transition
+// context clients rely on) without this test failing.
+test("CONTRACT: PATCH /agents/:id/status 409 envelope shape", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-a", "owner-a"));
+  try {
+    // disabled is terminal for "active": only paused → active is allowed.
+    await patch(baseUrl, "/agents/agent-a/status", { status: "disabled" });
+    const res = await patch(baseUrl, "/agents/agent-a/status", { status: "active" });
+
+    assert.equal(res.status, 409);
+    assert.equal(res.body.code, "AGENT_STATUS_INVALID_TRANSITION");
+    assert.equal(typeof res.body.error, "string");
+
+    // The transition context is preserved under `details`, not at the top level.
+    assert.deepEqual(Object.keys(res.body).sort(), ["code", "details", "error"]);
+    assert.deepEqual(Object.keys(res.body.details).sort(), ["currentStatus", "requestedStatus"]);
+    assert.equal(res.body.details.currentStatus, "disabled");
+    assert.equal(res.body.details.requestedStatus, "active");
   } finally {
     await close();
   }
