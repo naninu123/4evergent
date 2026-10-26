@@ -1,3 +1,9 @@
+# CI — hardened 2026-10-24
+# - All third-party actions pinned to verified full commit SHAs (see comments).
+# - `pull_request` is used for fork PR validation; no pull_request_target workflow exists.
+# - Least-privilege GITHUB_TOKEN: contents:read only, no secrets are exposed to PR jobs.
+# - Root package.json lifecycle scripts are NOT invoked: a fork PR can rewrite package.json,
+#   so validation calls the workspace scripts / binaries directly instead of `pnpm <script>`.
 name: CI
 
 on:
@@ -17,15 +23,15 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10.34.5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -34,7 +40,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: pnpm build
+        # `pnpm -r build` runs every workspace package build without executing the root script.
+        run: pnpm -r build
 
       - name: Verify packed CLI install
         run: |
@@ -46,13 +53,14 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Validate OpenAPI document
-        run: pnpm check:openapi
+        run: node scripts/check-openapi.mjs
 
       - name: Lint
-        run: pnpm lint
+        # eslint is invoked from node_modules/.bin; the root `lint` script is not used.
+        run: pnpm exec eslint .
 
       - name: Typecheck
-        run: pnpm typecheck
+        run: pnpm -r typecheck
 
       - name: Test
-        run: pnpm test
+        run: pnpm -r test

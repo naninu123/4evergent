@@ -98,6 +98,54 @@ export class ExecutionQueue {
     return this.running;
   }
 
+  getActiveCount(): number {
+    return this.activeCount;
+  }
+
+  /**
+   * Drain in-flight executions, resolving when activeCount reaches 0
+   * or when timeoutMs (if specified) has elapsed.
+   */
+  async drain(timeoutMs?: number): Promise<void> {
+    if (this.activeCount === 0) return;
+    const start = Date.now();
+    return new Promise((resolve) => {
+      let timer: NodeJS.Timeout | null = null;
+      let checkInterval: NodeJS.Timeout | null = null;
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        if (checkInterval) clearInterval(checkInterval);
+        resolve();
+      };
+
+      if (timeoutMs !== undefined && timeoutMs > 0) {
+        timer = setTimeout(cleanup, timeoutMs);
+      }
+
+      checkInterval = setInterval(() => {
+        if (this.activeCount === 0) {
+          cleanup();
+        } else if (timeoutMs !== undefined && Date.now() - start >= timeoutMs) {
+          cleanup();
+        }
+      }, 20);
+    });
+  }
+
+  /**
+   * Abort in-flight executions that are in the "running" phase.
+   * Executions in "submitting" or "submitted" are not aborted to avoid
+   * ambiguous state on the network wire.
+   */
+  abortInFlight(): void {
+    for (const inFlightState of this.inFlight.values()) {
+      if (inFlightState.phase === "running") {
+        inFlightState.controller.abort();
+      }
+    }
+  }
+
   /**
    * Manually enqueue a new execution record.
    */

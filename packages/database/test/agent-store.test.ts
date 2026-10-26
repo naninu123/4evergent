@@ -154,6 +154,46 @@ function testStores(name: string, makeStore: () => InMemoryAgentStore | SQLiteAg
     }
   });
 
+  test(`${name}: concurrent status transitions use the current stored status`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
+
+      const [disabled, pause] = await Promise.all([
+        store.transitionStatus(agent.id, "disabled"),
+        store.transitionStatus(agent.id, "paused"),
+      ]);
+
+      assert.equal(disabled.updated, true);
+      assert.deepEqual(pause, {
+        updated: false,
+        reason: "invalid_transition",
+        currentStatus: "disabled",
+      });
+      assert.equal((await store.get(agent.id))?.status, "disabled");
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: disabled agents cannot transition back to active`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      const agent = await store.create({ displayName: "A", ownerId: "owner-a" });
+      await store.transitionStatus(agent.id, "disabled");
+
+      const result = await store.transitionStatus(agent.id, "active");
+      assert.deepEqual(result, {
+        updated: false,
+        reason: "invalid_transition",
+        currentStatus: "disabled",
+      });
+      assert.equal((await store.get(agent.id))?.status, "disabled");
+    } finally {
+      cleanup?.();
+    }
+  });
+
   test(`${name}: listByCapability returns matching agents with full capability array`, async () => {
     const { store, cleanup } = makeStore();
     try {

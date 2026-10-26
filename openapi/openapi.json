@@ -290,6 +290,40 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Status transition not allowed from the agent's current status. Uses the standard error envelope; `details` carries the transition context (currentStatus, requestedStatus) so clients can show why the transition was rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": ["AGENT_STATUS_INVALID_TRANSITION"]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "details": {
+                      "type": "object",
+                      "properties": {
+                        "currentStatus": {
+                          "type": "string",
+                          "enum": ["active", "paused", "disabled"]
+                        },
+                        "requestedStatus": {
+                          "type": "string",
+                          "enum": ["active", "paused", "disabled"]
+                        }
+                      },
+                      "required": ["currentStatus", "requestedStatus"]
+                    }
+                  },
+                  "required": ["code", "error"]
+                }
+              }
+            }
           }
         }
       }
@@ -1902,6 +1936,144 @@
           }
         }
       }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Readiness probe (public, bounded and cached dependency checks)",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "All enabled components are ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "checks"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "degraded",
+                        "unavailable"
+                      ]
+                    },
+                    "checks": {
+                      "type": "object",
+                      "required": [
+                        "horizon",
+                        "database",
+                        "executionQueue",
+                        "scheduler"
+                      ],
+                      "properties": {
+                        "horizon": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail"
+                          ]
+                        },
+                        "database": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail"
+                          ]
+                        },
+                        "executionQueue": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail",
+                            "disabled"
+                          ]
+                        },
+                        "scheduler": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail",
+                            "disabled"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable or enabled worker stopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "checks"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "degraded",
+                        "unavailable"
+                      ]
+                    },
+                    "checks": {
+                      "type": "object",
+                      "required": [
+                        "horizon",
+                        "database",
+                        "executionQueue",
+                        "scheduler"
+                      ],
+                      "properties": {
+                        "horizon": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail"
+                          ]
+                        },
+                        "database": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail"
+                          ]
+                        },
+                        "executionQueue": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail",
+                            "disabled"
+                          ]
+                        },
+                        "scheduler": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "fail",
+                            "disabled"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1957,13 +2129,17 @@
     "schemas": {
       "Error": {
         "type": "object",
+        "description": "Standard error envelope produced by apiError(): { code, error, details? }. `code` is the stable, machine-readable contract (see docs error codes table); `error` is human-readable and may change. `details` is optional and may be an array (e.g. VALIDATION_ERROR field messages) or an object (e.g. transition context).",
         "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable, machine-readable error code from the error codes table."
+          },
           "error": {
             "type": "string"
           },
           "details": {
-            "type": "array",
-            "items": {}
+            "description": "Optional, shape varies by code. May be an array of field messages or an object with context fields."
           }
         },
         "required": [

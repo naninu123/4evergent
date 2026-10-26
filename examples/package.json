@@ -1,0 +1,18 @@
+{
+  "name": "@4evergent/examples",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable walkthrough scripts for the @4evergent/* packages. Documentation, not tests.",
+  "scripts": {
+    "smoke": "tsx policy-evaluation.ts && tsx intent-validation.ts && tsx in-memory-stores.ts && tsx pipeline-walkthrough.ts"
+  },
+  "dependencies": {
+    "@4evergent/agent-core": "workspace:*",
+    "@4evergent/database": "workspace:*",
+    "@4evergent/policy": "workspace:*",
+    "@4evergent/shared": "workspace:*",
+    "@4evergent/stellar": "workspace:*",
+    "@stellar/stellar-sdk": "^13.0.0"
+  }
+}

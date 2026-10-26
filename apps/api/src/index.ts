@@ -124,6 +124,12 @@ export interface ServerOptions {
   /** Origin allowed for credentialed CORS (the browser app origin). */
   corsOrigin?: string;
   authorizationService?: AuthorizationService;
+  /** Readiness probes share one bounded, briefly cached dependency check. */
+  readiness?: {
+    timeoutMs?: number;
+    cacheMs?: number;
+    fetcher?: typeof globalThis.fetch;
+  };
   /** Enable the background scheduler to execute due schedules. */
   scheduler?: {
     enabled?: boolean;
@@ -244,6 +250,84 @@ export async function createApiServer(options: ServerOptions) {
   const policy = new PolicyEngine(options.policyRules, store as any, getRules);
   const adapter = new StellarAdapter(options.horizonUrl);
 
+  const readinessTimeoutMs = options.readiness?.timeoutMs ?? 2_000;
+  const readinessCacheMs = options.readiness?.cacheMs ?? 5_000;
+  for (const [name, value] of Object.entries({ readinessTimeoutMs, readinessCacheMs })) {
+    if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be positive`);
+  }
+  type DependencyChecks = { horizon: "ok" | "fail"; database: "ok" | "fail" };
+  let readinessCache: { checks: DependencyChecks; expiresAt: number } | null = null;
+  let readinessInFlight: Promise<DependencyChecks> | null = null;
+  // A check that ignores its abort signal keeps running after it times out.
+  // Later probes wait on that same call instead of starting another, so a hung
+  // dependency holds at most one outstanding call per check, however many
+  // probes arrive.
+  const outstandingChecks = new Map<string, { work: Promise<unknown>; controller: AbortController }>();
+
+  async function boundedCheck(name: string, check: (signal: AbortSignal) => Promise<unknown>): Promise<"ok" | "fail"> {
+    let entry = outstandingChecks.get(name);
+    if (!entry) {
+      const controller = new AbortController();
+      const work = Promise.resolve().then(() => check(controller.signal));
+      const started = { work, controller };
+      const settle = () => {
+        if (outstandingChecks.get(name) === started) outstandingChecks.delete(name);
+      };
+      work.then(settle, settle);
+      outstandingChecks.set(name, started);
+      entry = started;
+    }
+    const { work, controller } = entry;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        work,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error("Readiness check timed out"));
+          }, readinessTimeoutMs);
+        }),
+      ]);
+      return "ok";
+    } catch {
+      // Public responses expose status only, never dependency errors or records.
+      return "fail";
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  function dependencyReadiness(): Promise<DependencyChecks> {
+    if (readinessCache && Date.now() < readinessCache.expiresAt) {
+      return Promise.resolve(readinessCache.checks);
+    }
+    if (readinessInFlight) return readinessInFlight;
+    readinessInFlight = (async () => {
+      const [horizon, database] = await Promise.all([
+        boundedCheck("horizon", async signal => {
+          const fetcher = options.readiness?.fetcher ?? globalThis.fetch;
+          const probeAdapter = new StellarAdapter(options.horizonUrl,
+            (input, init) => fetcher(input, { ...init, signal }));
+          await probeAdapter.getNetworkInfo();
+        }),
+        boundedCheck("database", async () => {
+          // Exercise the actual configured stores, including injected/in-memory
+          // stores, rather than a new connection that could hide a broken handle.
+          await Promise.all([
+            store.listAll(1), approvals.listAll(1),
+            schedules.listByOwner("", 1), executionStore.listByOwner("", 1),
+            agentStore.listByOwner("", 1), policyConfigStore.listByOwner(""),
+          ]);
+        }),
+      ]);
+      const checks = { horizon, database };
+      readinessCache = { checks, expiresAt: Date.now() + readinessCacheMs };
+      return checks;
+    })().finally(() => { readinessInFlight = null; });
+    return readinessInFlight;
+  }
+
   // Phase 28I: Agent existence check with persistent fallback.
   // Mirrors ResourceAuthorizationService.resolveAgent so handlers can find
   // agents that survive a server restart (present in agentStore but not in
@@ -269,7 +353,15 @@ export async function createApiServer(options: ServerOptions) {
     (options.dbPath ? new SQLiteExecutionStore(options.dbPath) : new InMemoryExecutionStore());
 
   // --- Execution recovery setup ---
-  const recoveryService = new ExecutionRecoveryService(executionStore);
+  const recoveryPreCheck = async (txHash: string) => {
+    const status = await adapter.getTransactionStatus(txHash);
+    if (status === "confirmed" || status === "failed") return "found" as const;
+    if (status === "not_found") return "not_found" as const;
+    return "network_error" as const;
+  };
+  const recoveryService = new ExecutionRecoveryService(executionStore, {
+    preCheck: recoveryPreCheck,
+  });
   let executionQueue: ExecutionQueue | null = null;
   let reconciler: import("@4evergent/stellar").TransactionStatusReconciler | null = null;
 
@@ -701,6 +793,23 @@ export async function createApiServer(options: ServerOptions) {
         return json(res, { status: "ok", signerAccountId: options.signer.getAccountId() });
       }
 
+      // Public readiness: bounded/cached dependency reads, fresh worker status.
+      if (method === "GET" && url === "/health/ready") {
+        return dependencyReadiness().then(dependencies => {
+          const checks = {
+            ...dependencies,
+            executionQueue: options.executionQueue?.enabled
+              ? (executionQueue?.isRunning() ? "ok" : "fail") : "disabled",
+            scheduler: options.scheduler?.enabled
+              ? (scheduler?.isRunning() ? "ok" : "fail") : "disabled",
+          };
+          const status = dependencies.horizon === "fail" || dependencies.database === "fail"
+            ? "unavailable"
+            : checks.executionQueue === "fail" || checks.scheduler === "fail" ? "degraded" : "ok";
+          return json(res, { status, checks }, status === "ok" ? 200 : 503);
+        });
+      }
+
       // CSRF guard: a valid session principal that failed the custom-header
       // check must not be able to mutate state. Checked BEFORE the generic
       // 401 gate so forged (cross-site) writes surface as 403, while an
@@ -1118,17 +1227,13 @@ export async function createApiServer(options: ServerOptions) {
     }
     const status = (body as { status?: unknown })?.status;
     if (status !== "active" && status !== "paused" && status !== "disabled") {
-      return apiError(res, "VALIDATION_ERROR", { message: "invalid status" });
+      return apiError(res, "VALIDATION_ERROR", { message: "status must be one of: active, paused, disabled" });
     }
     const result = await agentStore.transitionStatus(agentId, status);
     if (!result.updated) {
       if (result.reason === "not_found") return apiError(res, "AGENT_NOT_FOUND");
-      // Conflict: retain the machine-readable envelope (code/error) alongside the
-      // conflict details, matching the approvalError convention of keeping
-      // domain context at the top level of an error response.
-      return apiError(res, "AGENT_STATUS_CONFLICT", {
-        message: "invalid status transition",
-        extra: { currentStatus: result.currentStatus, requestedStatus: status },
+      return apiError(res, "AGENT_STATUS_INVALID_TRANSITION", {
+        details: { currentStatus: result.currentStatus, requestedStatus: status },
       });
     }
     return json(res, { id: result.agent.id, status: result.agent.status });
@@ -1741,28 +1846,78 @@ export async function createApiServer(options: ServerOptions) {
     // fails closed when HOST is non-loopback and API_KEYS is unset.
     listen: (port: number, host: string = "127.0.0.1") =>
       new Promise<void>((resolve) => server.listen(port, host, resolve)),
-    close: () => new Promise<void>((resolve) => {
-      if (scheduler) {
-        scheduler.stop();
-        console.log("[scheduler] stopped");
-      }
-      if (executionQueue) {
-        executionQueue.stop();
-        console.log("[execution-queue] stopped");
-      }
-      if (reconciler) {
-        reconciler.stop();
-        console.log("[reconciler] stopped");
-      }
-      if (retentionTimer) {
-        clearInterval(retentionTimer);
-        retentionTimer = null;
-      }
-      // Abort lingering keep-alive connections so the server actually shuts
-      // down (Node's http close() waits for active sockets otherwise).
-      server.closeAllConnections?.();
-      server.close(() => resolve());
-    }),
+    close: (options?: { drainTimeoutMs?: number }) =>
+      new Promise<void>((resolve, reject) => {
+        // 1. Stop accepting new requests and prevent workers from claiming new work.
+        if (scheduler) {
+          scheduler.stop();
+          console.log("[scheduler] stopped");
+        }
+        if (executionQueue) {
+          executionQueue.stop();
+          console.log("[execution-queue] stopped");
+        }
+        if (reconciler) {
+          reconciler.stop();
+          console.log("[reconciler] stopped");
+        }
+        if (retentionTimer) {
+          clearInterval(retentionTimer);
+          retentionTimer = null;
+        }
+
+        // Close idle keep-alive connections so idle sockets do not keep the server open,
+        // while allowing in-flight HTTP requests to complete.
+        server.closeIdleConnections?.();
+        const idleInterval = setInterval(() => {
+          server.closeIdleConnections?.();
+        }, 20);
+
+        let drainTimer: NodeJS.Timeout | null = null;
+        let completed = false;
+
+        const finish = () => {
+          if (completed) return;
+          completed = true;
+          clearInterval(idleInterval);
+          if (drainTimer) {
+            clearTimeout(drainTimer);
+            drainTimer = null;
+          }
+          resolve();
+        };
+
+        const drainTimeout = options?.drainTimeoutMs;
+        if (drainTimeout !== undefined && drainTimeout > 0) {
+          drainTimer = setTimeout(() => {
+            if (completed) return;
+            completed = true;
+            clearInterval(idleInterval);
+            drainTimer = null;
+            // 3. Force-close remaining connections and terminate outstanding work after timeout expires.
+            server.closeAllConnections?.();
+            executionQueue?.abortInFlight();
+            const err = new Error(`Shutdown timeout of ${drainTimeout}ms exceeded — forcing exit`);
+            err.name = "ShutdownTimeoutError";
+            reject(err);
+          }, drainTimeout);
+        }
+
+        // 2. Allow active HTTP requests and in-flight executions to finish within the configured drain timeout.
+        const httpClose = new Promise<void>((r) => {
+          server.close(() => r());
+        });
+        const queueDrain = executionQueue ? executionQueue.drain(drainTimeout) : Promise.resolve();
+
+        Promise.all([httpClose, queueDrain])
+          .then(() => {
+            finish();
+          })
+          .catch((err) => {
+            if (drainTimer) clearTimeout(drainTimer);
+            reject(err);
+          });
+      }),
     registerAgent: (agent: Agent) => {
       agents.set(agent.id, agent);
       void agentStore.create({

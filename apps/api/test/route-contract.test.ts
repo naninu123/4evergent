@@ -91,6 +91,7 @@ const AGENT_ID = "contract-agent";
 
 const ROUTES: RouteContract[] = [
   // ---- Public routes (no principal required) ----
+  { method: "GET", path: "/health/ready", auth: "public", status: 200, keys: ["status", "checks"] },
   { method: "GET", path: "/health", auth: "public", status: 200, keys: ["status", "signerAccountId"] },
   { method: "GET", path: "/auth/config", auth: "public", status: 200, keys: ["email", "google", "stellar", "registration"] },
   { method: "POST", path: "/auth/register", auth: "public", status: 201, keys: ["subject"] },
@@ -416,6 +417,9 @@ async function startHarness(withQueue = false, withAuth = true): Promise<Harness
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: new MockSigner("contract-agent"),
+    readiness: { fetcher: async () => new Response(JSON.stringify({
+      network_passphrase: "Test SDF Network ; September 2015",
+    })) },
     policyRules: {
       maxTxAmount: { XLM: "1000" },
       requireHumanApprovalForAmountAbove: "10",
@@ -1013,6 +1017,34 @@ test("unknown /auth/* route returns 404, not 401", async () => {
     assert.equal(res.status, 404);
     const body = await res.json();
     assert.ok(body.error, "404 body must carry an error field");
+  } finally {
+    await close();
+  }
+});
+
+test("PATCH /agents/:id/status returns 409 for a rejected transition (disabled is terminal)", async () => {
+  // Verifies that invalid transitions are rejected with the correct status code
+  // and response shape, preserving coverage for the 409 path that the success-
+  // path probe in the ROUTES table no longer exercises.
+  const { baseUrl, close, stores } = await startHarness();
+  try {
+    // Seed the agent and move it to disabled (valid: active → disabled).
+    await stores.agent.update(AGENT_ID, { status: "disabled" });
+
+    // Attempt to reactivate a disabled agent — forbidden by transition rules.
+    const res = await apiFetch(`${baseUrl}/agents/${AGENT_ID}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "active" }),
+    });
+
+    assert.equal(res.status, 409, "disabled → active must be rejected with 409");
+    const body = await res.json();
+    // Contract: 409 uses the standard error envelope; transition context
+    // (currentStatus / requestedStatus) is carried under `details`.
+    assert.equal(body.code, "AGENT_STATUS_INVALID_TRANSITION");
+    assert.equal(body.details.currentStatus, "disabled");
+    assert.equal(body.details.requestedStatus, "active");
   } finally {
     await close();
   }
