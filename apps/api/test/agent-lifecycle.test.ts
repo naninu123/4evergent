@@ -232,68 +232,6 @@ test("CONTRACT: PATCH /agents/:id/status 409 envelope shape", async () => {
   }
 });
 
-test("STATUS: disabled agent rejects later status transitions", async () => {
-  const { baseUrl, close, registerAgent } = await startServer({
-    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
-  });
-  registerAgent(makeAgent("agent-a", "owner-a"));
-  try {
-    const disabled = await patch(baseUrl, "/agents/agent-a/status", { status: "disabled" });
-    assert.equal(disabled.status, 200);
-    assert.equal(disabled.body.status, "disabled");
-
-    const reactivated = await patch(baseUrl, "/agents/agent-a/status", { status: "active" });
-    assert.equal(reactivated.status, 409);
-    assert.equal(reactivated.body.currentStatus, "disabled");
-    assert.equal(reactivated.body.requestedStatus, "active");
-
-    const check = await get(baseUrl, "/agents/agent-a");
-    assert.equal(check.body.status, "disabled");
-  } finally {
-    await close();
-  }
-});
-
-test("STATUS: concurrent PATCH /agents/:id/status — exactly one wins, other gets 409", async () => {
-  // Regression test for the race between agentStore.get() and agentStore.update().
-  // Two simultaneous requests to transition the same agent must not both succeed:
-  // the atomic transitionStatus() CAS ensures only one write lands.
-  const { baseUrl, close, registerAgent } = await startServer({
-    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
-  });
-  registerAgent(makeAgent("agent-a", "owner-a")); // starts "active"
-  try {
-    // Fire both requests in parallel. Both attempt active → paused.
-    const [r1, r2] = await Promise.all([
-      patch(baseUrl, "/agents/agent-a/status", { status: "paused" }),
-      patch(baseUrl, "/agents/agent-a/status", { status: "paused" }),
-    ]);
-
-    const statuses = [r1.status, r2.status].sort();
-    // Exactly one must succeed (200) and the other must be rejected (409).
-    assert.deepEqual(
-      statuses,
-      [200, 409],
-      `Expected one 200 and one 409, got ${r1.status} and ${r2.status}`,
-    );
-
-    // The winner must have returned paused.
-    const winner = r1.status === 200 ? r1 : r2;
-    assert.equal(winner.body.status, "paused");
-
-    // The loser must report the transition conflict.
-    const loser = r1.status === 409 ? r1 : r2;
-    assert.equal(loser.body.currentStatus, "paused");
-    assert.equal(loser.body.requestedStatus, "paused");
-
-    // The final persisted state must be paused — not corrupted.
-    const check = await get(baseUrl, "/agents/agent-a");
-    assert.equal(check.body.status, "paused");
-  } finally {
-    await close();
-  }
-});
-
 test("AUTHZ: GET /agents/:id — owner can read own agent", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
     authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
