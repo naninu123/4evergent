@@ -263,13 +263,13 @@ sha256 equalled `83656ffddd08a22e1977b6cf129af4d6515be7e8494d843ded1aa1c0ef3f844
 
 The background workers poll on fixed intervals that can be tuned with environment variables (milliseconds, positive numbers only; an invalid value stops startup with a `FATAL` error):
 
-| Variable | Worker | Default |
-| --- | --- | --- |
-| `RECONCILIATION_INTERVAL_MS` | Transaction status reconciliation | `30000` |
-| `EXECUTION_QUEUE_INTERVAL_MS` | Execution queue | `10000` |
-| `SCHEDULER_INTERVAL_MS` | Schedule polling | `60000` |
+| Variable | Worker | Default | Enabled by default (`server.ts`) | Contacts Horizon | What it does |
+| --- | --- | --- | --- | --- | --- |
+| `RECONCILIATION_INTERVAL_MS` | Transaction status reconciliation (`TransactionStatusReconciler`) | `30000` (30s) | Yes | Yes (`GET /transactions/:hash` for `submitted` executions) | Polls `ExecutionStore` for `submitted` records and transitions them to `confirmed` or `failed` once observed on-chain. |
+| `EXECUTION_QUEUE_INTERVAL_MS` | Execution queue (`ExecutionQueue`) | `10000` (10s) | Yes | Yes (account load, simulation, pre-check, submission) | Claims due `queued` and retry-eligible `failed` executions and runs them through `TransactionPipeline` with backoff and `dead_letter` exhaustion. |
+| `SCHEDULER_INTERVAL_MS` | Schedule polling (`AgentScheduler`) | `60000` (60s) | No (opt-in via `SCHEDULER_ENABLED=1`) | Indirectly via the execution queue (or directly if run without a queue) | Polls `ScheduleStore` for due active cron schedules, evaluates policy/approval gates, and enqueues approved intents. |
 
-A faster reconciliation loop is handy for a testnet demo; a slower one reduces Horizon load. The startup log lines (`[reconciler] started, interval: ...`) show the effective value.
+A faster reconciliation or execution-queue loop is handy for a live testnet demo; a slower interval reduces Horizon request volume when idle or rate-limited. The startup log lines (`[reconciler] / [execution-queue] / [scheduler] started, interval: ...`) show the effective value.
 
 ## Safety Guards (Phase 21)
 
