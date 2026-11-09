@@ -35,7 +35,7 @@ async function postIntent(baseUrl: string, agentId: string, idempotencyKey?: str
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   const res = await fetch(`${baseUrl}/agents/${agentId}/intents`, {
     method: "POST", headers,
-    body: JSON.stringify({ type: "payment", asset: "XLM", destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", amount, reason: "F1 regression test" }),
+    body: JSON.stringify({ type: "payment", asset: "XLM", destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", amount, reason: "F1 regression test" }),
   });
   return { status: res.status, body: await res.json().catch(() => null) };
 }

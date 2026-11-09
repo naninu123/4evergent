@@ -30,7 +30,7 @@ function makeAgent(id: string, ownerId: string, status = "active") {
     displayName: `Agent ${id}`,
     description: "test agent",
     ownerId,
-    stellarAddress: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    stellarAddress: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
     capabilities: ["payment"],
     status,
     createdAt: new Date().toISOString(),
@@ -272,7 +272,7 @@ test("AUTHZ: GET /agents/:id/activity/:activityId — owner can read own activit
     body: JSON.stringify({
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "50",
       reason: "detail test",
     }),
@@ -314,7 +314,7 @@ test("AUTHZ: GET /agents/:id/approvals — owner can list own agent approvals", 
     body: JSON.stringify({
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "50",
       reason: "approvals test",
     }),
@@ -354,7 +354,7 @@ async function postIntent(baseUrl: string, agentId: string) {
     body: JSON.stringify({
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       // amount 50 ≥ approvalThreshold(10) so the pipeline returns 202
       // requires_approval — fully offline and deterministic, no Horizon
       // submission attempted under deferExecution.

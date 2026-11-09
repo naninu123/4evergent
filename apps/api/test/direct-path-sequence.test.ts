@@ -28,7 +28,7 @@ function makeAgent(id: string, ownerId: string) {
     displayName: "Test",
     description: "test agent",
     ownerId,
-    stellarAddress: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    stellarAddress: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
     capabilities: [],
     status: "active" as const,
     createdAt: new Date().toISOString(),
@@ -67,7 +67,7 @@ test("DIRECT PATH: concurrent intents for same account do not crash server", asy
         body: JSON.stringify({
           type: "payment",
           asset: "XLM",
-          destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
           amount: "1",
           reason: "test-1",
         }),
@@ -78,7 +78,7 @@ test("DIRECT PATH: concurrent intents for same account do not crash server", asy
         body: JSON.stringify({
           type: "payment",
           asset: "XLM",
-          destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
           amount: "2",
           reason: "test-2",
         }),
@@ -107,7 +107,7 @@ test("DIRECT PATH: failure releases coordinator lock", async () => {
       body: JSON.stringify({
         type: "payment",
         asset: "XLM",
-        destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
         amount: "1",
         reason: "test-fail",
       }),
@@ -121,7 +121,7 @@ test("DIRECT PATH: failure releases coordinator lock", async () => {
       body: JSON.stringify({
         type: "payment",
         asset: "XLM",
-        destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
         amount: "2",
         reason: "test-success",
       }),

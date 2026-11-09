@@ -239,7 +239,7 @@ test("POST /agents created agent can be used for intent submission", async () =>
     const intentRes = await post(`${baseUrl}/agents/${agentId}/intents`, {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "60",
       reason: "test intent for new agent",
     });

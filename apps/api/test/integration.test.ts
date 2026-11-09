@@ -33,7 +33,7 @@ const TEST_AGENT = {
   displayName: "Test",
   description: "test agent",
   ownerId: "test",
-  stellarAddress: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  stellarAddress: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
   capabilities: [],
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
@@ -136,7 +136,7 @@ test("API returns 404 for unknown agent", async () => {
     const res = await post(baseUrl, "/agents/unknown-agent/intents", {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "1",
       reason: "test",
     });
@@ -186,7 +186,7 @@ test("API returns 400 for missing amount in payment intent", async () => {
     const res = await post(baseUrl, "/agents/test-agent/intents", {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       reason: "test",
     });
     assert.equal(res.status, 400);
@@ -203,7 +203,7 @@ test("API returns 403 for policy-denied intent (amount exceeds maxTxAmount)", as
     const res = await post(baseUrl, "/agents/test-agent/intents", {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "10",
       reason: "exceeds limit",
     });
@@ -225,7 +225,7 @@ test("API returns 202 for approval-required intent", async () => {
     const res = await post(baseUrl, "/agents/test-agent/intents", {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "50",
       reason: "approval test",
     });
@@ -277,7 +277,7 @@ test("API accepts account_settings intent (no longer 'not yet supported')", asyn
     const res = await post(baseUrl, "/agents/test-agent/intents", {
       type: "account_settings",
       setting: "inflation_dest",
-      value: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      value: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       reason: "test",
     });
     // parseIntent now accepts account_settings — the intent reaches policy
@@ -311,7 +311,7 @@ test("API records activity for denied intent", async () => {
     await post(baseUrl, "/agents/test-agent/intents", {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "10",
       reason: "exceeds limit",
     });
@@ -355,7 +355,7 @@ test("API response does not contain private keys or secrets", async () => {
     const res = await post(baseUrl, "/agents/test-agent/intents", {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "100",
       reason: "verify no sensitive data",
     });

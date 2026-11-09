@@ -172,7 +172,7 @@ const ROUTES: RouteContract[] = [
         body: JSON.stringify({
           type: "payment",
           asset: "XLM",
-          destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
           amount: "50",
           reason: "contract test",
         }),
@@ -234,7 +234,7 @@ const ROUTES: RouteContract[] = [
           intent: {
             type: "payment",
             asset: "XLM",
-            destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
             amount: "10",
             reason: "contract schedule",
           },
@@ -445,7 +445,7 @@ async function startHarness(withQueue = false, withAuth = true): Promise<Harness
     displayName: "Contract Agent",
     description: "route contract fixture",
     ownerId: "test",
-    stellarAddress: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    stellarAddress: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
     capabilities: ["payment"],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -477,7 +477,7 @@ function makeActivity(overrides: Partial<ActivityRecord> = {}): ActivityRecord {
     intent: {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "50",
       reason: "contract fixture",
     },
@@ -504,7 +504,7 @@ function makeApproval(activityId: string, overrides: Partial<ApprovalRecord> = {
     intent: {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "50",
       reason: "contract fixture",
     },
@@ -535,7 +535,7 @@ function makeExecution(overrides: Partial<ExecutionRecord> = {}): ExecutionRecor
     intent: {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "50",
       reason: "contract fixture",
     },
@@ -566,7 +566,7 @@ function makeSchedule(overrides: Partial<ScheduleRecord> = {}): ScheduleRecord {
     intent: {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
       amount: "10",
       reason: "contract fixture",
     },
