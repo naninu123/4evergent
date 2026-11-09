@@ -10,33 +10,37 @@ import {
   type Horizon,
   type Transaction,
 } from "@stellar/stellar-sdk";
-import { StellarSimulator } from "../src/simulator.js";
+import { StellarSimulator, paymentAmount } from "../src/simulator.js";
 
 /**
  * Unit tests for `StellarSimulator` — the mandatory pre-signing gate.
  *
  * Every test is offline: a fake `Horizon.Server` is injected via the
  * constructor seam (production callers keep the default `new Horizon.Server`).
- *
- * Dependency note: these tests assert the *current* check-6 behaviour (XLM
- * payment vs native balance). Sibling issue #43 ("Fix simulator balance check
- * to use the payment's actual asset") will change check 6; the balance tests
- * here must be updated when that fix lands.
  */
 
 const SOURCE = Keypair.random().publicKey();
 const DEST = Keypair.random().publicKey();
+const ISSUER = Keypair.random().publicKey();
 const HORIZON_URL = "https://horizon-testnet.stellar.org";
+const USDC = new Asset("USDC", ISSUER);
+
+type FakeBalance = {
+  asset_type: string;
+  balance: string;
+  asset_code?: string;
+  asset_issuer?: string;
+};
 
 type FakeAccount = {
   sequence: string;
-  balances: { asset_type: string; balance: string; asset_code?: string }[];
+  balances: FakeBalance[];
   subentry_count?: number;
 };
 
 function fakeAccount(opts: {
   sequence: string;
-  balances?: { asset_type: string; balance: string; asset_code?: string }[];
+  balances?: FakeBalance[];
   subentry_count?: number;
 }): FakeAccount {
   return {
@@ -69,6 +73,7 @@ function buildTx(opts: {
   accountSequence: string;
   fee?: string;
   amount?: string;
+  asset?: Asset;
 }): Transaction {
   const source = new Account(SOURCE, opts.accountSequence);
   return new TransactionBuilder(source, {
@@ -76,7 +81,11 @@ function buildTx(opts: {
     networkPassphrase: Networks.TESTNET,
   })
     .addOperation(
-      Operation.payment({ destination: DEST, asset: Asset.native(), amount: opts.amount ?? "10" })
+      Operation.payment({
+        destination: DEST,
+        asset: opts.asset ?? Asset.native(),
+        amount: opts.amount ?? "10",
+      })
     )
     .setTimeout(30)
     .build();
@@ -197,4 +206,152 @@ test("SIMULATOR: valid transaction returns success", async () => {
   assert.equal(result.fee, "100");
   assert.equal(result.operations, 1);
   assert.deepEqual(result.warnings, []);
+});
+
+// ── Check 6c: paymentAmount() inspects op.asset for native & issued assets ───
+test("SIMULATOR: paymentAmount() inspects payment asset for native and issued-asset payments", () => {
+  const xlmTx = buildTx({ accountSequence: "100", amount: "12.5", asset: Asset.native() });
+  const usdcTx = buildTx({ accountSequence: "100", amount: "25.75", asset: USDC });
+
+  assert.equal(paymentAmount(xlmTx), 12.5);
+  assert.equal(paymentAmount(xlmTx, { code: "XLM" }), 12.5);
+  assert.equal(paymentAmount(xlmTx, { code: "USDC", issuer: ISSUER }), 0);
+
+  assert.equal(paymentAmount(usdcTx), 25.75);
+  assert.equal(paymentAmount(usdcTx, { code: "USDC", issuer: ISSUER }), 25.75);
+  assert.equal(paymentAmount(usdcTx, { code: "XLM" }), 0);
+});
+
+// ── Check 6d: USDC payment (pass + fail) ─────────────────────────────────────
+test("SIMULATOR: USDC payment passes when USDC balance covers amount and XLM covers fee", async () => {
+  const sim = new StellarSimulator(
+    HORIZON_URL,
+    fakeServer({
+      baseFee: 100,
+      account: fakeAccount({
+        sequence: "100",
+        subentry_count: 1,
+        balances: [
+          { asset_type: "native", balance: "5.0000000" },
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "USDC",
+            asset_issuer: ISSUER,
+            balance: "50.0000000",
+          },
+        ],
+      }),
+    })
+  );
+  const tx = buildTx({ accountSequence: "100", fee: "100", amount: "10", asset: USDC });
+  const result = await sim.simulate(tx);
+  assert.equal(result.success, true);
+  assert.equal(result.error, undefined);
+});
+
+test("SIMULATOR: USDC payment fails with USDC in error message when USDC balance is insufficient", async () => {
+  const sim = new StellarSimulator(
+    HORIZON_URL,
+    fakeServer({
+      baseFee: 100,
+      account: fakeAccount({
+        sequence: "100",
+        subentry_count: 1,
+        balances: [
+          { asset_type: "native", balance: "100.0000000" },
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "USDC",
+            asset_issuer: ISSUER,
+            balance: "4.0000000",
+          },
+        ],
+      }),
+    })
+  );
+  const tx = buildTx({ accountSequence: "100", fee: "100", amount: "10", asset: USDC });
+  const result = await sim.simulate(tx);
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /Insufficient balance: payment 10 USDC exceeds available 4\.0000000 USDC/);
+});
+
+// ── Check 6e: USDC payment with insufficient XLM for fees + reserve ──────────
+test("SIMULATOR: USDC payment fails when XLM balance cannot cover fee + reserve", async () => {
+  // subentry_count = 1 => reserve = 0.5 + 0.5 * 1 = 1.0 XLM
+  // native balance = 1.0000000 => available XLM = 0.0000000, fee = 0.00001 XLM
+  const sim = new StellarSimulator(
+    HORIZON_URL,
+    fakeServer({
+      baseFee: 100,
+      account: fakeAccount({
+        sequence: "100",
+        subentry_count: 1,
+        balances: [
+          { asset_type: "native", balance: "1.0000000" },
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "USDC",
+            asset_issuer: ISSUER,
+            balance: "100.0000000",
+          },
+        ],
+      }),
+    })
+  );
+  const tx = buildTx({ accountSequence: "100", fee: "100", amount: "10", asset: USDC });
+  const result = await sim.simulate(tx);
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /Insufficient balance: fee .* XLM exceeds available 0\.0000000 XLM/);
+});
+
+// ── Check 6f: mixed-balance scenario (XLM vs issued assets, including alphanum12) ──
+test("SIMULATOR: mixed-balance scenario checks the exact asset being paid", async () => {
+  const longAsset = new Asset("LONGASSET12", ISSUER);
+  const sim = new StellarSimulator(
+    HORIZON_URL,
+    fakeServer({
+      baseFee: 100,
+      account: fakeAccount({
+        sequence: "100",
+        subentry_count: 2,
+        balances: [
+          { asset_type: "native", balance: "5.0000000" },
+          {
+            asset_type: "credit_alphanum4",
+            asset_code: "USDC",
+            asset_issuer: ISSUER,
+            balance: "100.0000000",
+          },
+          {
+            asset_type: "credit_alphanum12",
+            asset_code: "LONGASSET12",
+            asset_issuer: ISSUER,
+            balance: "20.0000000",
+          },
+        ],
+      }),
+    })
+  );
+
+  // 1) 10 XLM payment must fail against 5 XLM (even though USDC is 100)
+  const xlmTx = buildTx({ accountSequence: "100", fee: "100", amount: "10", asset: Asset.native() });
+  const xlmRes = await sim.simulate(xlmTx);
+  assert.equal(xlmRes.success, false);
+  assert.match(xlmRes.error ?? "", /payment 10 XLM/);
+
+  // 2) 10 USDC payment must pass against 100 USDC (with 5 XLM covering fee + 1.5 XLM reserve)
+  const usdcTx = buildTx({ accountSequence: "100", fee: "100", amount: "10", asset: USDC });
+  const usdcRes = await sim.simulate(usdcTx);
+  assert.equal(usdcRes.success, true);
+
+  // 3) 15 LONGASSET12 (credit_alphanum12) payment passes against 20 LONGASSET12
+  const longPassTx = buildTx({ accountSequence: "100", fee: "100", amount: "15", asset: longAsset });
+  const longPassRes = await sim.simulate(longPassTx);
+  assert.equal(longPassRes.success, true);
+
+  // 4) 25 LONGASSET12 payment fails naming LONGASSET12
+  const longFailTx = buildTx({ accountSequence: "100", fee: "100", amount: "25", asset: longAsset });
+  const longFailRes = await sim.simulate(longFailTx);
+  assert.equal(longFailRes.success, false);
+  assert.match(longFailRes.error ?? "", /payment 25 LONGASSET12 exceeds available 20\.0000000 LONGASSET12/);
 });

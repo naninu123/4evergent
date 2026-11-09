@@ -86,24 +86,62 @@ export class StellarSimulator {
       );
     }
 
-    // 6. Balance precondition for XLM payments.
+    // 6. Balance precondition for payments and XLM fees.
     const warnings: string[] = [];
-    const xlmBalance = (account.balances as { asset_type: string; balance: string }[]).find(
-      (b) => b.asset_type === "native"
-    );
+    const balances = (account.balances ?? []) as {
+      asset_type: string;
+      asset_code?: string;
+      asset_issuer?: string;
+      balance: string;
+    }[];
+    const xlmBalance = balances.find((b) => b.asset_type === "native");
+    const payment = paymentDetails(transaction);
+    const feeInXlm = Number(transaction.fee) / 1e7;
+
     if (xlmBalance) {
-      const payment = paymentAmount(transaction);
-      const totalCost = payment + Number(transaction.fee) / 1e7;
+      const xlmPayment = paymentAmount(transaction, { code: "XLM" });
+      const totalCost = xlmPayment + feeInXlm;
       const available = Number(xlmBalance.balance) - reserveFor(account);
       if (totalCost > available) {
+        const costLabel =
+          xlmPayment > 0
+            ? `payment ${xlmPayment} XLM + fee`
+            : `fee ${feeInXlm} XLM`;
         return fail(
           transaction.fee,
           ops,
-          `Insufficient balance: payment ${payment} XLM + fee exceeds available ${available.toFixed(7)} XLM`
+          `Insufficient balance: ${costLabel} exceeds available ${available.toFixed(7)} XLM`
         );
       }
       if (available - totalCost < 1) {
         warnings.push("Remaining balance after transaction is under 1 XLM");
+      }
+    } else if (payment) {
+      return fail(
+        transaction.fee,
+        ops,
+        `Insufficient balance: fee ${feeInXlm} XLM exceeds available 0.0000000 XLM`
+      );
+    }
+
+    if (payment && !payment.isNative) {
+      const assetPayment = paymentAmount(transaction, {
+        code: payment.code,
+        issuer: payment.issuer,
+      });
+      const assetBalance = balances.find(
+        (b) =>
+          (b.asset_type === "credit_alphanum4" || b.asset_type === "credit_alphanum12") &&
+          b.asset_code === payment.code &&
+          (!b.asset_issuer || !payment.issuer || b.asset_issuer === payment.issuer)
+      );
+      const availableAsset = assetBalance ? Number(assetBalance.balance) : 0;
+      if (assetPayment > availableAsset) {
+        return fail(
+          transaction.fee,
+          ops,
+          `Insufficient balance: payment ${assetPayment} ${payment.code} exceeds available ${availableAsset.toFixed(7)} ${payment.code}`
+        );
       }
     }
 
@@ -120,13 +158,46 @@ function fail(fee: string, operations: number, error: string): SimulationResult 
   return { success: false, fee, operations, warnings: [], error };
 }
 
-function paymentAmount(transaction: Transaction): number {
+export interface PaymentDetails {
+  amount: number;
+  code: string;
+  issuer: string | null;
+  isNative: boolean;
+}
+
+export function paymentDetails(transaction: Transaction): PaymentDetails | null {
   for (const op of transaction.operations) {
-    if (op.type === "payment") {
-      return Number(op.amount);
+    if (op.type === "payment" && "asset" in op && op.asset) {
+      const isNative =
+        typeof op.asset.isNative === "function"
+          ? op.asset.isNative()
+          : op.asset.code === "XLM" && !op.asset.issuer;
+      return {
+        amount: Number(op.amount),
+        code: isNative ? "XLM" : op.asset.code,
+        issuer: isNative ? null : (op.asset.issuer ?? null),
+        isNative,
+      };
     }
   }
-  return 0;
+  return null;
+}
+
+export function paymentAmount(
+  transaction: Transaction,
+  asset?: { code: string; issuer?: string | null }
+): number {
+  const details = paymentDetails(transaction);
+  if (!details) return 0;
+  if (asset) {
+    const wantNative = asset.code === "XLM" && !asset.issuer;
+    if (wantNative !== details.isNative) return 0;
+    if (!wantNative) {
+      if (details.code !== asset.code) return 0;
+      if (asset.issuer && details.issuer && details.issuer !== asset.issuer) return 0;
+    }
+  }
+  return details.amount;
 }
 
 function reserveFor(account: any): number {
