@@ -282,8 +282,10 @@ Body: an `AgentIntent` union member (`packages/shared/src/types.ts`):
 - `account_settings`: `{ type, setting, value, reason }`
 
 Headers: optional `Idempotency-Key` (≤256 chars, scoped to owner+agent).
-Same key + same intent → returns the original activity (`200`).
-Same key + different intent → `409`.
+Within the replay-protection window (`IDEMPOTENCY_TTL_SECONDS`, default `86400` seconds / 24 hours):
+- Same key + same intent → returns the original activity (`200`).
+- Same key + different intent → `409` (`IDEMPOTENCY_CONFLICT`).
+After the window expires, the `idempotency_key` binding is cleared (lazily on lookup and in bounded retention sweeps) while the historical `ActivityRecord` remains intact in the audit log, so the same key can be reused for a new intent submission.
 
 Agent status admission: the agent must be `active`. A `paused` or
 `disabled` agent rejects new intents before any activity, approval,

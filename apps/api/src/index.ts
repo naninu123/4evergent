@@ -50,6 +50,7 @@ import {
   type PolicyConfigStore,
   createActivity,
   isOffsetAtCeiling,
+  resolveIdempotencyTtlMs,
 } from "@4evergent/database";
 import type { PolicyRules, Agent, RequestContext, AuthorizationService, AuthProvider, AuthenticatedPrincipal } from "@4evergent/shared";
 import { createAuthModule, type PrincipalResolution } from "./auth.js";
@@ -153,12 +154,15 @@ export interface ServerOptions {
   };
   /** User authentication module (sessions: email / Google / Stellar wallet). */
   authModule?: ReturnType<typeof createAuthModule>;
-  /** Periodic cleanup of expired browser sessions and old daily-spending reservations. */
+  /** Replay-protection window for Idempotency-Key in seconds (default 86400 = 24h; 0 disables expiry). */
+  idempotencyTtlSeconds?: number;
+  /** Periodic cleanup of expired browser sessions, old daily-spending reservations, and expired idempotency keys. */
   retention?: {
     enabled?: boolean;
     intervalMs?: number;
     authSessionDays?: number;
     dailySpendingDays?: number;
+    idempotencyTtlSeconds?: number;
   };
   /** Enable on-chain transaction status reconciliation (opt-in). */
   reconciliation?: {
@@ -169,9 +173,17 @@ export interface ServerOptions {
 }
 
 export async function createApiServer(options: ServerOptions) {
+  const configuredIdempotencyTtlSeconds =
+    options.idempotencyTtlSeconds ?? options.retention?.idempotencyTtlSeconds;
+  const idempotencyTtlMs =
+    configuredIdempotencyTtlSeconds !== undefined
+      ? resolveIdempotencyTtlMs(configuredIdempotencyTtlSeconds * 1_000)
+      : undefined;
   const store: ActivityStore =
     options.activityStore ??
-    (options.dbPath ? new SQLiteActivityStore(options.dbPath) : new InMemoryActivityStore());
+    (options.dbPath
+      ? new SQLiteActivityStore(options.dbPath, { idempotencyTtlMs })
+      : new InMemoryActivityStore({ idempotencyTtlMs }));
   const approvals: ApprovalStore =
     options.approvalStore ??
     (options.dbPath ? new SQLiteApprovalStore(options.dbPath) : new InMemoryApprovalStore());
@@ -668,15 +680,26 @@ export async function createApiServer(options: ServerOptions) {
       if (retentionRunning) return;
       retentionRunning = true;
       try {
+        const nowMs = Date.now();
         const result = await sweepRetainedData({
           store,
           authModule,
-          now: Date.now(),
+          now: nowMs,
           authSessionDays: sessionDays,
           dailySpendingDays: spendingDays,
           batchSize: 500,
         });
-        console.log(`[retention] sweep complete: auth_sessions=${result.authSessionsRemoved}, daily_spending=${result.dailySpendingRemoved}`);
+        const effectiveIdempotencyTtlMs = resolveIdempotencyTtlMs(idempotencyTtlMs);
+        const idempotencyKeysCleared =
+          effectiveIdempotencyTtlMs > 0 && store.sweepExpiredIdempotencyKeys
+            ? await store.sweepExpiredIdempotencyKeys(
+                new Date(nowMs - effectiveIdempotencyTtlMs).toISOString(),
+                500
+              )
+            : 0;
+        console.log(
+          `[retention] sweep complete: auth_sessions=${result.authSessionsRemoved}, daily_spending=${result.dailySpendingRemoved}, idempotency_keys=${idempotencyKeysCleared}`
+        );
       } catch (err) {
         console.error("[retention] sweep failed:", err);
       } finally {

@@ -125,7 +125,7 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 
 **Context:** Expired authentication sessions and historical daily-spending reservations accumulated indefinitely. The former exposed stale tokens in storage; the latter had no readers once its UTC day passed. Cleanup must not starve request traffic.
 
-**Decision:** Sweep sessions 30 days after `expires_at` and daily-spending rows older than 90 UTC days, once per day. Each indexed delete is limited to 500 rows per table and runs as a short autocommit statement. Operators can set the two retention-day environment variables, change the interval, disable the worker, or set either day window to zero to retain that table forever. The idempotency table remains outside this policy and belongs to #109.
+**Decision:** Sweep sessions 30 days after `expires_at` and daily-spending rows older than 90 UTC days, once per day. Each indexed delete is limited to 500 rows per table and runs as a short autocommit statement. Operators can set the two retention-day environment variables, change the interval, disable the worker, or set either day window to zero to retain that table forever. `Idempotency-Key` expiry and audit-preserving cleanup are governed by ADR-023 (`IDEMPOTENCY_TTL_SECONDS`, default 86,400s).
 
 **Consequences:** Transient storage is bounded over repeated sweeps without a schema migration or a long-held write transaction. A large backlog drains in batches. Recent expired sessions and the current spending day remain available; setting a zero window explicitly keeps all rows.
 
@@ -242,3 +242,13 @@ When `AUTH_TRUST_PROXY=1` is enabled, the trusted reverse proxy MUST be configur
 - Bounded recovery guarantees all interrupted records are reconciled across multiple pages.
 - The scheduler never starts if recovery fails or has unrecovered records.
 - Transaction finality is not conflated with process crash recovery.
+
+## ADR-023: Bounded Idempotency-Key replay window and audit-preserving cleanup
+
+**Status:** Accepted
+
+**Context:** `POST /agents/:id/intents` accepts an optional `Idempotency-Key` header (scoped to `(owner_id, agent_id, idempotency_key)`) to deduplicate client retries over unreliable networks. Previously, idempotency keys never expired, permanently reserving keys in `SQLiteActivityStore`'s partial unique index (`idx_activities_idempotency`) and `InMemoryActivityStore`. Deleting expired rows from `activities` would violate the append-only audit trail guarantee (ADR-010).
+
+**Decision:** Define a configurable replay-protection window via `IDEMPOTENCY_TTL_SECONDS` (default `86400` seconds / 24 hours; setting `0` retains keys indefinitely). Within the window (`createdAt > now - ttl`), a matching `(ownerId, agentId, idempotencyKey)` returns `200` for an identical intent or `409 IDEMPOTENCY_CONFLICT` for a different intent. Once a record's `createdAt` is older than the TTL cutoff, its `idempotency_key` column/field is set to `NULL` rather than deleting the `ActivityRecord`. Expiry is enforced both lazily on `getByIdempotencyKey` / `recordIdempotent` and proactively in bounded 500-row batches (`sweepExpiredIdempotencyKeys`) during the periodic retention sweep (ADR-014), backed by the partial index `idx_activities_idempotency_created`.
+
+**Consequences:** Clients get deterministic 24-hour retry deduplication and conflict detection without unbounded index growth or permanent key reservation. Clearing `idempotency_key = NULL` releases the partial unique index `WHERE idempotency_key IS NOT NULL` so expired keys can be reused, while every `ActivityRecord` remains intact in the append-only activity log.

@@ -390,6 +390,7 @@ async function main() {
         intervalMs: parseRetentionInterval(process.env.DATA_RETENTION_INTERVAL_MS, 24 * 60 * 60_000),
         authSessionDays: parseRetentionDays(process.env.AUTH_SESSION_RETENTION_DAYS, 30),
         dailySpendingDays: parseRetentionDays(process.env.DAILY_SPENDING_RETENTION_DAYS, 90),
+        idempotencyTtlSeconds: parseRetentionDays(process.env.IDEMPOTENCY_TTL_SECONDS, 86_400),
       },
       executionQueue: { enabled: true, intervalMs: workerIntervals.executionQueueIntervalMs },
       reconciliation: { enabled: true, intervalMs: workerIntervals.reconciliationIntervalMs },

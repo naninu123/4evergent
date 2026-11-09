@@ -8,11 +8,12 @@ import type {
 } from "@4evergent/shared";
 import { getSharedConnection } from "./shared-connection.js";
 import { clampOffset, clampLimit } from "./pagination.js";
-import type {
-  ActivityStore,
-  ApprovalStore,
-  ApprovalRecord,
-  ApprovalStatus,
+import {
+  resolveIdempotencyTtlMs,
+  type ActivityStore,
+  type ApprovalStore,
+  type ApprovalRecord,
+  type ApprovalStatus,
 } from "./index.js";
 
 /**
@@ -27,9 +28,11 @@ import type {
  */
 export class SQLiteActivityStore implements ActivityStore {
   private db: DatabaseSync;
+  private idempotencyTtlMs?: number;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options?: { idempotencyTtlMs?: number }) {
     this.db = getSharedConnection(dbPath);
+    this.idempotencyTtlMs = options?.idempotencyTtlMs;
     this.initSchema();
   }
 
@@ -58,6 +61,9 @@ export class SQLiteActivityStore implements ActivityStore {
       CREATE INDEX IF NOT EXISTS idx_activities_owner ON activities(owner_id);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_idempotency
         ON activities(owner_id, agent_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_activities_idempotency_created
+        ON activities(created_at)
         WHERE idempotency_key IS NOT NULL;
     `);
     // Phase 23: daily_spending table for atomic spending reservation
@@ -145,7 +151,18 @@ export class SQLiteActivityStore implements ActivityStore {
     return row ? rowToActivityRecord(row as unknown as ActivityRow) : null;
   }
 
-  async getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null> {
+  async getByIdempotencyKey(ownerId: string, agentId: string, key: string, now = new Date()): Promise<ActivityRecord | null> {
+    const ttlMs = resolveIdempotencyTtlMs(this.idempotencyTtlMs);
+    if (ttlMs > 0) {
+      const cutoffIso = new Date(now.getTime() - ttlMs).toISOString();
+      this.db
+        .prepare(
+          `UPDATE activities
+           SET idempotency_key = NULL
+           WHERE owner_id = ? AND agent_id = ? AND idempotency_key = ? AND created_at <= ?`
+        )
+        .run(ownerId, agentId, key, cutoffIso);
+    }
     const row = this.db
       .prepare("SELECT * FROM activities WHERE owner_id = ? AND agent_id = ? AND idempotency_key = ?")
       .get(ownerId, agentId, key);
@@ -160,9 +177,9 @@ export class SQLiteActivityStore implements ActivityStore {
    * (owner_id, agent_id, idempotency_key). Concurrent inserts result in exactly
    * one winner; losers catch the UNIQUE violation and read back the winner.
    */
-  async recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }> {
-    // Fast path: check if already exists (avoids INSERT overhead)
-    const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
+  async recordIdempotent(key: string, record: ActivityRecord, now = new Date()): Promise<{ record: ActivityRecord; created: boolean }> {
+    // Fast path: check if already exists within TTL window (releases expired key if needed)
+    const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key, now);
     if (existing) return { record: existing, created: false };
 
     // Atomic INSERT — UNIQUE INDEX enforces single winner
@@ -197,7 +214,7 @@ export class SQLiteActivityStore implements ActivityStore {
     } catch (e: any) {
       // UNIQUE constraint violation — another caller won the race; return their record
       if (e?.message?.includes("UNIQUE") || e?.code === "ERR_SQLITE_CONSTRAINT") {
-        const winner = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
+        const winner = await this.getByIdempotencyKey(record.ownerId, record.agentId, key, now);
         if (winner) return { record: winner, created: false };
       }
       throw e;
@@ -276,6 +293,21 @@ export class SQLiteActivityStore implements ActivityStore {
         SELECT rowid FROM daily_spending WHERE day < ? ORDER BY day ASC LIMIT ?
       )
     `).run(cutoffDay, limit);
+    return Number(result.changes);
+  }
+
+  async sweepExpiredIdempotencyKeys(cutoffIso: string, limit = 500): Promise<number> {
+    if (!cutoffIso || !Number.isInteger(limit) || limit <= 0) return 0;
+    const result = this.db.prepare(`
+      UPDATE activities
+      SET idempotency_key = NULL
+      WHERE rowid IN (
+        SELECT rowid FROM activities
+        WHERE idempotency_key IS NOT NULL AND created_at <= ?
+        ORDER BY created_at ASC
+        LIMIT ?
+      )
+    `).run(cutoffIso, limit);
     return Number(result.changes);
   }
 

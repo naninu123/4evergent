@@ -16,6 +16,31 @@ import { clampOffset, clampLimit } from "./pagination.js";
  * stores private keys, seeds, or mnemonics — the ActivityRecord type has no
  * field for secret material, by construction.
  */
+export const DEFAULT_IDEMPOTENCY_TTL_SECONDS = 86_400;
+export const DEFAULT_IDEMPOTENCY_TTL_MS = DEFAULT_IDEMPOTENCY_TTL_SECONDS * 1_000;
+
+/**
+ * Resolves the effective Idempotency-Key TTL in milliseconds.
+ * Precedence:
+ *   1. Explicit overrideMs (if provided)
+ *   2. IDEMPOTENCY_TTL_SECONDS env var (if set to a non-negative finite number)
+ *   3. DEFAULT_IDEMPOTENCY_TTL_MS (24 hours = 86,400,000 ms)
+ * A value <= 0 disables expiry (retains keys indefinitely).
+ */
+export function resolveIdempotencyTtlMs(overrideMs?: number): number {
+  if (overrideMs !== undefined) {
+    return Number.isFinite(overrideMs) && overrideMs > 0 ? overrideMs : 0;
+  }
+  const raw = typeof process !== "undefined" ? process.env?.IDEMPOTENCY_TTL_SECONDS : undefined;
+  if (raw !== undefined && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed * 1_000;
+    }
+  }
+  return DEFAULT_IDEMPOTENCY_TTL_MS;
+}
+
 export interface ActivityStore {
   record(record: ActivityRecord): Promise<void>;
   get(id: string): Promise<ActivityRecord | null>;
@@ -25,14 +50,16 @@ export interface ActivityStore {
   listByOwner(ownerId: string, limit?: number, offset?: number): Promise<ActivityRecord[]>;
   getForOwner(id: string, ownerId: string): Promise<ActivityRecord | null>;
   update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null>;
-  getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null>;
-  recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }>;
+  getByIdempotencyKey(ownerId: string, agentId: string, key: string, now?: Date): Promise<ActivityRecord | null>;
+  recordIdempotent(key: string, record: ActivityRecord, now?: Date): Promise<{ record: ActivityRecord; created: boolean }>;
   /** Atomically reserve daily spending. Returns true if reservation succeeded, false if limit would be exceeded. */
   reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now?: Date): Promise<boolean>;
   /** Get current day's total spent for an agent. */
   getDailySpending(agentId: string, asset: string, now?: Date): Promise<number | null>;
   /** Remove at most `limit` rows with a UTC day earlier than cutoffDay. */
   sweepDailySpending(cutoffDay: string, limit?: number): Promise<number>;
+  /** Clear idempotency_key on at most `limit` records with createdAt <= cutoffIso, preserving the activity audit record. */
+  sweepExpiredIdempotencyKeys?(cutoffIso: string, limit?: number): Promise<number>;
 }
 
 /**
@@ -110,6 +137,11 @@ export class InMemoryActivityStore implements ActivityStore {
   private idempotencyLock: Promise<unknown> = Promise.resolve();
   /** Serializes daily-spending check+commit per store instance (atomicity). */
   private dailySpendingLock: Promise<unknown> = Promise.resolve();
+  private idempotencyTtlMs?: number;
+
+  constructor(options?: { idempotencyTtlMs?: number }) {
+    this.idempotencyTtlMs = options?.idempotencyTtlMs;
+  }
 
   async record(record: ActivityRecord): Promise<void> {
     this.records.set(record.id, record);
@@ -151,9 +183,16 @@ export class InMemoryActivityStore implements ActivityStore {
     return rec?.ownerId === ownerId ? rec : null;
   }
 
-  async getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null> {
+  async getByIdempotencyKey(ownerId: string, agentId: string, key: string, now = new Date()): Promise<ActivityRecord | null> {
+    const ttlMs = resolveIdempotencyTtlMs(this.idempotencyTtlMs);
+    const cutoffIso = ttlMs > 0 ? new Date(now.getTime() - ttlMs).toISOString() : null;
     for (const rec of this.records.values()) {
       if (rec.ownerId === ownerId && rec.agentId === agentId && rec.idempotencyKey === key) {
+        if (cutoffIso !== null && rec.createdAt <= cutoffIso) {
+          // Expired: release the idempotency key while preserving the activity audit record.
+          rec.idempotencyKey = null;
+          continue;
+        }
         return rec;
       }
     }
@@ -166,10 +205,10 @@ export class InMemoryActivityStore implements ActivityStore {
    * Uses a promise chain to serialize get-check-insert operations,
    * mimicking the atomicity provided by SQLite's UNIQUE INDEX.
    */
-  async recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }> {
+  async recordIdempotent(key: string, record: ActivityRecord, now = new Date()): Promise<{ record: ActivityRecord; created: boolean }> {
     // Serialize through promise chain for atomicity
     const result = this.idempotencyLock.then(async () => {
-      const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
+      const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key, now);
       if (existing) return { record: existing, created: false };
       record.idempotencyKey = key;
       this.records.set(record.id, record);
@@ -178,6 +217,20 @@ export class InMemoryActivityStore implements ActivityStore {
     // Update lock to include this operation (catch errors to avoid breaking chain)
     this.idempotencyLock = result.catch(() => undefined);
     return result;
+  }
+
+  async sweepExpiredIdempotencyKeys(cutoffIso: string, limit = 500): Promise<number> {
+    if (!cutoffIso || !Number.isInteger(limit) || limit <= 0) return 0;
+    const candidates = [...this.records.values()]
+      .filter((r) => r.idempotencyKey != null && r.createdAt <= cutoffIso)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    let cleared = 0;
+    for (const rec of candidates) {
+      rec.idempotencyKey = null;
+      cleared++;
+      if (cleared >= limit) break;
+    }
+    return cleared;
   }
 
   async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now = new Date()): Promise<boolean> {
