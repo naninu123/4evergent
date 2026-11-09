@@ -1,46 +1,52 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import type { ActivityRecord } from '../types';
 import { StatusBadge, Skeleton, EmptyState, IntentAmount, PaginationFooter } from '../components';
+import { useApiResource } from '../hooks/useApiResource';
 
 const PAGE_SIZE = 50;
 
 export default function Activity() {
-  const [activity, setActivity] = useState<ActivityRecord[] | null>(null);
-  const [hasMore, setHasMore] = useState(false);
-  const [nextOffset, setNextOffset] = useState(0);
+  const [extraActivity, setExtraActivity] = useState<ActivityRecord[]>([]);
+  const [hasMoreOverride, setHasMoreOverride] = useState<boolean | null>(null);
+  const [nextOffsetOverride, setNextOffsetOverride] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [moreError, setMoreError] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  const loadPage = useCallback(async (offset: number, replace: boolean) => {
-    try {
-      const r = await api.listActivity(PAGE_SIZE, offset);
-      setActivity(replace ? r.activity : (prev) => (prev ?? []).concat(r.activity));
-      setHasMore(r.hasMore);
-      setNextOffset(offset + r.activity.length);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  }, []);
+  const { data: firstPage, error: initialError, loading, reload } = useApiResource(
+    async () => {
+      setExtraActivity([]);
+      setHasMoreOverride(null);
+      setNextOffsetOverride(null);
+      setMoreError(null);
+      return api.listActivity(PAGE_SIZE, 0);
+    },
+    []
+  );
 
-  useEffect(() => {
-    loadPage(0, true).catch(() => {});
-  }, [loadPage]);
+  const activity = firstPage ? [...firstPage.activity, ...extraActivity] : null;
+  const hasMore = hasMoreOverride ?? Boolean(firstPage?.hasMore);
+  const nextOffset = nextOffsetOverride ?? (firstPage ? firstPage.activity.length : 0);
+  const error = initialError ?? moreError;
 
   const loadMore = () => {
     setLoadingMore(true);
-    loadPage(nextOffset, false).finally(() => setLoadingMore(false));
+    api.listActivity(PAGE_SIZE, nextOffset)
+      .then((r) => {
+        setExtraActivity((prev) => prev.concat(r.activity));
+        setHasMoreOverride(r.hasMore);
+        setNextOffsetOverride(nextOffset + r.activity.length);
+      })
+      .catch((e: any) => {
+        setMoreError(e.message);
+      })
+      .finally(() => setLoadingMore(false));
   };
 
-  const retry = () => {
-    setError(null);
-    loadPage(0, true).catch(() => {});
-  };
-
-  if (error) return <EmptyState title="Failed to load activity" message={error} error={true} actionLabel="Retry" onAction={retry} />;
-  if (activity === null) return <Skeleton label="Loading activity..." />;
+  if (error) return <EmptyState title="Failed to load activity" message={error} error={true} actionLabel="Retry" onAction={reload} />;
+  if (loading || activity === null) return <Skeleton label="Loading activity..." />;
   if (activity.length === 0) {
     return (
       <EmptyState
