@@ -17,7 +17,11 @@ All endpoints except `GET /health` and `GET /health/ready` require authenticatio
   See [security-model.md](security-model.md) — API Authentication.
 
 Unauthenticated requests to protected endpoints return
-`{"code":"UNAUTHORIZED","error":"unauthorized"}` with status `401`.
+`{"code":"UNAUTHORIZED","error":"unauthorized"}` with status `401`. On a
+session-authenticated request, a `401` response means the session has ended
+(for example after `SESSION_TTL_SECONDS` elapses or after logout) and the
+client must surface a session-expiry notice and prompt the user to
+re-authenticate rather than retrying the failed request.
 
 ## User Authentication (Browser Sessions)
 

@@ -44,12 +44,13 @@ async function request<T>(path: string, init?: RequestInit & { skipAuthClear?: b
   const body = res.status !== 204 ? await res.json().catch(() => null) : null;
   if (!res.ok) {
     const message = body?.error ?? `API error ${res.status}`;
+    const error = new ApiError(res.status, message, body?.code ?? 'UNKNOWN', body?.details);
     // Probes (e.g. /auth/me during session bootstrap) must not wipe a stored
-    // legacy bearer token — the caller decides how to handle 401.
-    if (res.status === 401 && !skipAuthClear) {
-      clearAuth();
+    // legacy bearer token or trigger the mid-session expiry path.
+    if (!skipAuthClear && isUnauthorizedError(error)) {
+      notifySessionExpired(error);
     }
-    throw new ApiError(res.status, message, body?.code ?? 'UNKNOWN', body?.details);
+    throw error;
   }
   return body as T;
 }
@@ -60,6 +61,27 @@ export function isUnauthorizedError(error: unknown): boolean {
 
 export function isForbiddenError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403;
+}
+
+type SessionExpiredListener = (error: ApiError) => void;
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
+
+export function onSessionExpired(listener: SessionExpiredListener): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => {
+    sessionExpiredListeners.delete(listener);
+  };
+}
+
+export function notifySessionExpired(error: unknown): boolean {
+  if (!isUnauthorizedError(error)) {
+    return false;
+  }
+  clearAuth();
+  for (const listener of sessionExpiredListeners) {
+    listener(error as ApiError);
+  }
+  return true;
 }
 
 import type {
@@ -275,7 +297,8 @@ export const api = {
 
   authConfig: () =>
     request<{ email: boolean; google: boolean; stellar: boolean; registration: boolean }>(
-      `/auth/config`
+      `/auth/config`,
+      { skipAuthClear: true }
     ),
 
   me: () =>
@@ -285,19 +308,31 @@ export const api = {
     ),
 
   register: (body: { email: string; password: string; displayName?: string }) =>
-    request<{ subject: string }>('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ subject: string }>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      skipAuthClear: true,
+    }),
 
   loginEmail: (body: { email: string; password: string }) =>
-    request<{ subject: string }>('/auth/login/email', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ subject: string }>('/auth/login/email', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      skipAuthClear: true,
+    }),
 
   stellarChallenge: (publicKey: string) =>
     request<{ challengeId: string; message: string; expiresAt: string; network: string }>(
       '/auth/stellar/challenge',
-      { method: 'POST', body: JSON.stringify({ publicKey }) }
+      { method: 'POST', body: JSON.stringify({ publicKey }), skipAuthClear: true }
     ),
 
   stellarVerify: (body: { publicKey: string; challengeId: string; signature: string }) =>
-    request<{ subject: string }>('/auth/stellar/verify', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ subject: string }>('/auth/stellar/verify', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      skipAuthClear: true,
+    }),
 
   logout: () => request<null>('/auth/logout', { method: 'POST' }),
 

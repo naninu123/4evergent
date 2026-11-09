@@ -213,3 +213,50 @@ describe('describeApiError', () => {
     expect(describeApiError(new ApiError(400, 'bad thing', 'VALIDATION_ERROR'), 'fallback')).toBe('bad thing');
   });
 });
+
+describe('onSessionExpired + notifySessionExpired', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    sessionStorage.clear();
+  });
+
+  it('notifies listeners when a session-authenticated request fails with 401', async () => {
+    const { api, onSessionExpired } = await import('../api');
+    const listener = vi.fn();
+    const unsubscribe = onSessionExpired(listener);
+
+    try {
+      mockFetch(401, { error: 'unauthorized', code: 'UNAUTHORIZED' });
+      await expect(api.listAgents()).rejects.toThrow(ApiError);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0]![0]).toBeInstanceOf(ApiError);
+      expect((listener.mock.calls[0]![0] as ApiError).status).toBe(401);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('does not notify session-expiry listeners on 500 or skipAuthClear probes', async () => {
+    const { api, onSessionExpired, notifySessionExpired } = await import('../api');
+    const listener = vi.fn();
+    const unsubscribe = onSessionExpired(listener);
+
+    try {
+      sessionStorage.setItem('4evergent.auth.token', 'keep-token');
+      mockFetch(500, { error: 'server error' });
+      await expect(api.listAgents()).rejects.toThrow(ApiError);
+      expect(listener).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem('4evergent.auth.token')).toBe('keep-token');
+
+      mockFetch(401, { error: 'unauthorized' });
+      await expect(api.me()).rejects.toThrow(ApiError);
+      expect(listener).not.toHaveBeenCalled();
+
+      expect(notifySessionExpired(new ApiError(500, 'boom'))).toBe(false);
+      expect(notifySessionExpired(new TypeError('Failed to fetch'))).toBe(false);
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
+  });
+});
