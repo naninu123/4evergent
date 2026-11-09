@@ -437,3 +437,123 @@ test("POST /agents capabilities are trimmed", async () => {
     await server.close();
   }
 });
+
+test("DELETE /agents/:id deletes an owned agent and removes it from GET /agents and GET /agents/:id", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    const createRes = await post(`${baseUrl}/agents`, { displayName: "Delete Me" });
+    assert.equal(createRes.status, 201);
+    const agentId = createRes.body.agent.id;
+
+    const delRes = await fetch(`${baseUrl}/agents/${agentId}`, { method: "DELETE" });
+    assert.equal(delRes.status, 200);
+    const delBody = await delRes.json();
+    assert.deepEqual(delBody, { deleted: true, id: agentId });
+
+    // Agent is gone from GET /agents/:id
+    const getRes = await fetch(`${baseUrl}/agents/${agentId}`);
+    assert.equal(getRes.status, 404);
+
+    // Agent is gone from GET /agents
+    const listRes = await fetch(`${baseUrl}/agents`);
+    assert.equal(listRes.status, 200);
+    const listBody = await listRes.json();
+    assert.equal(listBody.agents.length, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test("DELETE /agents/:id returns 404 for a non-owner and for a nonexistent agent", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({
+      defaultOwnerId: "owner-a",
+      apiKeys: { "key-b": "owner-b" },
+    }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    const createRes = await post(`${baseUrl}/agents`, { displayName: "Owner A Agent" });
+    assert.equal(createRes.status, 201);
+    const agentId = createRes.body.agent.id;
+
+    // Non-owner delete -> 404
+    const nonOwnerDel = await fetch(`${baseUrl}/agents/${agentId}`, {
+      method: "DELETE",
+      headers: { Authorization: "Bearer key-b" },
+    });
+    assert.equal(nonOwnerDel.status, 404);
+
+    // Agent still exists for owner-a
+    const getRes = await fetch(`${baseUrl}/agents/${agentId}`);
+    assert.equal(getRes.status, 200);
+
+    // Nonexistent agent -> 404
+    const missingDel = await fetch(`${baseUrl}/agents/nonexistent-id`, {
+      method: "DELETE",
+    });
+    assert.equal(missingDel.status, 404);
+  } finally {
+    await server.close();
+  }
+});
+
+test("DELETE /agents/:id allows deleting disabled agents and cascade-deletes the agent's schedules", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    const createRes = await post(`${baseUrl}/agents`, { displayName: "Scheduled Then Disabled" });
+    const agentId = createRes.body.agent.id;
+
+    // Create a schedule for the agent
+    const schedRes = await post(`${baseUrl}/agents/${agentId}/schedules`, {
+      scheduleExpression: "0 * * * *",
+      timezone: "UTC",
+      intent: {
+        type: "payment",
+        asset: "XLM",
+        destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        amount: "10",
+        reason: "hourly",
+      },
+    });
+    assert.equal(schedRes.status, 201);
+
+    // Disable the agent
+    const disableRes = await fetch(`${baseUrl}/agents/${agentId}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "disabled" }),
+    });
+    assert.equal(disableRes.status, 200);
+
+    // Delete the disabled agent -> 200
+    const delRes = await fetch(`${baseUrl}/agents/${agentId}`, { method: "DELETE" });
+    assert.equal(delRes.status, 200);
+    const delBody = await delRes.json();
+    assert.deepEqual(delBody, { deleted: true, id: agentId });
+
+    // Agent is gone
+    const getRes = await fetch(`${baseUrl}/agents/${agentId}`);
+    assert.equal(getRes.status, 404);
+  } finally {
+    await server.close();
+  }
+});

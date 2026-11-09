@@ -240,6 +240,69 @@ async function cmdAgentStatus(agentId: string, status: "active" | "paused" | "di
   }
 }
 
+async function promptConfirm(question: string): Promise<boolean> {
+  process.stdout.write(question);
+  if (process.stdin.readableEnded) {
+    return false;
+  }
+  return new Promise((resolve) => {
+    let buf = "";
+    const cleanup = () => {
+      process.stdin.off("data", onData);
+      process.stdin.off("end", onEnd);
+      process.stdin.off("error", onEnd);
+      process.stdin.pause?.();
+    };
+    const onData = (chunk: Buffer | string) => {
+      buf += chunk.toString();
+      if (buf.includes("\n")) {
+        cleanup();
+        const answer = buf.split(/\r?\n/)[0]?.trim().toLowerCase() ?? "";
+        resolve(answer === "y" || answer === "yes");
+      }
+    };
+    const onEnd = () => {
+      cleanup();
+      const answer = buf.trim().toLowerCase();
+      resolve(answer === "y" || answer === "yes");
+    };
+    process.stdin.on("data", onData);
+    process.stdin.on("end", onEnd);
+    process.stdin.on("error", onEnd);
+    process.stdin.resume?.();
+  });
+}
+
+async function cmdAgentDelete(
+  args: string[],
+  confirmPrompt: (question: string) => Promise<boolean> = promptConfirm
+) {
+  const confirmedFlag = args.includes("--yes") || args.includes("-y");
+  const positional = args.filter((a) => a !== "--yes" && a !== "-y");
+  const agentId = positional[0] ?? "";
+  if (!agentId) {
+    console.error("Usage: 4evergent agent delete <id> [--yes]");
+    return 1;
+  }
+  if (!confirmedFlag) {
+    const confirmed = await confirmPrompt(`Delete agent '${agentId}'? [y/N]: `);
+    if (!confirmed) {
+      console.error("Aborted: agent deletion requires confirmation (pass --yes to skip prompt).");
+      return 1;
+    }
+  }
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}`, {
+      method: "DELETE",
+    });
+    console.log(`Agent deleted: ${body?.id ?? agentId}`);
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
 async function cmdApprovalList() {
   try {
     const { body } = await request("/approvals");
@@ -863,6 +926,7 @@ export const dispatcherTree = buildCommandTree({
     pause: (args) => cmdAgentStatus(args[0] ?? "", "paused"),
     resume: (args) => cmdAgentStatus(args[0] ?? "", "active"),
     disable: (args) => cmdAgentStatus(args[0] ?? "", "disabled"),
+    delete: (args) => cmdAgentDelete(args),
   },
   approval: {
     list: () => cmdApprovalList(),

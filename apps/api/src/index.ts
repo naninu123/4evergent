@@ -849,6 +849,9 @@ export async function createApiServer(options: ServerOptions) {
     if (method === "GET" && /^\/agents\/[^/]+$/.test(url)) {
       return handleGetAgent(requestScopedCtx, req, res);
     }
+    if (method === "DELETE" && /^\/agents\/[^/]+$/.test(url)) {
+      return handleDeleteAgent(requestScopedCtx, req, res);
+    }
     if (method === "GET" && /^\/agents\/[^/]+\/activity(\?.*)?$/.test(url)) {
       return handleAgentActivity(requestScopedCtx, req, res);
     }
@@ -1153,6 +1156,45 @@ export async function createApiServer(options: ServerOptions) {
       createdAt: agent.createdAt,
       updatedAt: agent.updatedAt,
     });
+  }
+
+  /**
+   * Delete an agent owned by the caller.
+   *
+   * Deletion semantics:
+   * - Owner-scoped: non-owners and nonexistent IDs both receive 404 (`AGENT_NOT_FOUND`).
+   * - Status-agnostic: an agent in any status (`active`, `paused`, or `disabled`)
+   *   may be deleted by its owner so phantom or disabled agents can be cleaned up.
+   * - Cascading schedules: all schedules belonging to the agent are deleted from
+   *   `schedules` (and cascaded in `SQLiteAgentStore.delete`) so no orphaned
+   *   schedules remain to trigger for a deleted agent.
+   */
+  async function handleDeleteAgent(ctx: RequestContext, req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)$/);
+    const agentId = match?.[1];
+    if (!agentId) return apiError(res, "INVALID_PATH_PARAM");
+    if (!(await agentExists(agentId))) return apiError(res, "AGENT_NOT_FOUND");
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
+    if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
+    const existing = await agentStore.getForOwner(agentId, ctx.ownerId!);
+    if (!existing) return apiError(res, "AGENT_NOT_FOUND");
+
+    // Cascade-delete any schedules associated with this agent across both
+    // in-memory and SQLite schedule stores.
+    let agentSchedules = await schedules.listByAgent(agentId, 200, 0);
+    while (agentSchedules.length > 0) {
+      for (const sched of agentSchedules) {
+        await schedules.delete(sched.id);
+      }
+      agentSchedules = await schedules.listByAgent(agentId, 200, 0);
+    }
+
+    const deleted = await agentStore.delete(agentId);
+    agents.delete(agentId);
+    if (!deleted) return apiError(res, "AGENT_NOT_FOUND");
+
+    return json(res, { deleted: true, id: agentId });
   }
 
   async function handleGetAgentSpending(ctx: RequestContext, req: any, res: any) {

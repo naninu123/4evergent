@@ -361,6 +361,14 @@ const ROUTES: RouteContract[] = [
     keys: ["deleted"],
     sample: (ids) => ({ path: `/agents/${ids.agentId}/schedules/${ids.scheduleId}`, init: { method: "DELETE" } }),
   },
+  {
+    method: "DELETE",
+    path: "/agents/:id",
+    auth: "protected",
+    status: 200,
+    keys: ["deleted", "id"],
+    sample: (ids) => ({ path: `/agents/${ids.agentId}`, init: { method: "DELETE" } }),
+  },
 ];
 
 // ============================================================================

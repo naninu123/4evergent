@@ -89,6 +89,10 @@ export class InMemoryAgentStore implements AgentStore {
     return { updated: true, agent: updated };
   }
 
+  /**
+   * Delete an agent record by ID regardless of current status (`active`,
+   * `paused`, or `disabled`).
+   */
   async delete(id: string): Promise<boolean> {
     return this.records.delete(id);
   }
@@ -279,9 +283,22 @@ export class SQLiteAgentStore implements AgentStore {
     return { updated: false, reason: "invalid_transition", currentStatus: current.status };
   }
 
+  /**
+   * Delete an agent record by ID regardless of current status (`active`,
+   * `paused`, or `disabled`), and cascade-delete any schedules belonging to
+   * this agent in the shared SQLite database so no orphaned schedules remain.
+   */
   async delete(id: string): Promise<boolean> {
     const result = this.db.prepare("DELETE FROM agents WHERE id = ?").run(id);
-    return result.changes > 0;
+    if (result.changes > 0) {
+      try {
+        this.db.prepare("DELETE FROM schedules WHERE agent_id = ?").run(id);
+      } catch {
+        // schedules table may not exist if SQLiteScheduleStore has not been initialized on this db
+      }
+      return true;
+    }
+    return false;
   }
 
   close(): void {

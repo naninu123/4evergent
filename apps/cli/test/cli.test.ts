@@ -46,6 +46,7 @@ function run(
     networkFail?: boolean;
     hang?: boolean;
     real?: boolean;
+    input?: string;
   } = {}
 ): RunResult {
   const responses = opts.responses ?? [];
@@ -139,6 +140,7 @@ function run(
       env,
       cwd: path.dirname(CLI),
       timeout: 30000,
+      input: opts.input,
     });
     let requests: CapturedRequest[] = [];
     try {
@@ -244,6 +246,52 @@ test("CLI: agent disable → status=disabled", () => {
   });
   assert.equal(r.code, 0);
   assert.match(r.stdout, /disabled/);
+});
+
+test("CLI: agent delete --yes → DELETE /agents/:id, prints confirmation, exit 0", () => {
+  const r = run(["agent", "delete", "agent-1", "--yes"], {
+    responses: [
+      { match: "/agents/agent-1", status: 200, body: { deleted: true, id: "agent-1" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /Agent deleted: agent-1/);
+  assert.equal(r.requests.length, 1);
+  assert.equal(r.requests[0]!.method, "DELETE");
+  assert.equal(r.requests[0]!.path, "/agents/agent-1");
+});
+
+test("CLI: agent delete interactive confirmation (y vs n)", () => {
+  const rNo = run(["agent", "delete", "agent-1"], {
+    input: "n\n",
+    responses: [
+      { match: "/agents/agent-1", status: 200, body: { deleted: true, id: "agent-1" } },
+    ],
+  });
+  assert.equal(rNo.code, 1);
+  assert.match(rNo.stderr, /Aborted/);
+  assert.equal(rNo.requests.length, 0);
+
+  const rYes = run(["agent", "delete", "agent-1"], {
+    input: "y\n",
+    responses: [
+      { match: "/agents/agent-1", status: 200, body: { deleted: true, id: "agent-1" } },
+    ],
+  });
+  assert.equal(rYes.code, 0);
+  assert.match(rYes.stdout, /Agent deleted: agent-1/);
+  assert.equal(rYes.requests.length, 1);
+  assert.equal(rYes.requests[0]!.method, "DELETE");
+});
+
+test("CLI: agent delete 404 → exit 1", () => {
+  const r = run(["agent", "delete", "missing-agent", "--yes"], {
+    responses: [
+      { match: "/agents/missing-agent", status: 404, body: { error: "agent not found" } },
+    ],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
 });
 
 test("CLI: approval list → prints approvals", () => {

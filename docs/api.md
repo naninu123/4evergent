@@ -266,6 +266,19 @@ Body: `{ "status": "active" | "paused" | "disabled" }`
   `{ "code": "AGENT_STATUS_CONFLICT", "error": "invalid status transition", "currentStatus": "disabled", "requestedStatus": "active" }`.
   A `disabled` agent cannot transition back to `active`.
 
+### DELETE /agents/:id
+
+Delete an agent owned by the caller.
+
+Deletion semantics:
+- **Owner-scoped**: Only the agent's owner may delete it; requests from a non-owner or for a nonexistent agent return `404` (`AGENT_NOT_FOUND`).
+- **Status-agnostic**: Agents in any status (`active`, `paused`, or `disabled`) can be deleted by their owner. While `disabled` is terminal for status transitions, operators can permanently remove disabled or mistakenly created phantom agents.
+- **Cascading schedules**: Deleting an agent deletes all recurring schedules belonging to that agent (`ScheduleStore` and `SQLiteAgentStore.delete`) so no orphaned schedules remain to fire. Historical activity, approval, and execution audit records are retained.
+
+Responses:
+- `200` → `{ "deleted": true, "id": "<agent-id>" }`
+- `404` → not found or not owned by the caller
+
 ---
 
 ## Intents

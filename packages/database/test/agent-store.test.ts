@@ -513,3 +513,49 @@ test("SQLiteAgentStore: concurrent status transitions use the current stored sta
     removeTemporaryDatabase(dbPath);
   }
 });
+
+test("AgentStore.delete: deletes active, paused, and disabled agents and cascades schedule deletion in SQLite", async () => {
+  const dbPath = temporaryDatabasePath();
+  try {
+    const { SQLiteScheduleStore } = await import("../src/schedule-store.js");
+    const store = new SQLiteAgentStore(dbPath);
+    const scheduleStore = new SQLiteScheduleStore(dbPath);
+
+    const activeAgent = await store.create({ displayName: "Active", ownerId: "owner-a" });
+    const disabledAgent = await store.create({ displayName: "Disabled", ownerId: "owner-a", status: "disabled" });
+
+    const now = new Date().toISOString();
+    await scheduleStore.create({
+      id: "sched-for-disabled",
+      agentId: disabledAgent.id,
+      ownerId: "owner-a",
+      status: "active",
+      intent: {
+        type: "payment",
+        asset: "XLM",
+        destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        amount: "10",
+        reason: "scheduled",
+      },
+      scheduleExpression: "0 * * * *",
+      timezone: "UTC",
+      nextRunAt: now,
+      lastRunAt: null,
+      lastStartedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    assert.equal((await scheduleStore.listByAgent(disabledAgent.id)).length, 1);
+
+    assert.equal(await store.delete(activeAgent.id), true);
+    assert.equal(await store.get(activeAgent.id), null);
+
+    // Disabled agents can also be deleted, and their schedules are cascade-deleted
+    assert.equal(await store.delete(disabledAgent.id), true);
+    assert.equal(await store.get(disabledAgent.id), null);
+    assert.equal((await scheduleStore.listByAgent(disabledAgent.id)).length, 0);
+  } finally {
+    removeTemporaryDatabase(dbPath);
+  }
+});

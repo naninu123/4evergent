@@ -148,6 +148,7 @@ test("Tree and Dispatcher consistency: verified across declared tree and dispatc
       pause: (args: string[]) => { called.push(`agent.pause:${args.join(",")}`); return 0; },
       resume: (args: string[]) => { called.push(`agent.resume:${args.join(",")}`); return 0; },
       disable: (args: string[]) => { called.push(`agent.disable:${args.join(",")}`); return 0; },
+      delete: (args: string[]) => { called.push(`agent.delete:${args.join(",")}`); return 0; },
     },
     approval: {
       list: () => { called.push("approval.list"); return 0; },
@@ -409,7 +410,7 @@ test("Real Bash completion: script executes correctly under bash", () => {
 
   assert.match(res.stdout, /TOP:.*health.*agent.*approval.*completion/);
   assert.match(res.stdout, /PREFIX: agent/);
-  assert.match(res.stdout, /AGENT_SUBS: list get create pause resume disable/);
+  assert.match(res.stdout, /AGENT_SUBS: list get create pause resume disable delete/);
   assert.ok(!res.stdout.includes("status"), "Must not complete agent status");
   assert.match(res.stdout, /INTENT_TYPES: payment trustline contract_call/);
   assert.match(res.stdout, /SHELLS: bash zsh/);
