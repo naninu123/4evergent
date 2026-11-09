@@ -23,6 +23,7 @@ import { AccountSequenceCoordinator } from "./account-sequence-coordinator.js";
 import type { ExecutionRecord, ExecutionStatus } from "@4evergent/database";
 import type { ScheduleExecutionResult } from "./schedule-execution.js";
 import {
+  EXECUTION_STATUSES,
   InMemoryActivityStore,
   InMemoryApprovalStore,
   InMemoryScheduleStore,
@@ -1403,9 +1404,11 @@ export async function createApiServer(options: ServerOptions) {
     if (!agentId) return apiError(res, "INVALID_PATH_PARAM");
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
+    const statusFilter = parseStatusFilter(urlObj.searchParams.get("status"), EXECUTION_STATUSES);
+    if (!statusFilter.ok) return apiError(res, "VALIDATION_ERROR", { message: statusFilter.error });
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
-    const all = await executionStore.listByAgent(agentId, limit + 1, offset);
+    const all = await executionStore.listByAgent(agentId, limit + 1, offset, statusFilter.status);
     const executions = all.slice(0, limit);
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
     return json(res, { agentId, executions, hasMore });
@@ -1458,9 +1461,11 @@ export async function createApiServer(options: ServerOptions) {
 
   async function handleListExecutions(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
+    const statusFilter = parseStatusFilter(urlObj.searchParams.get("status"), EXECUTION_STATUSES);
+    if (!statusFilter.ok) return apiError(res, "VALIDATION_ERROR", { message: statusFilter.error });
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
-    const all = await executionStore.listByOwner(ctx.ownerId!, limit + 1, offset);
+    const all = await executionStore.listByOwner(ctx.ownerId!, limit + 1, offset, statusFilter.status);
     const executions = all.slice(0, limit);
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
     return json(res, { executions, hasMore });

@@ -529,8 +529,23 @@ on-chain execution (retry, dead-letter, reconciliation).
 
 ### GET /agents/:id/executions
 
-List executions for an agent (owner-scoped). Query: `?limit=`
-(default 50, clamped 1–100). Returns `{ "agentId", "executions": [] }`.
+List executions for an agent (owner-scoped). Query: `?limit=` (default 50,
+clamped 1–100), `?offset=` (default 0), and optional `?status=<status>`
+(`queued` | `executing` | `submitted` | `confirmed` | `failed` | `dead_letter`
+| `cancelled`). Filtering happens at the store level before `limit`/`offset`
+are applied. Unknown `?status=` values return `400` (`VALIDATION_ERROR`)
+naming the valid status values. Returns
+`{ "agentId", "executions": ExecutionRecord[], "hasMore": boolean }`.
+
+### GET /executions
+
+List executions across all agents owned by the caller (owner-scoped). Query:
+`?limit=` (default 50, clamped 1–100), `?offset=` (default 0), and optional
+`?status=<status>` (`queued` | `executing` | `submitted` | `confirmed` |
+`failed` | `dead_letter` | `cancelled`). Filtering happens at the store level
+before `limit`/`offset` are applied. Unknown `?status=` values return `400`
+(`VALIDATION_ERROR`) naming the valid status values. Returns
+`{ "executions": ExecutionRecord[], "hasMore": boolean }`.
 
 ### GET /executions/:id
 

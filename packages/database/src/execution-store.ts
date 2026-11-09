@@ -38,18 +38,18 @@ export class InMemoryExecutionStore implements ExecutionStore {
       .slice(0, Math.max(1, Math.min(limit, MAX_LIMIT)));
   }
 
-  async listByOwner(ownerId: string, limit = MAX_LIMIT, offset = 0): Promise<ExecutionRecord[]> {
+  async listByOwner(ownerId: string, limit = MAX_LIMIT, offset = 0, status?: ExecutionStatus): Promise<ExecutionRecord[]> {
     const safeOffset = clampOffset(offset);
     return [...this.records.values()]
-      .filter((r) => r.ownerId === ownerId)
+      .filter((r) => r.ownerId === ownerId && (status === undefined || r.status === status))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(safeOffset, safeOffset + clampLimit(limit, MAX_LIMIT));
   }
 
-  async listByAgent(agentId: string, limit = MAX_LIMIT, offset = 0): Promise<ExecutionRecord[]> {
+  async listByAgent(agentId: string, limit = MAX_LIMIT, offset = 0, status?: ExecutionStatus): Promise<ExecutionRecord[]> {
     const safeOffset = clampOffset(offset);
     return [...this.records.values()]
-      .filter((r) => r.agentId === agentId)
+      .filter((r) => r.agentId === agentId && (status === undefined || r.status === status))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(safeOffset, safeOffset + clampLimit(limit, MAX_LIMIT));
   }
@@ -338,21 +338,33 @@ export class SQLiteExecutionStore implements ExecutionStore {
     return rows.map(rowToExecutionRecord);
   }
 
-  async listByOwner(ownerId: string, limit = MAX_LIMIT, offset = 0): Promise<ExecutionRecord[]> {
+  async listByOwner(ownerId: string, limit = MAX_LIMIT, offset = 0, status?: ExecutionStatus): Promise<ExecutionRecord[]> {
     const safeLimit = clampLimit(limit, MAX_LIMIT);
     const safeOffset = clampOffset(offset);
+    if (status === undefined) {
+      const rows = this.db
+        .prepare("SELECT * FROM executions WHERE owner_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?")
+        .all(ownerId, safeLimit, safeOffset) as unknown as ExecutionRow[];
+      return rows.map(rowToExecutionRecord);
+    }
     const rows = this.db
-      .prepare("SELECT * FROM executions WHERE owner_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?")
-      .all(ownerId, safeLimit, safeOffset) as unknown as ExecutionRow[];
+      .prepare("SELECT * FROM executions WHERE owner_id = ? AND status = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?")
+      .all(ownerId, status, safeLimit, safeOffset) as unknown as ExecutionRow[];
     return rows.map(rowToExecutionRecord);
   }
 
-  async listByAgent(agentId: string, limit = MAX_LIMIT, offset = 0): Promise<ExecutionRecord[]> {
+  async listByAgent(agentId: string, limit = MAX_LIMIT, offset = 0, status?: ExecutionStatus): Promise<ExecutionRecord[]> {
     const safeLimit = clampLimit(limit, MAX_LIMIT);
     const safeOffset = clampOffset(offset);
+    if (status === undefined) {
+      const rows = this.db
+        .prepare("SELECT * FROM executions WHERE agent_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?")
+        .all(agentId, safeLimit, safeOffset) as unknown as ExecutionRow[];
+      return rows.map(rowToExecutionRecord);
+    }
     const rows = this.db
-      .prepare("SELECT * FROM executions WHERE agent_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?")
-      .all(agentId, safeLimit, safeOffset) as unknown as ExecutionRow[];
+      .prepare("SELECT * FROM executions WHERE agent_id = ? AND status = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?")
+      .all(agentId, status, safeLimit, safeOffset) as unknown as ExecutionRow[];
     return rows.map(rowToExecutionRecord);
   }
 

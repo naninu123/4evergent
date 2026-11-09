@@ -433,6 +433,44 @@ for (const harness of harnesses) {
     assert.deepEqual((await store.listByAgent("agent-a", 3, 0)).map((r) => r.id), ["e4", "e3", "e2"]);
   });
 
+  test(`${harness.name}: listByOwner/listByAgent filter by status before applying limit and offset`, async () => {
+    const store = harness.create();
+    // Older failed records
+    await store.record(
+      makeRecord({ id: "failed-1", ownerId: "owner-a", agentId: "agent-a", status: "failed", updatedAt: "2026-01-01T00:00:01.000Z" })
+    );
+    await store.record(
+      makeRecord({ id: "failed-2", ownerId: "owner-a", agentId: "agent-a", status: "failed", updatedAt: "2026-01-01T00:00:02.000Z" })
+    );
+    await store.record(
+      makeRecord({ id: "failed-3", ownerId: "owner-a", agentId: "agent-a", status: "failed", updatedAt: "2026-01-01T00:00:03.000Z" })
+    );
+    // Newer confirmed records that would fill an unfiltered page of limit=2
+    await store.record(
+      makeRecord({ id: "confirmed-1", ownerId: "owner-a", agentId: "agent-a", status: "confirmed", updatedAt: "2026-01-01T00:00:04.000Z" })
+    );
+    await store.record(
+      makeRecord({ id: "confirmed-2", ownerId: "owner-a", agentId: "agent-a", status: "confirmed", updatedAt: "2026-01-01T00:00:05.000Z" })
+    );
+    // Other owner/agent failed record to verify isolation
+    await store.record(
+      makeRecord({ id: "other-failed", ownerId: "owner-b", agentId: "agent-b", status: "failed", updatedAt: "2026-01-01T00:00:06.000Z" })
+    );
+
+    const ownerPage1 = await store.listByOwner("owner-a", 2, 0, "failed");
+    assert.deepEqual(ownerPage1.map((r) => r.id), ["failed-3", "failed-2"]);
+    const ownerPage2 = await store.listByOwner("owner-a", 2, 2, "failed");
+    assert.deepEqual(ownerPage2.map((r) => r.id), ["failed-1"]);
+
+    const agentPage1 = await store.listByAgent("agent-a", 2, 0, "failed");
+    assert.deepEqual(agentPage1.map((r) => r.id), ["failed-3", "failed-2"]);
+    const agentPage2 = await store.listByAgent("agent-a", 2, 2, "failed");
+    assert.deepEqual(agentPage2.map((r) => r.id), ["failed-1"]);
+
+    assert.deepEqual(await store.listByOwner("owner-a", 10, 0, "dead_letter"), []);
+    assert.deepEqual(await store.listByAgent("agent-a", 10, 0, "dead_letter"), []);
+  });
+
   test(`${harness.name}: delete reports whether a row was removed`, async () => {
     const store = harness.create();
     const record = makeRecord();

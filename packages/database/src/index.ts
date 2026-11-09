@@ -445,6 +445,7 @@ export type { PolicyConfigStore } from "./policy-config-store.js";
 
 // Execution queue stores + types
 export { InMemoryExecutionStore, SQLiteExecutionStore } from "./execution-store.js";
+export { EXECUTION_STATUSES } from "./execution-types.js";
 export type { ExecutionStore, ExecutionRecord, ExecutionStatus } from "./execution-types.js";
 
 // Execution retry policy

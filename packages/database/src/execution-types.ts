@@ -11,14 +11,17 @@ import type { AgentIntent, PolicyDecision, SimulationResult } from "@4evergent/s
  *   dead_letter → exhausted retries / permanent failure
  *   cancelled   → stopped by operator (terminal, not retried)
  */
-export type ExecutionStatus =
-  | "queued"
-  | "executing"
-  | "submitted"
-  | "confirmed"
-  | "failed"
-  | "dead_letter"
-  | "cancelled";
+export const EXECUTION_STATUSES = [
+  "queued",
+  "executing",
+  "submitted",
+  "confirmed",
+  "failed",
+  "dead_letter",
+  "cancelled",
+] as const;
+
+export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];
 
 export interface ExecutionRecord {
   id: string;
@@ -60,8 +63,12 @@ export interface ExecutionStore {
   get(id: string): Promise<ExecutionRecord | null>;
   getForOwner(id: string, ownerId: string): Promise<ExecutionRecord | null>;
   listDue(before: string, limit?: number): Promise<ExecutionRecord[]>;
-  listByOwner(ownerId: string, limit?: number, offset?: number): Promise<ExecutionRecord[]>;
-  listByAgent(agentId: string, limit?: number, offset?: number): Promise<ExecutionRecord[]>;
+  /** List executions for an owner. `status` filters at the store level so that
+   *  `offset`/`limit` page over the FILTERED set, not the unfiltered one. */
+  listByOwner(ownerId: string, limit?: number, offset?: number, status?: ExecutionStatus): Promise<ExecutionRecord[]>;
+  /** List executions for an agent. `status` filters at the store level so that
+   *  `offset`/`limit` page over the FILTERED set, not the unfiltered one. */
+  listByAgent(agentId: string, limit?: number, offset?: number, status?: ExecutionStatus): Promise<ExecutionRecord[]>;
   listStuckExecuting(limit?: number): Promise<ExecutionRecord[]>;
   listSubmitted(limit?: number): Promise<ExecutionRecord[]>;
   /** Count executions grouped by status for an owner. */
