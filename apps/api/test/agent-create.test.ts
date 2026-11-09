@@ -437,3 +437,185 @@ test("POST /agents capabilities are trimmed", async () => {
     await server.close();
   }
 });
+
+async function get(url: string, headers: Record<string, string> = {}) {
+  const res = await fetch(url, { headers });
+  return { status: res.status, body: (await res.json()) as any };
+}
+
+async function patch(url: string, body: unknown, headers: Record<string, string> = {}) {
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: (await res.json()) as any };
+}
+
+test("PATCH /agents/:id updates displayName, description, and capabilities and persists for GET /agents/:id", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    const createRes = await post(`${baseUrl}/agents`, {
+      displayName: "Original Name",
+      description: "Original description",
+      capabilities: ["payment"],
+    });
+    assert.equal(createRes.status, 201);
+    const agentId = createRes.body.agent.id;
+
+    const patchRes = await patch(`${baseUrl}/agents/${agentId}`, {
+      displayName: "  Updated Name  ",
+      description: "Updated description",
+      capabilities: ["payment", "  trustline  "],
+    });
+    assert.equal(patchRes.status, 200);
+    assert.equal(patchRes.body.displayName, "Updated Name");
+    assert.equal(patchRes.body.description, "Updated description");
+    assert.deepEqual(patchRes.body.capabilities, ["payment", "trustline"]);
+    assert.equal(patchRes.body.agent.displayName, "Updated Name");
+
+    const getRes = await get(`${baseUrl}/agents/${agentId}`);
+    assert.equal(getRes.status, 200);
+    assert.equal(getRes.body.displayName, "Updated Name");
+    assert.equal(getRes.body.description, "Updated description");
+    assert.deepEqual(getRes.body.capabilities, ["payment", "trustline"]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("PATCH /agents/:id validation — over-length and empty displayName return 400", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    const createRes = await post(`${baseUrl}/agents`, { displayName: "Valid" });
+    const agentId = createRes.body.agent.id;
+
+    const resTooLong = await patch(`${baseUrl}/agents/${agentId}`, {
+      displayName: "x".repeat(101),
+    });
+    assert.equal(resTooLong.status, 400);
+    assert.equal(resTooLong.body.error, "displayName must be 100 characters or fewer");
+
+    const resEmpty = await patch(`${baseUrl}/agents/${agentId}`, {
+      displayName: "   ",
+    });
+    assert.equal(resEmpty.status, 400);
+    assert.equal(resEmpty.body.error, "displayName must be a non-empty string");
+  } finally {
+    await server.close();
+  }
+});
+
+test("PATCH /agents/:id validation — over-length description, capabilities array, capability string, and rejected fields return 400", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    const createRes = await post(`${baseUrl}/agents`, { displayName: "Valid" });
+    const agentId = createRes.body.agent.id;
+
+    const resDesc = await patch(`${baseUrl}/agents/${agentId}`, {
+      description: "d".repeat(501),
+    });
+    assert.equal(resDesc.status, 400);
+    assert.equal(resDesc.body.error, "description must be 500 characters or fewer");
+
+    const resTooManyCaps = await patch(`${baseUrl}/agents/${agentId}`, {
+      capabilities: Array.from({ length: 33 }, (_, i) => `cap_${i}`),
+    });
+    assert.equal(resTooManyCaps.status, 400);
+    assert.equal(resTooManyCaps.body.error, "capabilities must be 32 entries or fewer");
+
+    const resCapTooLong = await patch(`${baseUrl}/agents/${agentId}`, {
+      capabilities: ["c".repeat(33)],
+    });
+    assert.equal(resCapTooLong.status, 400);
+    assert.equal(resCapTooLong.body.error, "capability entries must be 32 characters or fewer");
+
+    const resCapEmpty = await patch(`${baseUrl}/agents/${agentId}`, {
+      capabilities: ["  "],
+    });
+    assert.equal(resCapEmpty.status, 400);
+    assert.equal(resCapEmpty.body.error, "capability entries cannot be empty");
+
+    const resCapDup = await patch(`${baseUrl}/agents/${agentId}`, {
+      capabilities: ["payment", "payment"],
+    });
+    assert.equal(resCapDup.status, 400);
+    assert.equal(resCapDup.body.error, "capabilities must not contain duplicate entries");
+
+    const resStatus = await patch(`${baseUrl}/agents/${agentId}`, {
+      status: "paused",
+    });
+    assert.equal(resStatus.status, 400);
+    assert.match(resStatus.body.error, /status cannot be updated/);
+
+    const resStellarAddr = await patch(`${baseUrl}/agents/${agentId}`, {
+      stellarAddress: "GNEW",
+    });
+    assert.equal(resStellarAddr.status, 400);
+    assert.match(resStellarAddr.body.error, /stellarAddress is immutable/);
+
+    const resUnknown = await patch(`${baseUrl}/agents/${agentId}`, {
+      displayName: "Still Valid",
+      unknownField: "nope",
+    });
+    assert.equal(resUnknown.status, 400);
+    assert.match(resUnknown.body.error, /unknown or immutable field/);
+
+    const resEmptyBody = await patch(`${baseUrl}/agents/${agentId}`, {});
+    assert.equal(resEmptyBody.status, 400);
+  } finally {
+    await server.close();
+  }
+});
+
+test("PATCH /agents/:id returns 404 for a non-owner and for a nonexistent agent", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a", apiKeys: { "key-b": "owner-b" } }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    const createRes = await post(`${baseUrl}/agents`, { displayName: "Owner A Agent" });
+    const agentId = createRes.body.agent.id;
+
+    // Non-owner patch -> 404
+    const resNonOwner = await patch(
+      `${baseUrl}/agents/${agentId}`,
+      { displayName: "Hijacked" },
+      { Authorization: "Bearer key-b" },
+    );
+    assert.equal(resNonOwner.status, 404);
+
+    // Nonexistent agent -> 404
+    const resMissing = await patch(`${baseUrl}/agents/nonexistent-agent-id`, {
+      displayName: "Ghost",
+    });
+    assert.equal(resMissing.status, 404);
+  } finally {
+    await server.close();
+  }
+});

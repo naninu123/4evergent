@@ -254,6 +254,25 @@ Match semantics:
 
 Get one agent (owner-scoped). `404` if not found or not owned.
 
+### PATCH /agents/:id
+
+Update mutable agent metadata fields (owner-scoped). At least one mutable field must be supplied.
+
+Body: `{ "displayName"?: string (non-empty after trimming, ≤100 chars), "description"?: string (≤500 chars), "capabilities"?: string[] (≤32 entries, each non-empty after trimming and ≤32 chars, unique) }`
+
+Field rules & caps (aligned with `POST /agents` and `contracts/agent-registry/src/lib.rs` where `MAX_CAPABILITIES = 32` and `MAX_CAPABILITY_LEN = 32`):
+- `displayName`: non-empty string after trimming, length ≤ 100 characters.
+- `description`: string, length ≤ 500 characters.
+- `capabilities`: array of strings, at most 32 entries (`MAX_CAPABILITIES = 32`); each trimmed entry must be non-empty, at most 32 characters (`MAX_CAPABILITY_LEN = 32`), and unique within the array.
+- `status`: rejected with `400` on this route (status transitions must go through `PATCH /agents/:id/status`).
+- `stellarAddress`: immutable after creation and rejected with `400` on this route (changing an agent's signer address has security implications).
+- Any unknown field or empty update body (`{}`) is rejected with `400`.
+
+Responses:
+- `200` → updated agent record (`{ "id", "displayName", "description", "ownerId", "stellarAddress", "capabilities", "status", "active", "createdAt", "updatedAt", "agent": AgentRecord }`)
+- `400` → invalid JSON, empty patch, disallowed/unknown field (`status`, `stellarAddress`, etc.), or field validation failure
+- `404` → agent not found or not owned by the caller
+
 ### PATCH /agents/:id/status
 
 Body: `{ "status": "active" | "paused" | "disabled" }`

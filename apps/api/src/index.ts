@@ -849,6 +849,9 @@ export async function createApiServer(options: ServerOptions) {
     if (method === "GET" && /^\/agents\/[^/]+$/.test(url)) {
       return handleGetAgent(requestScopedCtx, req, res);
     }
+    if (method === "PATCH" && /^\/agents\/[^/]+$/.test(url)) {
+      return handleUpdateAgent(requestScopedCtx, req, res);
+    }
     if (method === "GET" && /^\/agents\/[^/]+\/activity(\?.*)?$/.test(url)) {
       return handleAgentActivity(requestScopedCtx, req, res);
     }
@@ -1152,6 +1155,123 @@ export async function createApiServer(options: ServerOptions) {
       active: agent.active,
       createdAt: agent.createdAt,
       updatedAt: agent.updatedAt,
+    });
+  }
+
+  async function handleUpdateAgent(ctx: RequestContext, req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)$/);
+    const agentId = match?.[1];
+    if (!agentId) return apiError(res, "INVALID_PATH_PARAM");
+    if (!(await agentExists(agentId))) return apiError(res, "AGENT_NOT_FOUND");
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
+    if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
+    const existing = await agentStore.getForOwner(agentId, ctx.ownerId!);
+    if (!existing) return apiError(res, "AGENT_NOT_FOUND");
+
+    let body: unknown;
+    try {
+      const text = await readBody(req);
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      return apiError(res, "INVALID_JSON");
+    }
+
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return apiError(res, "VALIDATION_ERROR", { message: "request body must be a JSON object" });
+    }
+
+    const b = body as Record<string, unknown>;
+    if ("status" in b) {
+      return apiError(res, "VALIDATION_ERROR", {
+        message: "status cannot be updated on this route; use PATCH /agents/:id/status",
+      });
+    }
+    if ("stellarAddress" in b) {
+      return apiError(res, "VALIDATION_ERROR", {
+        message: "stellarAddress is immutable and cannot be updated",
+      });
+    }
+
+    const ALLOWED_FIELDS = new Set(["displayName", "description", "capabilities"]);
+    for (const key of Object.keys(b)) {
+      if (!ALLOWED_FIELDS.has(key)) {
+        return apiError(res, "VALIDATION_ERROR", {
+          message: `unknown or immutable field: ${key}`,
+        });
+      }
+    }
+
+    if (b.displayName === undefined && b.description === undefined && b.capabilities === undefined) {
+      return apiError(res, "VALIDATION_ERROR", {
+        message: "at least one of displayName, description, or capabilities must be provided",
+      });
+    }
+
+    const patch: Partial<Agent> = {};
+
+    if (b.displayName !== undefined) {
+      if (typeof b.displayName !== "string" || b.displayName.trim().length === 0) {
+        return apiError(res, "VALIDATION_ERROR", { message: "displayName must be a non-empty string" });
+      }
+      if (b.displayName.trim().length > 100) {
+        return apiError(res, "VALIDATION_ERROR", { message: "displayName must be 100 characters or fewer" });
+      }
+      patch.displayName = b.displayName.trim();
+    }
+
+    if (b.description !== undefined) {
+      if (typeof b.description !== "string") {
+        return apiError(res, "VALIDATION_ERROR", { message: "description must be a string" });
+      }
+      if (b.description.length > 500) {
+        return apiError(res, "VALIDATION_ERROR", { message: "description must be 500 characters or fewer" });
+      }
+      patch.description = b.description;
+    }
+
+    if (b.capabilities !== undefined) {
+      if (!Array.isArray(b.capabilities) || !b.capabilities.every((c) => typeof c === "string")) {
+        return apiError(res, "VALIDATION_ERROR", { message: "capabilities must be an array of strings" });
+      }
+      if (b.capabilities.length > 32) {
+        return apiError(res, "VALIDATION_ERROR", { message: "capabilities must be 32 entries or fewer" });
+      }
+      const trimmedCaps: string[] = [];
+      const seen = new Set<string>();
+      for (const cap of b.capabilities) {
+        const trimmed = cap.trim();
+        if (trimmed.length === 0) {
+          return apiError(res, "VALIDATION_ERROR", { message: "capability entries cannot be empty" });
+        }
+        if (trimmed.length > 32) {
+          return apiError(res, "VALIDATION_ERROR", { message: "capability entries must be 32 characters or fewer" });
+        }
+        if (seen.has(trimmed)) {
+          return apiError(res, "VALIDATION_ERROR", { message: "capabilities must not contain duplicate entries" });
+        }
+        seen.add(trimmed);
+        trimmedCaps.push(trimmed);
+      }
+      patch.capabilities = trimmedCaps;
+    }
+
+    const updated = await agentStore.update(agentId, patch);
+    if (!updated) return apiError(res, "AGENT_NOT_FOUND");
+    agents.set(updated.id, updated);
+
+    return json(res, {
+      id: updated.id,
+      displayName: updated.displayName,
+      description: updated.description,
+      ownerId: updated.ownerId,
+      stellarAddress: updated.stellarAddress,
+      capabilities: updated.capabilities,
+      status: updated.status,
+      active: updated.active,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+      agent: updated,
     });
   }
 
