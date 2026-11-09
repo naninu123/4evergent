@@ -120,6 +120,9 @@ function run(
   if (!(opts.env && "FOREGENT_API_TIMEOUT_MS" in opts.env)) {
     delete env.FOREGENT_API_TIMEOUT_MS;
   }
+  if (!(opts.env && "FOREGENT_OUTPUT" in opts.env)) {
+    delete env.FOREGENT_OUTPUT;
+  }
 
   // tsx doesn't support --require preambles; use a wrapper instead.
   // On Windows, Node's ESM loader requires file:// URLs for absolute paths
@@ -1606,4 +1609,129 @@ test("Handler error paths: non-2xx on schedule command, invalid JSON in contract
   assert.equal((await runHandlerWithMockFetch([], (m) => m.cmdAgentCreate([]))).code, 1);
   assert.equal((await runHandlerWithMockFetch([], (m) => m.cmdIntentSubmit("", [], null))).code, 1);
 });
+
+// ===== #57 JSON output mode (--json & FOREGENT_OUTPUT=json) =====
+
+test("CLI --json: help documents --json and FOREGENT_OUTPUT=json", () => {
+  const r = run(["--help"]);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /--json/);
+  assert.match(r.stdout, /FOREGENT_OUTPUT=json/);
+});
+
+test("CLI --json: emits parseable JSON for agent list, agent get, execution list, execution get, approval list, policy get, activity list, schedule list, and health", () => {
+  const healthRes = run(["--json", "health"], {
+    responses: [{ match: "/health", status: 200, body: { status: "ok", signerAccountId: "GBDMPFEAZOQW7XVTAVPXBT7PPA4ZZW7ZFJW5KJNBYRPJ35H6ASW4ASE3" } }],
+  });
+  assert.equal(healthRes.code, 0);
+  const parsedHealth = JSON.parse(healthRes.stdout);
+  assert.equal(parsedHealth.status, "ok");
+  assert.equal(parsedHealth.signerAccountId, "GBDMPFEAZOQW7XVTAVPXBT7PPA4ZZW7ZFJW5KJNBYRPJ35H6ASW4ASE3");
+
+  const agentListRes = run(["agent", "list", "--json"], {
+    responses: [
+      { match: "/agents", status: 200, body: { agents: [{ id: "agent-1", displayName: "Test Agent", status: "active" }] } },
+    ],
+  });
+  assert.equal(agentListRes.code, 0);
+  const parsedAgents = JSON.parse(agentListRes.stdout);
+  assert.ok(Array.isArray(parsedAgents.agents));
+  assert.equal(parsedAgents.agents[0].id, "agent-1");
+
+  // Empty list still outputs JSON object instead of "No agents found."
+  const emptyAgentsRes = run(["--json", "agent", "list"], {
+    responses: [{ match: "/agents", status: 200, body: { agents: [] } }],
+  });
+  assert.equal(emptyAgentsRes.code, 0);
+  assert.deepEqual(JSON.parse(emptyAgentsRes.stdout), { agents: [] });
+
+  const agentGetRes = run(["--json", "agent", "get", "agent-1"], {
+    responses: [
+      { match: "/agents/agent-1", status: 200, body: { id: "agent-1", displayName: "Test Agent", status: "active", ownerId: "owner-1" } },
+    ],
+  });
+  assert.equal(agentGetRes.code, 0);
+  const parsedAgent = JSON.parse(agentGetRes.stdout);
+  assert.equal(parsedAgent.id, "agent-1");
+  assert.equal(parsedAgent.displayName, "Test Agent");
+
+  const execListRes = run(["execution", "list", "--json"], {
+    responses: [
+      { match: "/executions", status: 200, body: { executions: [{ id: "exec-1", agentId: "agent-1", status: "confirmed" }] } },
+    ],
+  });
+  assert.equal(execListRes.code, 0);
+  const parsedExecList = JSON.parse(execListRes.stdout);
+  assert.ok(Array.isArray(parsedExecList.executions));
+  assert.equal(parsedExecList.executions[0].id, "exec-1");
+
+  const execGetRes = run(["execution", "get", "exec-1", "--json"], {
+    responses: [
+      { match: "/executions/exec-1", status: 200, body: { execution: { id: "exec-1", agentId: "agent-1", status: "confirmed", attempt: 1 } } },
+    ],
+  });
+  assert.equal(execGetRes.code, 0);
+  const parsedExecGet = JSON.parse(execGetRes.stdout);
+  assert.equal(parsedExecGet.execution.id, "exec-1");
+  assert.equal(parsedExecGet.execution.status, "confirmed");
+
+  const approvalListRes = run(["approval", "list", "--json"], {
+    responses: [
+      { match: "/approvals", status: 200, body: { approvals: [{ id: "ap-1", agentId: "agent-1", status: "pending_approval" }] } },
+    ],
+  });
+  assert.equal(approvalListRes.code, 0);
+  const parsedApprovals = JSON.parse(approvalListRes.stdout);
+  assert.equal(parsedApprovals.approvals[0].id, "ap-1");
+
+  const policyGetRes = run(["policy", "get", "agent-1", "--json"], {
+    responses: [
+      { match: "/agents/agent-1/policy", status: 200, body: { agentId: "agent-1", policy: { maxTxAmount: { XLM: "500" } }, version: 2 } },
+    ],
+  });
+  assert.equal(policyGetRes.code, 0);
+  const parsedPolicy = JSON.parse(policyGetRes.stdout);
+  assert.equal(parsedPolicy.agentId, "agent-1");
+  assert.equal(parsedPolicy.version, 2);
+
+  const activityListRes = run(["activity", "list", "agent-1", "--json"], {
+    responses: [
+      { match: "/agents/agent-1/activity", status: 200, body: { agentId: "agent-1", activity: [{ id: "act-1", status: "confirmed" }] } },
+    ],
+  });
+  assert.equal(activityListRes.code, 0);
+  const parsedActivity = JSON.parse(activityListRes.stdout);
+  assert.equal(parsedActivity.activity[0].id, "act-1");
+
+  const scheduleListRes = run(["schedule", "list", "agent-1", "--json"], {
+    responses: [
+      { match: "/agents/agent-1/schedules", status: 200, body: { agentId: "agent-1", schedules: [{ id: "sch-1", status: "active" }] } },
+    ],
+  });
+  assert.equal(scheduleListRes.code, 0);
+  const parsedSchedules = JSON.parse(scheduleListRes.stdout);
+  assert.equal(parsedSchedules.schedules[0].id, "sch-1");
+});
+
+test("CLI --json: FOREGENT_OUTPUT=json works and output without flag/env remains human-readable", () => {
+  const jsonEnvRes = run(["agent", "list"], {
+    env: { FOREGENT_OUTPUT: "json" },
+    responses: [
+      { match: "/agents", status: 200, body: { agents: [{ id: "agent-env", displayName: "Env Agent", status: "active" }] } },
+    ],
+  });
+  assert.equal(jsonEnvRes.code, 0);
+  const parsedEnv = JSON.parse(jsonEnvRes.stdout);
+  assert.equal(parsedEnv.agents[0].id, "agent-env");
+
+  const humanRes = run(["agent", "list"], {
+    responses: [
+      { match: "/agents", status: 200, body: { agents: [{ id: "agent-human", displayName: "Human Agent", status: "active" }] } },
+    ],
+  });
+  assert.equal(humanRes.code, 0);
+  assert.equal(humanRes.stdout.trim(), "agent-human\tHuman Agent\tactive");
+  assert.throws(() => JSON.parse(humanRes.stdout));
+});
+
 

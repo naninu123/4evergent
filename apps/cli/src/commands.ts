@@ -399,6 +399,7 @@ export const COMMAND_TREE: CommandTree = buildCommandTree();
 export const COMMANDS_HELP = [
   "Commands:",
   "  --version, -v  Print the CLI package version",
+  "  --json         Print raw JSON API responses (or set FOREGENT_OUTPUT=json)",
   "  health",
   "  agent list | get <id> | create <name> | pause <id> | resume <id> | disable <id>",
   "  approval list | approve <id> | reject <id>",
@@ -415,12 +416,13 @@ export const COMMANDS_HELP = [
  */
 export async function dispatchCommand(
   tree: CommandTree,
-  argv: string[],
+  rawArgv: string[],
   options: {
     version: string;
     helpText?: string;
   }
 ): Promise<number> {
+  const argv = rawArgv.filter((arg) => arg !== "--json");
   const cmd = argv[0];
   const sub = argv[1];
   const helpText = options.helpText ?? COMMANDS_HELP;
