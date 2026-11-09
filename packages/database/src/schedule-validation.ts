@@ -6,7 +6,7 @@ export interface ScheduleValidationResult {
   nextRunAt?: string;
 }
 
-export function validateScheduleExpression(expression?: string, timezone?: string, from?: Date): ScheduleValidationResult {
+export function validateScheduleExpression(expression?: string, timezone: string = 'UTC', from?: Date): ScheduleValidationResult {
   if (!expression || expression.trim().length === 0) return { valid: false, error: 'schedule expression is required' };
   if (!timezone || !isValidTimezone(timezone)) return { valid: false, error: 'invalid timezone' };
 
@@ -25,7 +25,7 @@ export function validateScheduleExpression(expression?: string, timezone?: strin
   if (!isValidCronField(month, 1, 12)) return { valid: false, error: 'invalid month' };
   if (!isValidCronField(dow, 0, 6)) return { valid: false, error: 'invalid day-of-week' };
 
-  const nextRunAt = computeNextRun(minute, hour, dom, month, dow, from);
+  const nextRunAt = computeNextRun(minute, hour, dom, month, dow, timezone, from);
   if (!nextRunAt) return { valid: false, error: 'could not compute next run time' };
 
   return { valid: true, nextRunAt };
@@ -64,19 +64,110 @@ function isValidTimezone(tz: string): boolean {
   return ['UTC', 'America/New_York', 'Europe/London', 'Asia/Tokyo'].includes(tz);
 }
 
-function computeNextRun(minute: string, hour: string, dom: string, month: string, dow: string, from?: Date): string | null {
+const FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
+
+function getTimezoneFormatter(timezone: string): Intl.DateTimeFormat {
+  let fmt = FORMATTER_CACHE.get(timezone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      weekday: 'short',
+      hourCycle: 'h23',
+    });
+    FORMATTER_CACHE.set(timezone, fmt);
+  }
+  return fmt;
+}
+
+const WEEKDAY_TO_DOW: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+interface ZonedWallClock {
+  minute: number;
+  hour: number;
+  dayOfMonth: number;
+  month: number;
+  dayOfWeek: number;
+}
+
+function getZonedWallClock(date: Date, timezone: string): ZonedWallClock {
+  if (timezone === 'UTC') {
+    return {
+      minute: date.getUTCMinutes(),
+      hour: date.getUTCHours(),
+      dayOfMonth: date.getUTCDate(),
+      month: date.getUTCMonth() + 1,
+      dayOfWeek: date.getUTCDay(),
+    };
+  }
+  const parts = getTimezoneFormatter(timezone).formatToParts(date);
+  let minute = 0;
+  let hour = 0;
+  let dayOfMonth = 1;
+  let month = 1;
+  let dayOfWeek = 0;
+  for (const part of parts) {
+    switch (part.type) {
+      case 'minute':
+        minute = parseInt(part.value, 10);
+        break;
+      case 'hour':
+        hour = parseInt(part.value, 10) % 24;
+        break;
+      case 'day':
+        dayOfMonth = parseInt(part.value, 10);
+        break;
+      case 'month':
+        month = parseInt(part.value, 10);
+        break;
+      case 'weekday':
+        dayOfWeek = WEEKDAY_TO_DOW[part.value] ?? 0;
+        break;
+    }
+  }
+  return { minute, hour, dayOfMonth, month, dayOfWeek };
+}
+
+function computeNextRun(
+  minute: string,
+  hour: string,
+  dom: string,
+  month: string,
+  dow: string,
+  timezone: string,
+  from?: Date
+): string | null {
   const now = from ?? new Date();
-  const candidate = new Date(now);
-  candidate.setSeconds(0, 0);
+  const candidate = new Date(now.getTime());
+  candidate.setUTCSeconds(0, 0);
+
+  let currentHourWall: ZonedWallClock | null = null;
 
   for (let i = 0; i < 525600; i++) {
-    candidate.setMinutes(candidate.getMinutes() + 1);
+    candidate.setUTCMinutes(candidate.getUTCMinutes() + 1);
 
-    if (!matchesMinutes(candidate.getMinutes(), minute)) continue;
-    if (!matchesHours(candidate.getHours(), hour)) continue;
-    if (!matchesDayOfMonth(candidate.getDate(), dom)) continue;
-    if (!matchesMonth(candidate.getMonth() + 1, month)) continue;
-    if (!matchesDayOfWeek(candidate.getDay(), dow)) continue;
+    const utcMinute = candidate.getUTCMinutes();
+    if (!currentHourWall || utcMinute === 0) {
+      currentHourWall = getZonedWallClock(candidate, timezone);
+    }
+
+    if (!matchesMinutes(utcMinute, minute)) continue;
+    if (!matchesHours(currentHourWall.hour, hour)) continue;
+    if (!matchesDayOfMonth(currentHourWall.dayOfMonth, dom)) continue;
+    if (!matchesMonth(currentHourWall.month, month)) continue;
+    if (!matchesDayOfWeek(currentHourWall.dayOfWeek, dow)) continue;
 
     if (candidate > now) return candidate.toISOString();
   }

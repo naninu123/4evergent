@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import {
   SQLiteScheduleStore,
   InMemoryScheduleStore,
+  validateScheduleExpression,
 } from "../src/index.js";
 import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
 
@@ -388,5 +389,93 @@ test("SQLite: updateIfLastStartedAt succeeds on match and fails on mismatch", as
     store.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateScheduleExpression: computes nextRunAt in each allowlisted timezone", () => {
+  // Winter base time: 2026-01-15T00:00:00.000Z (Thursday in UTC)
+  // - UTC:              00:00 -> next 09:00 is 2026-01-15T09:00:00.000Z
+  // - America/New_York: 19:00 Wed (EST, UTC-5) -> next 09:00 EST is 2026-01-15T14:00:00.000Z
+  // - Europe/London:    00:00 Thu (GMT, UTC+0) -> next 09:00 GMT is 2026-01-15T09:00:00.000Z
+  // - Asia/Tokyo:       09:00 Thu (JST, UTC+9) -> 09:00 on Jan 15 is not strictly > from,
+  //                     so next 09:00 JST is 2026-01-16T09:00 JST = 2026-01-16T00:00:00.000Z
+  const from = new Date("2026-01-15T00:00:00.000Z");
+
+  const utcRes = validateScheduleExpression("0 9 * * *", "UTC", from);
+  assert.equal(utcRes.valid, true);
+  assert.equal(utcRes.nextRunAt, "2026-01-15T09:00:00.000Z");
+
+  const nyRes = validateScheduleExpression("0 9 * * *", "America/New_York", from);
+  assert.equal(nyRes.valid, true);
+  assert.equal(nyRes.nextRunAt, "2026-01-15T14:00:00.000Z");
+
+  const londonRes = validateScheduleExpression("0 9 * * *", "Europe/London", from);
+  assert.equal(londonRes.valid, true);
+  assert.equal(londonRes.nextRunAt, "2026-01-15T09:00:00.000Z");
+
+  const tokyoRes = validateScheduleExpression("0 9 * * *", "Asia/Tokyo", from);
+  assert.equal(tokyoRes.valid, true);
+  assert.equal(tokyoRes.nextRunAt, "2026-01-16T00:00:00.000Z");
+});
+
+test("validateScheduleExpression: respects DST offsets in America/New_York and Europe/London", () => {
+  // Summer base time: 2026-06-15T00:00:00.000Z
+  // - America/New_York is EDT (UTC-4): 09:00 EDT = 13:00:00.000Z (1h earlier in UTC than EST)
+  // - Europe/London is BST (UTC+1):    09:00 BST = 08:00:00.000Z (1h earlier in UTC than GMT)
+  const summerFrom = new Date("2026-06-15T00:00:00.000Z");
+
+  const nySummer = validateScheduleExpression("0 9 * * *", "America/New_York", summerFrom);
+  assert.equal(nySummer.valid, true);
+  assert.equal(nySummer.nextRunAt, "2026-06-15T13:00:00.000Z");
+
+  const londonSummer = validateScheduleExpression("0 9 * * *", "Europe/London", summerFrom);
+  assert.equal(londonSummer.valid, true);
+  assert.equal(londonSummer.nextRunAt, "2026-06-15T08:00:00.000Z");
+});
+
+test("validateScheduleExpression: evaluates day-of-week and day-of-month in target timezone", () => {
+  // At 2026-01-15T23:30:00.000Z:
+  // - In Asia/Tokyo (UTC+9), wall clock is Friday 2026-01-16 08:30 JST (dow=5, dom=16).
+  // - In UTC, wall clock is Thursday 2026-01-15 23:30 UTC (dow=4, dom=15).
+  const from = new Date("2026-01-15T23:30:00.000Z");
+
+  // "0 9 * * 5" (Friday 09:00) in Asia/Tokyo is 30 minutes away: 2026-01-16T00:00:00.000Z
+  const tokyoFri = validateScheduleExpression("0 9 * * 5", "Asia/Tokyo", from);
+  assert.equal(tokyoFri.valid, true);
+  assert.equal(tokyoFri.nextRunAt, "2026-01-16T00:00:00.000Z");
+
+  // "0 9 16 1 *" (Jan 16 at 09:00) in Asia/Tokyo is 2026-01-16T00:00:00.000Z,
+  // whereas in UTC it is 2026-01-16T09:00:00.000Z
+  const tokyoDom = validateScheduleExpression("0 9 16 1 *", "Asia/Tokyo", from);
+  assert.equal(tokyoDom.valid, true);
+  assert.equal(tokyoDom.nextRunAt, "2026-01-16T00:00:00.000Z");
+
+  const utcDom = validateScheduleExpression("0 9 16 1 *", "UTC", from);
+  assert.equal(utcDom.valid, true);
+  assert.equal(utcDom.nextRunAt, "2026-01-16T09:00:00.000Z");
+});
+
+test("validateScheduleExpression: nextRunAt is independent of host process.env.TZ", () => {
+  const originalTz = process.env.TZ;
+  const from = new Date("2026-01-15T10:15:00.000Z");
+  try {
+    process.env.TZ = "Asia/Tokyo";
+    const utcUnderTokyoHost = validateScheduleExpression("30 14 * * *", "UTC", from);
+    const nyUnderTokyoHost = validateScheduleExpression("30 14 * * *", "America/New_York", from);
+
+    process.env.TZ = "America/New_York";
+    const utcUnderNyHost = validateScheduleExpression("30 14 * * *", "UTC", from);
+    const nyUnderNyHost = validateScheduleExpression("30 14 * * *", "America/New_York", from);
+
+    assert.equal(utcUnderTokyoHost.nextRunAt, "2026-01-15T14:30:00.000Z");
+    assert.equal(utcUnderNyHost.nextRunAt, "2026-01-15T14:30:00.000Z");
+    assert.equal(nyUnderTokyoHost.nextRunAt, "2026-01-15T19:30:00.000Z");
+    assert.equal(nyUnderNyHost.nextRunAt, "2026-01-15T19:30:00.000Z");
+  } finally {
+    if (originalTz === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = originalTz;
+    }
   }
 });
