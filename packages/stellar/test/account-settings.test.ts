@@ -129,3 +129,110 @@ test("ACCOUNT SETTINGS: throws on missing thresholds field", async () => {
   const intent: AccountSettingsIntent = { type: "account_settings", setting: "thresholds", value: { low: 1, medium: 2 }, reason: "test" };
   await assert.rejects(() => builder.buildAccountSettings(acct, intent, NETWORK), /thresholds\..* must be a number/);
 });
+
+// ── buildSetOptions primitive (#55) ──────────────────────────
+test("SET OPTIONS: signer add (weight > 0) returns single setOptions op and leaves other fields undefined", async () => {
+  const acct = fakeAccount("100");
+  const signerKey = addr();
+  const tx = await builder.buildSetOptions(
+    acct,
+    { signer: { ed25519PublicKey: signerKey, weight: 1 } },
+    NETWORK
+  );
+  const op = getSetOptionsOp(tx);
+  assert.equal(op.signer.ed25519PublicKey, signerKey);
+  assert.equal(op.signer.weight, 1);
+  assert.equal(op.setFlags, undefined);
+  assert.equal(op.clearFlags, undefined);
+  assert.equal(op.masterWeight, undefined);
+  assert.equal(op.lowThreshold, undefined);
+  assert.equal(op.medThreshold, undefined);
+  assert.equal(op.highThreshold, undefined);
+  assert.equal(op.homeDomain, undefined);
+});
+
+test("SET OPTIONS: signer update (weight > 1)", async () => {
+  const acct = fakeAccount("100");
+  const signerKey = addr();
+  const tx = await builder.buildSetOptions(
+    acct,
+    { signer: { ed25519PublicKey: signerKey, weight: 5 } },
+    NETWORK
+  );
+  const op = getSetOptionsOp(tx);
+  assert.equal(op.signer.ed25519PublicKey, signerKey);
+  assert.equal(op.signer.weight, 5);
+});
+
+test("SET OPTIONS: signer remove (weight = 0)", async () => {
+  const acct = fakeAccount("100");
+  const signerKey = addr();
+  const tx = await builder.buildSetOptions(
+    acct,
+    { signer: { ed25519PublicKey: signerKey, weight: 0 } },
+    NETWORK
+  );
+  const op = getSetOptionsOp(tx);
+  assert.equal(op.signer.ed25519PublicKey, signerKey);
+  assert.equal(op.signer.weight, 0);
+});
+
+test("SET OPTIONS: flag set (setFlags)", async () => {
+  const acct = fakeAccount("100");
+  const tx = await builder.buildSetOptions(acct, { setFlags: 3 }, NETWORK);
+  const op = getSetOptionsOp(tx);
+  assert.equal(op.setFlags, 3);
+  assert.equal(op.clearFlags, undefined);
+});
+
+test("SET OPTIONS: flag clear (clearFlags)", async () => {
+  const acct = fakeAccount("100");
+  const tx = await builder.buildSetOptions(acct, { clearFlags: 2 }, NETWORK);
+  const op = getSetOptionsOp(tx);
+  assert.equal(op.clearFlags, 2);
+  assert.equal(op.setFlags, undefined);
+});
+
+test("SET OPTIONS: threshold change (full and partial)", async () => {
+  const acct = fakeAccount("100");
+  const fullTx = await builder.buildSetOptions(
+    acct,
+    { masterWeight: 10, lowThreshold: 1, medThreshold: 2, highThreshold: 3 },
+    NETWORK
+  );
+  const fullOp = getSetOptionsOp(fullTx);
+  assert.equal(fullOp.masterWeight, 10);
+  assert.equal(fullOp.lowThreshold, 1);
+  assert.equal(fullOp.medThreshold, 2);
+  assert.equal(fullOp.highThreshold, 3);
+
+  const partialTx = await builder.buildSetOptions(
+    fakeAccount("100"),
+    { medThreshold: 4 },
+    NETWORK
+  );
+  const partialOp = getSetOptionsOp(partialTx);
+  assert.equal(partialOp.medThreshold, 4);
+  assert.equal(partialOp.lowThreshold, undefined);
+  assert.equal(partialOp.highThreshold, undefined);
+  assert.equal(partialOp.masterWeight, undefined);
+});
+
+test("SET OPTIONS: home domain update", async () => {
+  const acct = fakeAccount("100");
+  const tx = await builder.buildSetOptions(
+    acct,
+    { homeDomain: "4evergent.org" },
+    NETWORK
+  );
+  const op = getSetOptionsOp(tx);
+  assert.equal(op.homeDomain, "4evergent.org");
+});
+
+test("SET OPTIONS: empty options object throws", async () => {
+  const acct = fakeAccount("100");
+  await assert.rejects(
+    () => builder.buildSetOptions(acct, {}, NETWORK),
+    /at least one option field/i
+  );
+});

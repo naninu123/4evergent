@@ -133,13 +133,7 @@ export class TransactionPipeline {
 
     let tx;
     try {
-      if (intent.type === "trustline") {
-        tx = await this.builder.buildTrustline(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
-      } else if (intent.type === "account_settings") {
-        tx = await this.builder.buildAccountSettings(sourceAccount, intent as AccountSettingsIntent, this.signer.getNetworkPassphrase());
-      } else {
-        tx = await this.builder.buildPayment(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
-      }
+      tx = await this.buildTransaction(sourceAccount, intent);
     } catch (e: any) {
       if (signal?.aborted || e?.name === "AbortError") {
         throw e;
@@ -345,11 +339,7 @@ export class TransactionPipeline {
 
     let tx;
     try {
-      if (intent.type === "account_settings") {
-        tx = await this.builder.buildAccountSettings(sourceAccount, intent as AccountSettingsIntent, this.signer.getNetworkPassphrase());
-      } else {
-        tx = await this.builder.buildPayment(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
-      }
+      tx = await this.buildTransaction(sourceAccount, intent);
     } catch (e: any) {
       await this.approvalStore.update(approvalId, { status: "failed", error: e.message });
       return {
@@ -418,6 +408,17 @@ export class TransactionPipeline {
         activityId: approval.activityId,
       };
     }
+  }
+
+  private async buildTransaction(sourceAccount: any, intent: AgentIntent) {
+    const passphrase = this.signer.getNetworkPassphrase();
+    if (intent.type === "trustline") {
+      return this.builder.buildTrustline(sourceAccount, intent as any, passphrase);
+    }
+    if (intent.type === "account_settings") {
+      return this.builder.buildAccountSettings(sourceAccount, intent as AccountSettingsIntent, passphrase);
+    }
+    return this.builder.buildPayment(sourceAccount, intent as any, passphrase);
   }
 
   private async persistActivity(
