@@ -155,6 +155,22 @@ export interface AgentSpending {
   spending: Record<string, { used: number; limit: string; remaining: number }>;
 }
 
+export type ReadinessOverallStatus = "ok" | "degraded" | "unavailable";
+export type DependencyHealthStatus = "ok" | "fail";
+export type WorkerHealthStatus = "ok" | "fail" | "disabled";
+
+export interface ReadinessChecks {
+  horizon: DependencyHealthStatus;
+  database: DependencyHealthStatus;
+  executionQueue: WorkerHealthStatus;
+  scheduler: WorkerHealthStatus;
+}
+
+export interface ReadinessStatus {
+  status: ReadinessOverallStatus;
+  checks: ReadinessChecks;
+}
+
 export interface ApiErrorBody {
   error?: string;
   message?: string;
@@ -238,6 +254,10 @@ export class Client {
 
   health(): Promise<{ status: string; signerAccountId: string }> {
     return this.request<{ status: string; signerAccountId: string }>("/health");
+  }
+
+  healthReady(): Promise<ReadinessStatus> {
+    return this.request<ReadinessStatus>("/health/ready");
   }
 
   createAgent(body: CreateAgentBody): Promise<{ agent: Agent }> {
