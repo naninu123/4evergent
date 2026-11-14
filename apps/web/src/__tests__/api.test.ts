@@ -107,6 +107,92 @@ describe('api.request headers (via api.me / api.updateAgentStatus)', () => {
   });
 });
 
+describe('api.submitPayment / api.submitTrustline Idempotency-Key header', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    sessionStorage.clear();
+  });
+
+  it('sends Idempotency-Key header on submitPayment when provided', async () => {
+    mockFetch(200, {
+      activityId: 'act-dup-1',
+      agentId: 'agent-1',
+      status: 'submitted',
+      policyDecision: { result: 'allow', reason: 'ok', rule: 'r', intent: {} },
+      authorizationStatus: 'not_required',
+      simulationResult: null,
+      txHash: 'tx-1',
+      error: null,
+    });
+    const { api } = await import('../api');
+    const res = await api.submitPayment(
+      'agent-1',
+      {
+        type: 'payment',
+        asset: 'XLM',
+        destination: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRS',
+        amount: '10',
+        reason: 'Monthly payment',
+      },
+      { idempotencyKey: 'idem-key-payment-1' }
+    );
+
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] as [RequestInfo, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get('Idempotency-Key')).toBe('idem-key-payment-1');
+    expect(headers.get('Content-Type')).toBe('application/json');
+    expect(headers.get('X-Requested-With')).toBe('4evergent');
+    expect(res.activityId).toBe('act-dup-1');
+    expect(res.status).toBe('submitted');
+  });
+
+  it('sends Idempotency-Key header on submitTrustline when provided', async () => {
+    mockFetch(202, {
+      activityId: 'act-tl-1',
+      agentId: 'agent-1',
+      status: 'requires_approval',
+      approvalId: 'appr-1',
+      policyDecision: { result: 'requires_approval', reason: 'ok', rule: 'r', intent: {} },
+      authorizationStatus: 'pending',
+      simulationResult: null,
+      txHash: null,
+      error: null,
+    });
+    const { api } = await import('../api');
+    await api.submitTrustline(
+      'agent-1',
+      {
+        type: 'trustline',
+        assetCode: 'USDC',
+        issuer: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRS',
+        reason: 'Add trustline',
+      },
+      { idempotencyKey: 'idem-key-tl-1' }
+    );
+
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] as [RequestInfo, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get('Idempotency-Key')).toBe('idem-key-tl-1');
+    expect(headers.get('Content-Type')).toBe('application/json');
+  });
+
+  it('omits Idempotency-Key header when options are omitted', async () => {
+    mockFetch(200, { activityId: 'act-2', agentId: 'agent-1', status: 'submitted' });
+    const { api } = await import('../api');
+    await api.submitPayment('agent-1', {
+      type: 'payment',
+      asset: 'XLM',
+      destination: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRS',
+      amount: '5',
+      reason: 'One-off',
+    });
+
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] as [RequestInfo, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.has('Idempotency-Key')).toBe(false);
+  });
+});
+
 describe('api.request 401 handling (skipAuthClear)', () => {
   beforeEach(() => {
     vi.restoreAllMocks();

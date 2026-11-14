@@ -91,6 +91,10 @@ export interface IntentResponse {
   approvalId?: string;
 }
 
+export interface SubmitIntentOptions {
+  idempotencyKey?: string;
+}
+
 export const api = {
   health: () => request<{ status: string; signerAccountId: string }>('/health'),
 
@@ -161,15 +165,17 @@ export const api = {
       { method: 'POST', body: JSON.stringify({}) }
     ),
 
-  submitPayment: (agentId: string, intent: SubmitPaymentIntent) =>
+  submitPayment: (agentId: string, intent: SubmitPaymentIntent, options?: SubmitIntentOptions) =>
     request<IntentResponse>(`/agents/${encodeURIComponent(agentId)}/intents`, {
       method: 'POST',
+      headers: options?.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : undefined,
       body: JSON.stringify(intent),
     }),
 
-  submitTrustline: (agentId: string, intent: SubmitTrustlineIntent) =>
+  submitTrustline: (agentId: string, intent: SubmitTrustlineIntent, options?: SubmitIntentOptions) =>
     request<IntentResponse>(`/agents/${encodeURIComponent(agentId)}/intents`, {
       method: 'POST',
+      headers: options?.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : undefined,
       body: JSON.stringify({ ...intent, type: 'trustline' }),
     }),
 
