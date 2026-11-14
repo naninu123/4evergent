@@ -1,11 +1,13 @@
 import { createServer } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { log, generateRequestId, runRequestIdContext } from "./logging.js";
-import type {
-  AgentIntent,
-  AuthorizationStatus,
-  PolicyDecision,
-  SimulationResult,
+import {
+  parseDecimalStroops,
+  parseStrictPolicyAmount,
+  type AgentIntent,
+  type AuthorizationStatus,
+  type PolicyDecision,
+  type SimulationResult,
 } from "@4evergent/shared";
 import { API_ERRORS, type ApiErrorCode } from "./error-codes.js";
 import { IntentValidator } from "@4evergent/agent-core";
@@ -1166,8 +1168,8 @@ export async function createApiServer(options: ServerOptions) {
     const spending: Record<string, { used: number; limit: string; remaining: number }> = {};
     for (const asset of Object.keys(rules.dailySpendingLimit)) {
       const limitStr = rules.dailySpendingLimit[asset] ?? "0";
-      const limitNum = parseFloat(limitStr);
-      if (isNaN(limitNum)) continue;
+      const limitNum = parseStrictPolicyAmount(limitStr);
+      if (limitNum === null) continue;
       const used = (await store.getDailySpending(agentId, asset)) ?? 0;
       spending[asset] = {
         used,
@@ -2051,6 +2053,10 @@ function parseIntent(body: unknown): AgentIntent {
       if (typeof b.asset !== "string") throw new Error("payment.asset is required");
       if (typeof b.destination !== "string") throw new Error("payment.destination is required");
       if (typeof b.amount !== "string") throw new Error("payment.amount is required as string");
+      const paymentStroops = parseDecimalStroops(b.amount);
+      if (paymentStroops === null || paymentStroops <= 0n) {
+        throw new Error("payment.amount must be a positive decimal string with at most 7 decimal places");
+      }
       if (typeof b.reason !== "string") throw new Error("payment.reason is required");
       let validatedDetails: { code: string; issuer: string | null } | undefined;
       const assetDetails = (b.assetDetails as { code?: unknown; issuer?: unknown } | undefined);
@@ -2089,11 +2095,18 @@ function parseIntent(body: unknown): AgentIntent {
         throw new Error("trustline.issuer must be a valid Stellar address (G...)");
       }
       if (typeof b.reason !== "string") throw new Error("trustline.reason is required");
+      let parsedLimit: string | undefined;
+      if (b.limit !== undefined && b.limit !== "") {
+        if (typeof b.limit !== "string" || parseDecimalStroops(b.limit) === null) {
+          throw new Error("trustline.limit must be a non-negative decimal string with at most 7 decimal places");
+        }
+        parsedLimit = b.limit;
+      }
       return {
         type: "trustline",
         assetCode: b.assetCode,
         issuer: b.issuer,
-        limit: typeof b.limit === "string" && b.limit.trim().length > 0 ? b.limit : undefined,
+        limit: parsedLimit,
         reason: b.reason,
       };
     }

@@ -1,4 +1,8 @@
-import type { AgentIntent } from "@4evergent/shared";
+import {
+  compareStrictAmounts,
+  parseDecimalStroops,
+  type AgentIntent,
+} from "@4evergent/shared";
 
 export class IntentValidator {
   static readonly VALID_ASSETS = ["XLM"];
@@ -36,13 +40,14 @@ function parseAsset(intent: AgentIntent): { code: string; issuer: string | null 
 
 function validatePayment(intent: AgentIntent): { valid: boolean; error?: string } {
   if (intent.type !== "payment") return { valid: false, error: "not a payment" };
-  if (!intent.amount || isNaN(parseFloat(intent.amount)) || parseFloat(intent.amount) <= 0) {
+  const amountStroops = parseDecimalStroops(intent.amount);
+  if (amountStroops === null || amountStroops <= 0n) {
     return { valid: false, error: "amount must be a positive number" };
   }
   if (!intent.destination || !intent.destination.startsWith("G")) {
     return { valid: false, error: "destination must be a valid Stellar account (G...)" };
   }
-  if (parseFloat(intent.amount) > parseFloat(IntentValidator.MAX_AMOUNT)) {
+  if (compareStrictAmounts(intent.amount, IntentValidator.MAX_AMOUNT) > 0) {
     return { valid: false, error: "amount exceeds global maximum" };
   }
   const asset = parseAsset(intent);
@@ -67,7 +72,7 @@ function validateTrustline(intent: AgentIntent): { valid: boolean; error?: strin
     return { valid: false, error: "issuer must be a valid Stellar account" };
   }
   if (intent.limit !== undefined) {
-    if (isNaN(parseFloat(intent.limit)) || parseFloat(intent.limit) < 0) {
+    if (parseDecimalStroops(intent.limit) === null) {
       return { valid: false, error: "limit must be a non-negative number" };
     }
   }
