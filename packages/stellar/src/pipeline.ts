@@ -334,6 +334,7 @@ export class TransactionPipeline {
       };
     } catch (e: any) {
       await this.approvalStore.update(approvalId, { status: "failed", error: e.message });
+      await this.updateLinkedActivity(approval.activityId, { status: "failed", error: e.message });
       return {
         status: "rejected",
         message: `Cannot load source account: ${e.message}`,
@@ -352,6 +353,7 @@ export class TransactionPipeline {
       }
     } catch (e: any) {
       await this.approvalStore.update(approvalId, { status: "failed", error: e.message });
+      await this.updateLinkedActivity(approval.activityId, { status: "failed", error: e.message });
       return {
         status: "rejected",
         message: `Construction failed: ${e.message}`,
@@ -363,10 +365,17 @@ export class TransactionPipeline {
 
     const simResult = await this.simulator.simulate(tx);
     if (!simResult.success) {
-      await this.approvalStore.update(approvalId, { status: "failed", error: simResult.error ?? "Simulation failed" });
+      const simError = simResult.error ?? "Simulation failed";
+      await this.approvalStore.update(approvalId, { status: "failed", error: simError });
+      await this.updateLinkedActivity(approval.activityId, {
+        status: "failed",
+        authorizationStatus: "denied_by_simulation",
+        error: simError,
+        simulationResult: simResult,
+      });
       return {
         status: "simulation_failed",
-        message: simResult.error ?? "Simulation failed",
+        message: simError,
         policyDecision: { result: "deny", reason: "simulation", rule: "approval", intent },
         simulationResult: simResult,
         activityId: approval.activityId,
@@ -378,6 +387,11 @@ export class TransactionPipeline {
       signedTx = await this.signer.sign(tx);
     } catch (e: any) {
       await this.approvalStore.update(approvalId, { status: "failed", error: e.message });
+      await this.updateLinkedActivity(approval.activityId, {
+        status: "failed",
+        error: e.message,
+        simulationResult: simResult,
+      });
       return {
         status: "rejected",
         message: `Signing failed: ${e.message}`,
@@ -393,12 +407,12 @@ export class TransactionPipeline {
     try {
       const result = await this.submitter.submit(signedTx, this.signer.getNetworkPassphrase());
       await this.approvalStore.update(approvalId, { status: "submitted", txHash: result.hash, approvedAt: new Date().toISOString(), approver: approver ?? null });
-      if (approval.activityId) {
-        const existing = await this.activityStore.get(approval.activityId);
-        if (existing) {
-          await this.activityStore.update(approval.activityId, { status: "submitted", txHash: result.hash, simulationResult: simResult, authorizationStatus: "approved" });
-        }
-      }
+      await this.updateLinkedActivity(approval.activityId, {
+        status: "submitted",
+        txHash: result.hash,
+        simulationResult: simResult,
+        authorizationStatus: "approved",
+      });
       return {
         status: "submitted",
         message: `Transaction submitted: ${result.hash}`,
@@ -409,6 +423,12 @@ export class TransactionPipeline {
       };
     } catch (e: any) {
       await this.approvalStore.update(approvalId, { status: "failed", error: e.message });
+      await this.updateLinkedActivity(approval.activityId, {
+        status: "failed",
+        error: e.message,
+        txHash: preSubmitHash,
+        simulationResult: simResult,
+      });
       return {
         status: "rejected",
         message: `Submission failed: ${e.message}`,
@@ -417,6 +437,21 @@ export class TransactionPipeline {
         txHash: preSubmitHash,
         activityId: approval.activityId,
       };
+    }
+  }
+
+  private async updateLinkedActivity(
+    activityId: string | undefined,
+    patch: Partial<ActivityRecord>
+  ): Promise<void> {
+    if (!this.activityStore || !activityId) return;
+    try {
+      const existing = await this.activityStore.get(activityId);
+      if (existing) {
+        await this.activityStore.update(activityId, patch);
+      }
+    } catch {
+      // Best-effort: activity maintenance must never alter executeApproved outcomes
     }
   }
 
