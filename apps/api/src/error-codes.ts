@@ -27,6 +27,7 @@ export const API_ERRORS = {
   SCHEDULE_INVALID_TRANSITION: { status: 409, message: "Schedule status does not allow this transition", description: "The schedule status does not allow the requested pause, resume or disable." },
   EXECUTION_CONFLICT: { status: 409, message: "Execution state changed; please refresh", description: "The execution changed concurrently." },
   APPROVAL_EXPIRED: { status: 410, message: "Approval expired", description: "The approval passed its expiry before it was approved." },
+  RATE_LIMITED: { status: 429, message: "rate_limited", description: "Too many requests; retry after the Retry-After interval." },
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERRORS;
