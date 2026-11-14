@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
-import type { SubmitPaymentIntent } from '../types';
+import type { SubmitPaymentIntent, SubmitTrustlineIntent } from '../types';
 
 interface SubmitResult {
   agentId: string;
@@ -26,6 +26,7 @@ export default function Submit() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SubmitResult | null>(null);
+  const pendingSubmissionRef = useRef<{ fingerprint: string; key: string } | null>(null);
 
   useEffect(() => {
     api.listAgents()
@@ -35,6 +36,25 @@ export default function Submit() {
       })
       .catch((e: any) => setError(e.message));
   }, []);
+
+  const getIdempotencyKeyForAttempt = (
+    agentId: string,
+    intent: SubmitPaymentIntent | SubmitTrustlineIntent
+  ): string => {
+    const fingerprint = JSON.stringify({ agentId, intent });
+    if (pendingSubmissionRef.current?.fingerprint === fingerprint) {
+      return pendingSubmissionRef.current.key;
+    }
+    const key = crypto.randomUUID();
+    pendingSubmissionRef.current = { fingerprint, key };
+    return key;
+  };
+
+  const handleReset = () => {
+    pendingSubmissionRef.current = null;
+    setError(null);
+    setResult(null);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,9 +77,16 @@ export default function Submit() {
         amount,
         reason,
       };
-      api.submitPayment(selectedAgent, intent)
+      const idempotencyKey = getIdempotencyKeyForAttempt(selectedAgent, intent);
+      api.submitPayment(selectedAgent, intent, { idempotencyKey })
         .then((r) => {
-          setResult({ agentId: selectedAgent, activityId: r.activityId, approvalId: r.approvalId, status: r.status });
+          pendingSubmissionRef.current = null;
+          setResult({
+            agentId: r.agentId || selectedAgent,
+            activityId: r.activityId,
+            approvalId: r.approvalId,
+            status: r.status,
+          });
         })
         .catch((e: any) => setError(e.message))
         .finally(() => setLoading(false));
@@ -67,15 +94,23 @@ export default function Submit() {
       if (!trustlineAssetCode || trustlineAssetCode.length < 1) { setLoading(false); return setError('Asset code is required'); }
       if (trustlineAssetCode === 'XLM') { setLoading(false); return setError('XLM is native — use payment instead'); }
       if (!trustlineIssuer || !trustlineIssuer.startsWith('G')) { setLoading(false); return setError('Issuer must be a valid Stellar account (G...)'); }
-      api.submitTrustline(selectedAgent, {
+      const trustlineIntent: SubmitTrustlineIntent = {
         type: 'trustline',
         assetCode: trustlineAssetCode,
         issuer: trustlineIssuer,
         limit: trustlineLimit || undefined,
         reason,
-      })
+      };
+      const idempotencyKey = getIdempotencyKeyForAttempt(selectedAgent, trustlineIntent);
+      api.submitTrustline(selectedAgent, trustlineIntent, { idempotencyKey })
         .then((r) => {
-          setResult({ agentId: selectedAgent, activityId: r.activityId, approvalId: r.approvalId, status: r.status });
+          pendingSubmissionRef.current = null;
+          setResult({
+            agentId: r.agentId || selectedAgent,
+            activityId: r.activityId,
+            approvalId: r.approvalId,
+            status: r.status,
+          });
         })
         .catch((e: any) => setError(e.message))
         .finally(() => setLoading(false));
@@ -120,7 +155,7 @@ export default function Submit() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="surface" style={{ maxWidth: '500px' }}>
+      <form onSubmit={handleSubmit} onReset={handleReset} className="surface" style={{ maxWidth: '500px' }}>
         <div className="field">
           <label htmlFor="intent-type">Intent Type</label>
           <select id="intent-type" value={intentType} onChange={(e) => setIntentType(e.target.value as any)} className="select">
