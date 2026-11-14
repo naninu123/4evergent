@@ -27,7 +27,7 @@ const client = createClient({
 });
 ```
 
-The bearer token is optional. `GET /health` is public; other routes require
+The bearer token is optional. `GET /health` and `GET /health/ready` are public; other routes require
 the API's configured authentication. The client does not implement login.
 
 ## Examples by resource
@@ -35,6 +35,7 @@ the API's configured authentication. The client does not implement login.
 ```ts
 // Health
 const health = await client.health();
+const readiness = await client.healthReady();
 
 // Agents
 const { agents } = await client.listAgents();

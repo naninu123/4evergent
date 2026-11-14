@@ -83,6 +83,7 @@ test("every documented client route uses the expected method and path", async ()
     { call: () => client.queueStatus(), method: "GET", path: "/agent-queue" },
     { call: () => client.getAgentSpending("a"), method: "GET", path: "/agents/a/spending" },
     { call: () => client.overviewAttention(), method: "GET", path: "/overview/attention" },
+    { call: () => client.healthReady(), method: "GET", path: "/health/ready" },
   ];
 
   for (const route of routes) await route.call();
@@ -133,6 +134,38 @@ test("message-shaped API failures remain available on ApiError", async () => {
     assert.equal(error.status, 404);
     assert.equal(error.message, "approval not found");
     assert.equal(error.body.approvalId, "a1");
+    return true;
+  });
+});
+
+test("healthReady resolves typed readiness payload on 200 and throws ApiError with checks on 503", async () => {
+  const okPayload = {
+    status: "ok" as const,
+    checks: {
+      horizon: "ok" as const,
+      database: "ok" as const,
+      executionQueue: "disabled" as const,
+      scheduler: "ok" as const,
+    },
+  };
+  const { client: okClient } = setup(200, okPayload);
+  const ready = await okClient.healthReady();
+  assert.deepEqual(ready, okPayload);
+
+  const degradedPayload = {
+    status: "degraded",
+    checks: {
+      horizon: "ok",
+      database: "ok",
+      executionQueue: "fail",
+      scheduler: "disabled",
+    },
+  };
+  const { client: degradedClient } = setup(503, degradedPayload);
+  await assert.rejects(degradedClient.healthReady(), (error: unknown) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 503);
+    assert.deepEqual(error.body, degradedPayload);
     return true;
   });
 });

@@ -8,6 +8,7 @@ export async function readmeExample(): Promise<void> {
 
   // Health
   const health = await client.health();
+  const readiness = await client.healthReady();
 
   // Agents
   const { agents } = await client.listAgents();
@@ -65,5 +66,5 @@ export async function readmeExample(): Promise<void> {
     }
   }
 
-  void [health, agents, agentDetails, result, activity, currentPolicy, executions, queue, spending, attention];
+  void [health, readiness, agents, agentDetails, result, activity, currentPolicy, executions, queue, spending, attention];
 }
