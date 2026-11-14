@@ -60,7 +60,7 @@ export interface CommandTreeHandlers {
     reject: (args: string[]) => Promise<number> | number;
   };
   execution: {
-    list: () => Promise<number> | number;
+    list: (args: string[]) => Promise<number> | number;
     get: (args: string[]) => Promise<number> | number;
     retry: (args: string[]) => Promise<number> | number;
     cancel: (args: string[]) => Promise<number> | number;
@@ -191,7 +191,7 @@ export function buildCommandTree(handlers?: CommandTreeHandlers): CommandTree {
           name: "list",
           description: "List executions across all agents",
           args: [{ name: "limit", description: "Max executions to list" }],
-          run: handlers ? () => handlers.execution.list() : undefined,
+          run: handlers ? (args) => handlers.execution.list(args) : undefined,
         },
         get: {
           name: "get",
