@@ -278,9 +278,15 @@ async function cmdApprovalAction(approvalId: string, action: "approve" | "reject
   }
 }
 
-async function cmdExecutionList() {
+async function cmdExecutionList(limit: string) {
+  const n = Number(limit || "100");
+  if (!Number.isInteger(n) || n < 1 || n > 100) {
+    console.error("Usage: 4evergent execution list [limit]");
+    console.error("limit must be an integer between 1 and 100");
+    return 1;
+  }
   try {
-    const { body } = await request("/executions?limit=100");
+    const { body } = await request(`/executions?limit=${n}`);
     const all: any[] = body.executions ?? [];
     if (all.length === 0) {
       console.log("No executions found.");
@@ -871,7 +877,7 @@ export const dispatcherTree = buildCommandTree({
     reject: (args) => cmdApprovalAction(args[0] ?? "", "reject"),
   },
   execution: {
-    list: () => cmdExecutionList(),
+    list: (args) => cmdExecutionList(args[0] ?? ""),
     get: (args) => cmdExecutionGet(args[0] ?? ""),
     retry: (args) => cmdExecutionRetry(args[0] ?? ""),
     cancel: (args) => cmdExecutionCancel(args[0] ?? ""),

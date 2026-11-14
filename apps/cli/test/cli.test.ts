@@ -349,13 +349,33 @@ test("CLI: execution list → empty result", () => {
   assert.match(r.stdout, /No executions found/);
 });
 
-test("CLI: execution list → limit passed as query param", () => {
+test("CLI: execution list → default limit is 100", () => {
   const r = run(["execution", "list"], {
     responses: [
       { match: "/executions?limit=100", status: 200, body: { executions: [] } },
     ],
   });
   assert.equal(r.code, 0);
+  assert.equal(r.requests[0]?.path, "/executions?limit=100");
+});
+
+test("CLI: execution list → positional limit is honoured", () => {
+  const r = run(["execution", "list", "10"], {
+    responses: [
+      { match: "/executions?limit=10", status: 200, body: { executions: [] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.requests[0]?.path, "/executions?limit=10");
+});
+
+test("CLI: execution list → invalid limit exits 1 with usage", () => {
+  for (const value of ["abc", "0", "101", "1.5"]) {
+    const r = run(["execution", "list", value], { networkFail: true });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /limit must be an integer between 1 and 100/);
+    assert.equal(r.requests.length, 0);
+  }
 });
 
 test("CLI: execution list → API error → exit 1", () => {
