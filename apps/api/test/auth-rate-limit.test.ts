@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createApiServer } from "../src/index.js";
 import { createAuthModule } from "../src/auth.js";
+import { API_ERRORS } from "../src/error-codes.js";
 import { SlidingWindowRateLimiter, clientKey } from "../src/rate-limit.js";
 
 /* ============================ unit: limiter ============================ */
@@ -153,7 +154,7 @@ test("login: 401s until limit, then 429; over-limit sheds requests before scrypt
     // Past limit → 429 with Retry-After header and distinct error code.
     const blocked = await post(baseUrl, "/auth/login/email", { email: "rl@example.com", password: "wrong" });
     assert.equal(blocked.status, 429);
-    assert.equal(blocked.body.error, "rate_limited");
+    assert.deepEqual(blocked.body, { code: "RATE_LIMITED", error: "rate_limited" });
     assert.notEqual(blocked.body.error, last401!.body.error, "429 is distinguishable from 401");
     const retryAfter = blocked.res.headers.get("retry-after");
     assert.ok(retryAfter && Number(retryAfter) >= 1, "Retry-After is a positive integer of seconds");
@@ -165,6 +166,7 @@ test("login: 401s until limit, then 429; over-limit sheds requests before scrypt
       password: "password123",
     });
     assert.equal(blockedWithGoodPassword.status, 429, "over-limit source is locked out regardless of password");
+    assert.equal(blockedWithGoodPassword.body.code, "RATE_LIMITED");
 
     // After the window slides, the source recovers and legitimate sign-in succeeds.
     await sleep(1_100);
@@ -209,7 +211,7 @@ test("register and stellar challenge are rate limited too with endpoint budget i
     assert.equal((await post(baseUrl, "/auth/register", { email: "r2@example.com", password: "password123" })).status, 201);
     const regBlocked = await post(baseUrl, "/auth/register", { email: "r3@example.com", password: "password123" });
     assert.equal(regBlocked.status, 429);
-    assert.equal(regBlocked.body.error, "rate_limited");
+    assert.deepEqual(regBlocked.body, { code: "RATE_LIMITED", error: "rate_limited" });
 
     const ch1 = await post(baseUrl, "/auth/stellar/challenge", { publicKey: "NOT-A-KEY" });
     const ch2 = await post(baseUrl, "/auth/stellar/challenge", { publicKey: "NOT-A-KEY" });
@@ -217,6 +219,7 @@ test("register and stellar challenge are rate limited too with endpoint budget i
     assert.equal(ch2.status, 400);
     const chBlocked = await post(baseUrl, "/auth/stellar/challenge", { publicKey: "NOT-A-KEY" });
     assert.equal(chBlocked.status, 429, "challenge issuance is bounded");
+    assert.equal(chBlocked.body.code, "RATE_LIMITED");
 
     // Endpoint isolation: hitting limit on register/challenge doesn't block login
     const loginRes = await post(baseUrl, "/auth/login/email", { email: "r1@example.com", password: "password123" });
@@ -240,6 +243,25 @@ test("proxy trust: independent rate limit budgets per forwarded IP when trustPro
 
     // IP 2 is fresh and not blocked
     assert.equal((await post(baseUrl, "/auth/stellar/challenge", { publicKey: "BAD" }, ip2Header)).status, 400);
+  } finally {
+    await server.close();
+  }
+});
+
+test("error-code contract: API_ERRORS.RATE_LIMITED matches 429 response envelope and Retry-After header", async () => {
+  assert.equal(API_ERRORS.RATE_LIMITED.status, 429);
+  assert.equal(API_ERRORS.RATE_LIMITED.message, "rate_limited");
+
+  const { server, baseUrl } = await createAuthTestServer({
+    rateLimit: { maxAttempts: 1, windowSeconds: 30 },
+  });
+  try {
+    await post(baseUrl, "/auth/stellar/challenge", { publicKey: "BAD" });
+    const limited = await post(baseUrl, "/auth/stellar/challenge", { publicKey: "BAD" });
+    assert.equal(limited.status, API_ERRORS.RATE_LIMITED.status);
+    assert.equal(limited.body.code, "RATE_LIMITED");
+    assert.equal(limited.body.error, API_ERRORS.RATE_LIMITED.message);
+    assert.ok(Number(limited.res.headers.get("retry-after")) >= 1);
   } finally {
     await server.close();
   }

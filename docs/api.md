@@ -152,6 +152,7 @@ the approval fields (`approvalId`, `activityId`, `status`, `message`). Request b
 | `SCHEDULE_INVALID_TRANSITION` | 409 | The schedule status does not allow the requested pause, resume or disable. |
 | `EXECUTION_CONFLICT` | 409 | The execution changed concurrently. |
 | `APPROVAL_EXPIRED` | 410 | The approval passed its expiry before it was approved. |
+| `RATE_LIMITED` | 429 | Too many requests; retry after the `Retry-After` interval. |
 
 ---
 
