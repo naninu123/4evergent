@@ -1,4 +1,11 @@
-import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
+import {
+  compareStrictAmounts,
+  isNonPositiveDecimalString,
+  parseDecimalStroops,
+  parseStrictPolicyAmount,
+  type AgentIntent,
+  type PolicyDecision,
+} from "@4evergent/shared";
 import { type PolicyRules } from "./types.js";
 import { normalizePolicyRules } from "./validation.js";
 
@@ -99,12 +106,15 @@ export class PolicyEngine {
     // 0. Amount validation — reject zero, negative, or non-numeric
     const amountStr = extractAmount(intent);
     if (amountStr !== null) {
-      const amountNum = parseFloat(amountStr);
-      if (isNaN(amountNum)) {
+      const amountStroops = parseDecimalStroops(amountStr);
+      if (amountStroops === null) {
+        if (isNonPositiveDecimalString(amountStr)) {
+          return decide("deny", `Amount must be positive, got ${amountStr}`, "positiveAmount");
+        }
         return decide("deny", `Invalid amount: '${amountStr}' is not a valid number`, "invalidAmount");
       }
-      if (amountNum <= 0) {
-        return decide("deny", `Amount must be positive, got ${amountNum}`, "positiveAmount");
+      if (amountStroops <= 0n) {
+        return decide("deny", `Amount must be positive, got ${amountStr}`, "positiveAmount");
       }
     }
 
@@ -133,15 +143,8 @@ export class PolicyEngine {
           // Skip reservation but still check the limit (read-only).
           // Used by executeApproved to verify tightened policy without double-reserving.
           const spent = await this.getDailySpent(asset, agentId);
-          const limitNum = parseFloat(dailyLimit);
-          const remaining = limitNum - spent;
-          if (parseFloat(amountStr) > remaining) {
-            return decide(
-              "deny",
-              `Amount ${amountStr} ${asset} exceeds daily limit: spent ${spent.toFixed(7)}, limit ${limitNum}, remaining ${remaining.toFixed(7)}`,
-              "dailySpendingLimit"
-            );
-          }
+          const exceeded = checkRemainingDailyLimit(spent, dailyLimit, amountStr, asset);
+          if (exceeded !== null) return decide("deny", exceeded.reason, exceeded.rule);
         } else if (this.activityStore.reserveDailySpending) {
           const reserved = await this.activityStore.reserveDailySpending(
             agentId, asset, amountStr, dailyLimit
@@ -155,15 +158,8 @@ export class PolicyEngine {
           }
         } else {
           const spent = await this.getDailySpent(asset, agentId);
-          const limitNum = parseFloat(dailyLimit);
-          const remaining = limitNum - spent;
-          if (parseFloat(amountStr) > remaining) {
-            return decide(
-              "deny",
-              `Amount ${amountStr} ${asset} exceeds daily limit: spent ${spent.toFixed(7)}, limit ${limitNum}, remaining ${remaining.toFixed(7)}`,
-              "dailySpendingLimit"
-            );
-          }
+          const exceeded = checkRemainingDailyLimit(spent, dailyLimit, amountStr, asset);
+          if (exceeded !== null) return decide("deny", exceeded.reason, exceeded.rule);
         }
       }
     }
@@ -222,12 +218,34 @@ export class PolicyEngine {
       if (activityAsset !== asset) continue;
       const amount = extractAmount(activity.intent);
       if (amount !== null) {
-        total += parseFloat(amount);
+        const parsed = parseStrictPolicyAmount(amount);
+        if (parsed !== null) total += parsed;
       }
     }
 
     return total;
   }
+}
+
+function checkRemainingDailyLimit(
+  spent: number,
+  dailyLimit: string,
+  amountStr: string,
+  asset: string
+): { reason: string; rule: string } | null {
+  const limitNum = parseStrictPolicyAmount(dailyLimit);
+  const amountNum = parseStrictPolicyAmount(amountStr);
+  if (limitNum === null || amountNum === null) {
+    return { reason: `Invalid amount or daily limit for ${asset}`, rule: "invalidAmount" };
+  }
+  const remaining = limitNum - spent;
+  if (amountNum > remaining) {
+    return {
+      reason: `Amount ${amountStr} ${asset} exceeds daily limit: spent ${spent.toFixed(7)}, limit ${limitNum}, remaining ${remaining.toFixed(7)}`,
+      rule: "dailySpendingLimit",
+    };
+  }
+  return null;
 }
 
 function extractAmount(intent: AgentIntent): string | null {
@@ -251,10 +269,7 @@ function extractAsset(intent: AgentIntent): string {
 }
 
 function compareAmounts(a: string, b: string): number {
-  const pa = parseFloat(a);
-  const pb = parseFloat(b);
-  if (isNaN(pa) || isNaN(pb)) return 0;
-  return pa > pb ? 1 : pa < pb ? -1 : 0;
+  return compareStrictAmounts(a, b);
 }
 
 interface ActivityRecord {

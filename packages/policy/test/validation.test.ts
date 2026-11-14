@@ -84,3 +84,16 @@ test("normalizePolicyRules keeps the approval threshold aliases in sync", () => 
   assert.equal(normalizePolicyRules({ approvalThreshold: "7" }).requireHumanApprovalForAmountAbove, "7");
   assert.equal(normalizePolicyRules({ requireHumanApprovalForAmountAbove: "9" }).approvalThreshold, "9");
 });
+
+test("validatePolicyRules rejects malformed amount strings (trailing junk, scientific notation, >7 decimals)", () => {
+  for (const bad of ["10abc", "1e2", "+10", " 10", "010", "0.00000001"]) {
+    const maxRes = validatePolicyRules({ maxTxAmount: { XLM: bad } });
+    assert.equal(maxRes.valid, false, `maxTxAmount should reject ${JSON.stringify(bad)}`);
+    const dailyRes = validatePolicyRules({ dailySpendingLimit: { XLM: bad } });
+    assert.equal(dailyRes.valid, false, `dailySpendingLimit should reject ${JSON.stringify(bad)}`);
+    const thresholdRes = validatePolicyRules({ approvalThreshold: bad });
+    assert.equal(thresholdRes.valid, false, `approvalThreshold should reject ${JSON.stringify(bad)}`);
+    const aliasRes = validatePolicyRules({ requireHumanApprovalForAmountAbove: bad });
+    assert.equal(aliasRes.valid, false, `requireHumanApprovalForAmountAbove should reject ${JSON.stringify(bad)}`);
+  }
+});

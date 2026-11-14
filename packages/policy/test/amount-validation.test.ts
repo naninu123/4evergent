@@ -82,3 +82,23 @@ test("POLICY: daily spending within limit allowed", async () => {
   );
   assert.equal(result.result, "allow");
 });
+
+test("POLICY: malformed amount strings (trailing junk, scientific notation, whitespace, >7 decimals) rejected", async () => {
+  const engine = new PolicyEngine({ maxTxAmount: { XLM: "1000" }, requireHumanApprovalForAmountAbove: "1000" });
+  for (const bad of ["10abc", "1e2", "1E2", "+10", " 10", "10 ", "010", "10.", ".5", "0.00000001", "10.12.3"]) {
+    const result = await engine.evaluate(
+      { type: "payment", asset: "XLM", destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", amount: bad, reason: "test" },
+      "agent-a"
+    );
+    assert.equal(result.result, "deny", `expected ${JSON.stringify(bad)} to be rejected`);
+    assert.match(result.reason, /valid number/);
+  }
+
+  for (const good of ["0.0000001", "10", "10.50", "999.9999999"]) {
+    const result = await engine.evaluate(
+      { type: "payment", asset: "XLM", destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", amount: good, reason: "test" },
+      "agent-a"
+    );
+    assert.equal(result.result, "allow", `expected ${good} to be allowed`);
+  }
+});
