@@ -626,7 +626,7 @@ export async function createApiServer(options: ServerOptions) {
               createdAt: now,
               updatedAt: now,
             };
-            void executionQueue.enqueue(executionRecord);
+            await executionQueue.enqueue(executionRecord);
             return {
               status: "submitted",
               message: "schedule enqueued for execution",
@@ -773,21 +773,22 @@ export async function createApiServer(options: ServerOptions) {
       };
     }
 
-    // Phase 28U: USER AUTH routes (/auth/*) — handled before the auth gate.
-    // These are the login/session endpoints (register, login, challenge,
-    // verify, google start/callback, logout, me, config).
-    if (authModule) {
-      const handled = await authModule.handleRoutes(req, res, url, method);
-      if (handled) return;
-    }
+    try {
+      // Phase 28U: USER AUTH routes (/auth/*) — handled before the auth gate.
+      // These are the login/session endpoints (register, login, challenge,
+      // verify, google start/callback, logout, me, config).
+      if (authModule) {
+        const handled = await authModule.handleRoutes(req, res, url, method);
+        if (handled) return;
+      }
 
-    // Phase 28K-1: Authenticate and create request-scoped context
-    const resolution = await authenticateRequest(req, method);
-    const requestScopedCtx = principalToContext(resolution.principal);
-    ownerId = requestScopedCtx.ownerId;
+      // Phase 28K-1: Authenticate and create request-scoped context
+      const resolution = await authenticateRequest(req, method);
+      const requestScopedCtx = principalToContext(resolution.principal);
+      ownerId = requestScopedCtx.ownerId;
 
-    return runRequestIdContext(requestId, () => {
-    return als.run(requestScopedCtx, () => {
+      return await runRequestIdContext(requestId, () => {
+      return als.run(requestScopedCtx, async () => {
       // Health check is public
       if (method === "GET" && url === "/health") {
         return json(res, { status: "ok", signerAccountId: options.signer.getAccountId() });
@@ -913,8 +914,28 @@ export async function createApiServer(options: ServerOptions) {
       return handleCancelExecution(requestScopedCtx, req, res);
     }
     apiError(res, "NOT_FOUND");
-    }); // End als.run
-    }); // End runRequestIdContext
+      }); // End als.run
+      }); // End runRequestIdContext
+    } catch (err) {
+      let pathname = url;
+      try {
+        pathname = new URL(url, "http://localhost").pathname;
+      } catch {
+        // leave raw url if malformed
+      }
+      log("error", "unhandled request error", {
+        method,
+        path: pathname,
+        requestId,
+        ownerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      if (!res.headersSent) {
+        apiError(res, "INTERNAL_ERROR");
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    }
   });
 
   async function handleListAgents(ctx: RequestContext, req: any, res: any) {
@@ -1762,7 +1783,7 @@ export async function createApiServer(options: ServerOptions) {
         createdAt: now,
         updatedAt: now,
       };
-      void executionQueue.enqueue(executionRecord);
+      await executionQueue.enqueue(executionRecord);
     } else {
       // Fallback: Phase 8 fire-and-forget behavior
       // Phase 26A: Must also use sequence coordinator
