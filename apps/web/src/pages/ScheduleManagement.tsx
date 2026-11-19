@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { ConfirmationModal, Skeleton } from '../components';
 import type { ScheduleRecord, SubmitPaymentIntent } from '../types';
+import { cronExpressionError, stellarAddressError } from '../validation';
 
 interface ScheduleManagementProps {
   agentId: string;
@@ -78,8 +79,11 @@ export function ScheduleManagement({ agentId, onError }: ScheduleManagementProps
   const saveEdit = async (scheduleId: string) => {
     if (!editingId || editSaving) return;
     const trimmed = editExpression.trim();
-    if (!trimmed) {
-      setEditError('Schedule expression is required.');
+    // Same 5-field shape check the server runs, so a malformed expression is
+    // reported at the field and no request is sent.
+    const cronErr = cronExpressionError(trimmed);
+    if (cronErr) {
+      setEditError(cronErr);
       return;
     }
     setEditSaving(true);
@@ -166,7 +170,8 @@ export function ScheduleManagement({ agentId, onError }: ScheduleManagementProps
                           placeholder="0 0 * * *"
                           disabled={editSaving}
                           aria-label="Edit schedule expression"
-                          aria-describedby="schedule-edit-cron-help"
+                          aria-invalid={!!editError}
+                          aria-describedby={editError ? 'schedule-edit-cron-help schedule-edit-cron-error' : 'schedule-edit-cron-help'}
                         />
                       </label>
                       <small id="schedule-edit-cron-help">
@@ -186,7 +191,7 @@ export function ScheduleManagement({ agentId, onError }: ScheduleManagementProps
                           </button>
                         ))}
                       </div>
-                      {editError && <div className="error" role="alert">{editError}</div>}
+                      {editError && <div id="schedule-edit-cron-error" className="error field-error" role="alert">{editError}</div>}
                       <div className="form-actions">
                         <button
                           type="button"
@@ -266,11 +271,25 @@ function CreateScheduleForm({ agentId, onSuccess, onError }: {
   const [timezone, setTimezone] = useState('UTC');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<'issuer' | 'destination' | 'expression', string>>>({});
   const cronHelpId = useId();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (saving) return;
+
+    // Field-level checks mirror the server's rules (see ../validation).
+    const nextFieldErrors: Partial<Record<'issuer' | 'destination' | 'expression', string>> = {};
+    if (asset !== 'XLM') {
+      const issuerErr = stellarAddressError(issuer, 'Asset issuer');
+      if (issuerErr) nextFieldErrors.issuer = issuerErr;
+    }
+    const destErr = stellarAddressError(destination, 'Destination');
+    if (destErr) nextFieldErrors.destination = destErr;
+    const cronErr = cronExpressionError(scheduleExpression);
+    if (cronErr) nextFieldErrors.expression = cronErr;
+    setFieldErrors(nextFieldErrors);
+    if (Object.keys(nextFieldErrors).length > 0) return;
 
     setSaving(true);
     setError(null);
@@ -329,7 +348,10 @@ function CreateScheduleForm({ agentId, onSuccess, onError }: {
               placeholder="G... (asset issuer)"
               required
               aria-label="Asset Issuer (G...)"
+              aria-invalid={!!fieldErrors.issuer}
+              aria-describedby={fieldErrors.issuer ? 'schedule-issuer-error' : undefined}
             />
+            {fieldErrors.issuer && <span id="schedule-issuer-error" role="alert" className="field-error">{fieldErrors.issuer}</span>}
           </label>
         )}
         <label>
@@ -356,7 +378,10 @@ function CreateScheduleForm({ agentId, onSuccess, onError }: {
             placeholder="G..."
             required
             aria-label="Destination (G...)"
+            aria-invalid={!!fieldErrors.destination}
+            aria-describedby={fieldErrors.destination ? 'schedule-destination-error' : undefined}
           />
+          {fieldErrors.destination && <span id="schedule-destination-error" role="alert" className="field-error">{fieldErrors.destination}</span>}
         </label>
         <label>
           <span>Reason</span>
@@ -382,9 +407,11 @@ function CreateScheduleForm({ agentId, onSuccess, onError }: {
           onChange={(e) => setScheduleExpression(e.target.value)}
           placeholder="0 0 * * * (minute hour day-of-month month day-of-week)"
           required
-          aria-describedby={cronHelpId}
+          aria-invalid={!!fieldErrors.expression}
+          aria-describedby={fieldErrors.expression ? `${cronHelpId} schedule-expression-error` : cronHelpId}
         />
         <small id={cronHelpId}>5-field cron expression: minute (0-59), hour (0-23), day-of-month (1-31), month (1-12), day-of-week (0-6, 0=Sunday)</small>
+        {fieldErrors.expression && <span id="schedule-expression-error" role="alert" className="field-error">{fieldErrors.expression}</span>}
       </label>
 
       <div className="cron-presets">

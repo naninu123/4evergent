@@ -171,7 +171,7 @@ describe('ScheduleManagement', () => {
     fireEvent.change(amountInput, { target: { value: '25' } });
 
     const destInput = screen.getByPlaceholderText('G...');
-    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
+    fireEvent.change(destInput, { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
 
     const reasonInput = screen.getByPlaceholderText('Recurring payment');
     fireEvent.change(reasonInput, { target: { value: 'Monthly payment' } });
@@ -188,7 +188,7 @@ describe('ScheduleManagement', () => {
         intent: expect.objectContaining({
           type: 'payment',
           amount: '25',
-          destination: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
+          destination: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA',
           reason: 'Monthly payment',
         }),
         scheduleExpression: '0 0 1 * *',
@@ -325,7 +325,7 @@ describe('ScheduleManagement', () => {
     fireEvent.change(amountInput, { target: { value: '10' } });
 
     const destInput = screen.getByPlaceholderText('G...');
-    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
+    fireEvent.change(destInput, { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
 
     const reasonInput = screen.getByPlaceholderText('Recurring payment');
     fireEvent.change(reasonInput, { target: { value: 'Test' } });
@@ -359,13 +359,13 @@ describe('ScheduleManagement', () => {
     fireEvent.change(amountInput, { target: { value: '10' } });
 
     const destInput = screen.getByPlaceholderText('G...');
-    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
+    fireEvent.change(destInput, { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
 
     const reasonInput = screen.getByPlaceholderText('Recurring payment');
     fireEvent.change(reasonInput, { target: { value: 'Test' } });
 
     const exprInput = screen.getByPlaceholderText('0 0 * * * (minute hour day-of-month month day-of-week)');
-    fireEvent.change(exprInput, { target: { value: 'invalid' } });
+    fireEvent.change(exprInput, { target: { value: '0 0 * * *' } });
 
     const submitButton = screen.getByText('Create Schedule');
     fireEvent.click(submitButton);
@@ -398,7 +398,7 @@ describe('ScheduleManagement', () => {
     fireEvent.change(amountInput, { target: { value: '10' } });
 
     const destInput = screen.getByPlaceholderText('G...');
-    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
+    fireEvent.change(destInput, { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
 
     const reasonInput = screen.getByPlaceholderText('Recurring payment');
     fireEvent.change(reasonInput, { target: { value: 'Test' } });
@@ -614,7 +614,7 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
     fireEvent.click(editButton);
 
     const exprInput = screen.getByLabelText('Edit schedule expression') as HTMLInputElement;
-    fireEvent.change(exprInput, { target: { value: 'invalid expr' } });
+    fireEvent.change(exprInput, { target: { value: '0 0 * * 1' } });
 
     const saveButton = screen.getByText('Save');
     fireEvent.click(saveButton);
@@ -626,7 +626,7 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
     // Edit form should still be open
     expect(screen.getByLabelText('Edit schedule expression')).toBeInTheDocument();
     // Input value should be preserved
-    expect(exprInput.value).toBe('invalid expr');
+    expect(exprInput.value).toBe('0 0 * * 1');
   });
 
   test('Save is disabled while request is pending', async () => {
@@ -675,6 +675,79 @@ describe('ScheduleManagement - Schedule Expression Editing', () => {
       expect(screen.getByText(/Schedule expression is required/)).toBeInTheDocument();
     });
 
+    expect(mockUpdateSchedule).not.toHaveBeenCalled();
+  });
+});
+
+describe('ScheduleManagement field-level validation', () => {
+  const VALID = 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function openCreateForm(destination: string, expression: string) {
+    mockListSchedules.mockResolvedValue({ schedules: [] });
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('Create Schedule')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Create Schedule'));
+    fireEvent.change(await screen.findByPlaceholderText('10'), { target: { value: '10' } });
+    fireEvent.change(screen.getByPlaceholderText('G...'), { target: { value: destination } });
+    fireEvent.change(screen.getByPlaceholderText('Recurring payment'), { target: { value: 'Rent' } });
+    fireEvent.change(screen.getByPlaceholderText('0 0 * * * (minute hour day-of-month month day-of-week)'), { target: { value: expression } });
+    // Submit the form directly so the client-side check runs regardless of
+    // the browser's own constraint validation.
+    fireEvent.submit(screen.getByText('New Recurring Schedule').closest('form')!);
+  }
+
+  test('create: invalid destination is reported at the field', async () => {
+    await openCreateForm('GCCCC', '0 0 * * *');
+    expect(await screen.findByText(/Destination must be a Stellar account/)).toHaveAttribute('id', 'schedule-destination-error');
+    expect(screen.getByPlaceholderText('G...')).toHaveAttribute('aria-invalid', 'true');
+    expect(mockCreateSchedule).not.toHaveBeenCalled();
+  });
+
+  test('create: malformed cron is reported at the field before submit', async () => {
+    await openCreateForm(VALID, 'garbage');
+    expect(await screen.findByText(/must have 5 fields/)).toHaveAttribute('id', 'schedule-expression-error');
+    expect(mockCreateSchedule).not.toHaveBeenCalled();
+  });
+
+  test('create: out-of-range cron field is reported with the field name', async () => {
+    await openCreateForm(VALID, '0 25 * * *');
+    expect(await screen.findByText(/Invalid hour/)).toBeInTheDocument();
+    expect(mockCreateSchedule).not.toHaveBeenCalled();
+  });
+
+  test('create: malformed issuer for a non-native asset is reported at the field', async () => {
+    mockListSchedules.mockResolvedValue({ schedules: [] });
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('Create Schedule')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Create Schedule'));
+    fireEvent.change(await screen.findByLabelText('Asset'), { target: { value: 'USDC' } });
+    fireEvent.change(screen.getByLabelText('Asset Issuer (G...)'), { target: { value: 'GBAD' } });
+    fireEvent.change(screen.getByPlaceholderText('G...'), { target: { value: VALID } });
+    fireEvent.change(screen.getByPlaceholderText('0 0 * * * (minute hour day-of-month month day-of-week)'), { target: { value: '0 0 * * *' } });
+    fireEvent.submit(screen.getByText('New Recurring Schedule').closest('form')!);
+    expect(await screen.findByText(/Asset issuer must be a Stellar account/)).toHaveAttribute('id', 'schedule-issuer-error');
+    expect(mockCreateSchedule).not.toHaveBeenCalled();
+  });
+
+  test('create: valid values still submit', async () => {
+    mockCreateSchedule.mockResolvedValue({ schedule: defaultSchedule });
+    await openCreateForm(VALID, '0 0 1 * *');
+    await waitFor(() => expect(mockCreateSchedule).toHaveBeenCalledTimes(1));
+  });
+
+  test('edit: malformed cron is rejected at the field and not sent', async () => {
+    mockListSchedules.mockResolvedValue({ schedules: [defaultSchedule] });
+    render(<MemoryRouter><ScheduleManagement agentId="agent-1" /></MemoryRouter>);
+    fireEvent.click(await screen.findByText('Edit'));
+    const exprInput = screen.getByLabelText('Edit schedule expression');
+    fireEvent.change(exprInput, { target: { value: '0 0 * *' } });
+    fireEvent.click(screen.getByText('Save'));
+    expect(await screen.findByText(/must have 5 fields/)).toHaveAttribute('id', 'schedule-edit-cron-error');
+    expect(exprInput).toHaveAttribute('aria-invalid', 'true');
     expect(mockUpdateSchedule).not.toHaveBeenCalled();
   });
 });

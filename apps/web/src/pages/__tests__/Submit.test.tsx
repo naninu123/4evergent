@@ -55,7 +55,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Monthly payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -83,7 +83,7 @@ describe('Submit', () => {
 
     fireEvent.change(screen.getByLabelText('Intent Type'), { target: { value: 'trustline' } });
     fireEvent.change(screen.getByLabelText('Asset Code'), { target: { value: 'USDC' } });
-    fireEvent.change(screen.getByLabelText('Issuer (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRS' } });
+    fireEvent.change(screen.getByLabelText('Issuer (Stellar G...)'), { target: { value: 'GDI73WJ4SX7LOG3XZDJC3KCK6ED6E5NBYK2JUBQSPBCNNWEG3ZN7T75U' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Add trustline' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -110,7 +110,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQSS' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Monthly payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -131,7 +131,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRS' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GDI73WJ4SX7LOG3XZDJC3KCK6ED6E5NBYK2JUBQSPBCNNWEG3ZN7T75U' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Monthly payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -175,7 +175,7 @@ describe('Submit', () => {
 
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Monthly payment' } });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -217,7 +217,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Large payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -257,7 +257,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -288,7 +288,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -300,5 +300,79 @@ describe('Submit', () => {
     expect(alertBanner).toHaveClass('error-banner');
     expect(alertBanner).toHaveTextContent('Failed to fetch');
     expect(screen.queryByText('View activity')).not.toBeInTheDocument();
+  });
+});
+
+describe('Submit field-level validation', () => {
+  const VALID = 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListAllAgents.mockResolvedValue({
+      agents: [{ id: 'agent-1', displayName: 'Test Agent' }],
+      total: 1,
+      truncated: false,
+    });
+  });
+
+  async function fillPayment(destination: string) {
+    renderSubmit();
+    await waitFor(() => expect(screen.getByLabelText('Agent')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: destination } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Monthly payment' } });
+  }
+
+  test('invalid destination is reported at the field and nothing is sent', async () => {
+    await fillPayment('Gxxx');
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
+
+    const err = await screen.findByText(/Destination must be a Stellar account/);
+    expect(err).toHaveAttribute('id', 'destination-error');
+    expect(screen.getByLabelText('Destination (Stellar G...)')).toHaveAttribute('aria-invalid', 'true');
+    expect(mockSubmitPayment).not.toHaveBeenCalled();
+  });
+
+  test('empty "Other" asset code is rejected at the field', async () => {
+    await fillPayment(VALID);
+    fireEvent.change(screen.getByLabelText('Asset'), { target: { value: 'other' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
+
+    const err = await screen.findByText('Asset code is required.');
+    expect(err).toHaveAttribute('id', 'asset-code-error');
+    expect(mockSubmitPayment).not.toHaveBeenCalled();
+  });
+
+  test('malformed payment issuer is rejected at the field', async () => {
+    await fillPayment(VALID);
+    fireEvent.change(screen.getByLabelText('Asset'), { target: { value: 'USDC' } });
+    fireEvent.change(screen.getByLabelText('Issuer (Stellar G...)'), { target: { value: 'GSHORT' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
+
+    const err = await screen.findByText(/Issuer must be a Stellar account/);
+    expect(err).toHaveAttribute('id', 'issuer-error');
+    expect(mockSubmitPayment).not.toHaveBeenCalled();
+  });
+
+  test('trustline: missing issuer and too-long asset code are rejected at their fields', async () => {
+    renderSubmit();
+    await waitFor(() => expect(screen.getByLabelText('Agent')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('Intent Type'), { target: { value: 'trustline' } });
+    fireEvent.change(screen.getByLabelText('Asset Code'), { target: { value: 'ABCDEFGHIJKLM' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Add trustline' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
+
+    expect(await screen.findByText('Asset code must be 1-12 characters.')).toHaveAttribute('id', 'tl-asset-code-error');
+    expect(screen.getByText('Issuer is required.')).toHaveAttribute('id', 'tl-issuer-error');
+    expect(mockSubmitTrustline).not.toHaveBeenCalled();
+  });
+
+  test('valid values still submit', async () => {
+    mockSubmitPayment.mockResolvedValue({ activityId: 'act-1', status: 'executed' });
+    await fillPayment(VALID);
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
+
+    await waitFor(() => expect(mockSubmitPayment).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/must be a Stellar account/)).not.toBeInTheDocument();
   });
 });

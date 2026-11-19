@@ -564,3 +564,41 @@ describe('AgentDetail Regression', () => {
     });
   });
 });
+
+describe('AgentDetail policy editor destination chips', () => {
+  const VALID = 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAgent.mockResolvedValue(defaultAgent);
+    mockGetAgentSpending.mockResolvedValue(defaultSpendingResponse);
+    mockGetPolicy.mockResolvedValue(defaultPolicyResponse);
+  });
+
+  function renderPage() {
+    render(<MemoryRouter initialEntries={['/agents/agent-1']}><Routes><Route path="/agents/:agentId" element={<AgentDetail />} /></Routes></MemoryRouter>);
+  }
+
+  test('an invalid destination is not added and the reason is shown inline', async () => {
+    renderPage();
+    const input = await screen.findByLabelText('Add allowed destination');
+    fireEvent.change(input, { target: { value: 'not-an-address' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(await screen.findByText(/Destination must be a Stellar account/)).toHaveAttribute('id', 'policy-destination-error');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input).toHaveValue('not-an-address');
+    expect(screen.queryByLabelText('Remove allowed destination not-an-address')).not.toBeInTheDocument();
+  });
+
+  test('a valid destination is added as a chip', async () => {
+    renderPage();
+    const input = await screen.findByLabelText('Add allowed destination');
+    fireEvent.change(input, { target: { value: VALID } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(await screen.findByLabelText(`Remove allowed destination ${VALID}`)).toBeInTheDocument();
+    expect(screen.queryByText(/Destination must be a Stellar account/)).not.toBeInTheDocument();
+    expect(input).toHaveValue('');
+  });
+});
