@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { describeApiError } from '../apiErrors';
 import type { ActivityRecord } from '../types';
 import { StatusBadge, Skeleton, EmptyState, IntentAmount, PaginationFooter } from '../components';
 
@@ -21,7 +22,7 @@ export default function Activity() {
       setHasMore(r.hasMore);
       setNextOffset(offset + r.activity.length);
     } catch (e: any) {
-      setError(e.message);
+      setError(describeApiError(e, 'Failed to load activity'));
     }
   }, []);
 
