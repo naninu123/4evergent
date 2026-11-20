@@ -46,7 +46,7 @@ export type SupportedShell = (typeof SUPPORTED_SHELLS)[number];
 export interface CommandTreeHandlers {
   health: () => Promise<number> | number;
   agent: {
-    list: () => Promise<number> | number;
+    list: (args: string[]) => Promise<number> | number;
     get: (args: string[]) => Promise<number> | number;
     create: (args: string[]) => Promise<number> | number;
     pause: (args: string[]) => Promise<number> | number;
@@ -107,13 +107,15 @@ export function buildCommandTree(handlers?: CommandTreeHandlers): CommandTree {
       description: "Manage agents and their status",
       usage:
         "Usage: 4evergent agent <list|get|create|pause|resume|disable> [id]\n" +
+        "       4evergent agent list [--capability <capability>] [--limit <n>]\n" +
         "       4evergent agent disable <id> [--force|--yes]",
       reportUnknownSubcommand: true,
       subcommands: {
         list: {
           name: "list",
           description: "List your agents",
-          run: handlers ? () => handlers.agent.list() : undefined,
+          flags: ["--capability", "--limit"],
+          run: handlers ? (args) => handlers.agent.list(args) : undefined,
         },
         get: {
           name: "get",
@@ -407,7 +409,7 @@ export const COMMANDS_HELP = [
   "Commands:",
   "  --version, -v  Print the CLI package version",
   "  health",
-  "  agent list | get <id> | create <name> | pause <id> | resume <id> | disable <id> [--force|--yes]",
+  "  agent list [--capability <capability>] [--limit <n>] | get <id> | create <name> | pause <id> | resume <id> | disable <id> [--force|--yes]",
   "  approval list | approve <id> | reject <id>",
   "  execution list | get <id> | retry <id> | cancel <id>",
   "  policy get <agent-id> | update <agent-id>",

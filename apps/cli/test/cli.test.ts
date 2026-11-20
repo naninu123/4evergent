@@ -202,7 +202,55 @@ test("CLI: agent list → prints agents", () => {
   assert.match(r.stdout, /agent-1/);
   assert.match(r.stdout, /Test Agent/);
   assert.match(r.stdout, /active/);
+  // No flags: the request stays exactly the same as before filtering existed.
+  assert.equal(r.requests.length, 1);
+  assert.equal(r.requests[0].path, "/agents");
 });
+
+test("CLI: agent list --capability sends the exact capability query parameter", () => {
+  const r = run(["agent", "list", "--capability", "payment"], {
+    responses: [
+      { match: "/agents?capability=payment", status: 200, body: { agents: [{ id: "agent-1", displayName: "Test Agent", status: "active" }] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /agent-1/);
+  assert.equal(r.requests.length, 1);
+  assert.equal(r.requests[0].method, "GET");
+  assert.equal(r.requests[0].path, "/agents?capability=payment");
+});
+
+test("CLI: agent list --capability does not normalize case", () => {
+  const r = run(["agent", "list", "--capability", "Payment"], {
+    responses: [
+      { match: "/agents?capability=Payment", status: 200, body: { agents: [] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /No agents found/);
+  assert.equal(r.requests[0].path, "/agents?capability=Payment");
+});
+
+test("CLI: agent list --limit sends the limit query parameter", () => {
+  const r = run(["agent", "list", "--limit", "10"], {
+    responses: [
+      { match: "/agents?limit=10", status: 200, body: { agents: [{ id: "agent-1", displayName: "Test Agent", status: "active" }] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /agent-1/);
+  assert.equal(r.requests[0].path, "/agents?limit=10");
+});
+
+for (const invalidLimit of ["0", "201", "abc"]) {
+  test(`CLI: agent list --limit ${invalidLimit} exits 1 without calling the API`, () => {
+    const r = run(["agent", "list", "--limit", invalidLimit], { responses: [] });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /Invalid --limit/);
+    assert.match(r.stderr, /Usage: 4evergent agent list/);
+    assert.equal(r.requests.length, 0);
+  });
+}
 
 test("CLI: agent get → prints details", () => {
   const r = run(["agent", "get", "agent-1"], {

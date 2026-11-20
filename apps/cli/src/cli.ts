@@ -190,9 +190,60 @@ async function cmdHealth() {
   }
 }
 
-async function cmdAgentList() {
+// GET /agents clamps limit to 1-200 and defaults to 200, so the CLI validates
+// the same range and omits the parameter entirely when the flag is absent.
+const AGENT_LIST_MAX_LIMIT = 200;
+const AGENT_LIST_USAGE =
+  "Usage: 4evergent agent list [--capability <capability>] [--limit <n>]";
+
+interface AgentListOptions {
+  capability?: string;
+  limit?: number;
+}
+
+/** Parses agent list flags, returning an error message for usage errors. */
+function parseAgentListArgs(args: string[]): AgentListOptions | string {
+  const options: AgentListOptions = {};
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--capability") {
+      const value = args[++i];
+      if (value === undefined || value === "") {
+        return `--capability requires a value.\n${AGENT_LIST_USAGE}`;
+      }
+      // Passed through unchanged: the API matches capabilities exactly and
+      // case-sensitively, so the CLI must not normalize the value.
+      options.capability = value;
+    } else if (arg === "--limit") {
+      const raw = args[++i];
+      const parsed = raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : NaN;
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > AGENT_LIST_MAX_LIMIT) {
+        return `Invalid --limit '${raw ?? ""}': expected an integer between 1 and ${AGENT_LIST_MAX_LIMIT}.\n${AGENT_LIST_USAGE}`;
+      }
+      options.limit = parsed;
+    } else {
+      return `Unknown argument: ${arg}\n${AGENT_LIST_USAGE}`;
+    }
+  }
+
+  return options;
+}
+
+async function cmdAgentList(args: string[] = []) {
+  const parsed = parseAgentListArgs(args);
+  if (typeof parsed === "string") {
+    console.error(parsed);
+    return 1;
+  }
+
+  const query = new URLSearchParams();
+  if (parsed.capability !== undefined) query.set("capability", parsed.capability);
+  if (parsed.limit !== undefined) query.set("limit", String(parsed.limit));
+  const qs = query.toString();
+
   try {
-    const { body } = await request("/agents");
+    const { body } = await request(`/agents${qs ? `?${qs}` : ""}`);
     if (!body.agents || body.agents.length === 0) {
       console.log("No agents found.");
       return 0;
@@ -1040,7 +1091,7 @@ const argv = process.argv.slice(2);
 export const dispatcherTree = buildCommandTree({
   health: () => cmdHealth(),
   agent: {
-    list: () => cmdAgentList(),
+    list: (args) => cmdAgentList(args),
     get: (args) => cmdAgentGet(args[0] ?? ""),
     create: (args) => cmdAgentCreate(args),
     pause: (args) => cmdAgentStatus(args[0] ?? "", "paused"),
