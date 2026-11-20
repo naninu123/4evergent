@@ -485,6 +485,12 @@ Single schedule (owner-scoped). Returns `{ "schedule": ScheduleRecord }`.
 Update a schedule's `scheduleExpression` (re-validated against the
 schedule's timezone). `200` → `{ "schedule" }`.
 
+**Accepted fields:** `scheduleExpression` only. Any other fields — including
+unknown keys and plausible-but-wrong names such as `cronExpression` — cause a
+`400 VALIDATION_ERROR` naming `scheduleExpression` as the accepted field. An
+empty body `{}` is also rejected with `400 VALIDATION_ERROR`. This prevents
+silent no-ops: a `200` response always means the schedule changed.
+
 ### DELETE /agents/:id/schedules/:scheduleId
 
 Delete a schedule. `200` → `{ "deleted": true }`.

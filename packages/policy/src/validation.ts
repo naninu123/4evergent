@@ -1,6 +1,56 @@
 import type { PolicyRules } from "@4evergent/shared";
 import { parseStrictAmount } from "./amount.js";
 
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+const ED25519_PUBLIC_KEY_VERSION_BYTE = 6 << 3; // 'G'
+
+/**
+ * Validates a Stellar Ed25519 public key (StrKey `G...` address) including
+ * RFC 4648 base32 decoding, version byte, and CRC16-XModem checksum.
+ */
+function isValidStellarEd25519PublicKey(address: string): boolean {
+  if (address.length !== 56 || !address.startsWith("G")) {
+    return false;
+  }
+
+  const decoded = new Uint8Array(35);
+  let buffer = 0;
+  let bitsLeft = 0;
+  let outIndex = 0;
+
+  for (let i = 0; i < address.length; i++) {
+    const val = BASE32_ALPHABET.indexOf(address[i]!);
+    if (val === -1) {
+      return false;
+    }
+    buffer = (buffer << 5) | val;
+    bitsLeft += 5;
+    if (bitsLeft >= 8) {
+      bitsLeft -= 8;
+      decoded[outIndex++] = (buffer >>> bitsLeft) & 0xff;
+    }
+  }
+
+  if (outIndex !== 35 || decoded[0] !== ED25519_PUBLIC_KEY_VERSION_BYTE) {
+    return false;
+  }
+
+  let crc = 0x0000;
+  for (let i = 0; i < 33; i++) {
+    crc ^= decoded[i]! << 8;
+    for (let bit = 0; bit < 8; bit++) {
+      if ((crc & 0x8000) !== 0) {
+        crc = ((crc << 1) ^ 0x1021) & 0xffff;
+      } else {
+        crc = (crc << 1) & 0xffff;
+      }
+    }
+  }
+
+  const expectedChecksum = decoded[33]! | (decoded[34]! << 8);
+  return crc === expectedChecksum;
+}
+
 /**
  * Policy validation result.
  */
@@ -116,7 +166,7 @@ export function validatePolicyRules(rules: any): PolicyValidationResult {
     } else {
       for (let i = 0; i < rules.allowedDestinations.length; i++) {
         const dest = rules.allowedDestinations[i];
-        if (typeof dest !== "string" || !dest.startsWith("G") || dest.length !== 56) {
+        if (typeof dest !== "string" || !isValidStellarEd25519PublicKey(dest)) {
           errors.push(`allowedDestinations[${i}] must be a valid Stellar address (G...), got "${dest}"`);
         }
       }

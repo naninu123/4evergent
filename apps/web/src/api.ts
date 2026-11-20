@@ -197,17 +197,23 @@ export const api = {
       { method: 'POST', body: JSON.stringify({}) }
     ),
 
-  submitPayment: (agentId: string, intent: SubmitPaymentIntent) =>
-    request<IntentResponse>(`/agents/${encodeURIComponent(agentId)}/intents`, {
+  submitPayment: (agentId: string, intent: SubmitPaymentIntent, idempotencyKey?: string) => {
+    const trimmedKey = idempotencyKey?.trim();
+    return request<IntentResponse>(`/agents/${encodeURIComponent(agentId)}/intents`, {
       method: 'POST',
       body: JSON.stringify(intent),
-    }),
+      ...(trimmedKey ? { headers: { 'Idempotency-Key': trimmedKey } } : {}),
+    });
+  },
 
-  submitTrustline: (agentId: string, intent: SubmitTrustlineIntent) =>
-    request<IntentResponse>(`/agents/${encodeURIComponent(agentId)}/intents`, {
+  submitTrustline: (agentId: string, intent: SubmitTrustlineIntent, idempotencyKey?: string) => {
+    const trimmedKey = idempotencyKey?.trim();
+    return request<IntentResponse>(`/agents/${encodeURIComponent(agentId)}/intents`, {
       method: 'POST',
       body: JSON.stringify({ ...intent, type: 'trustline' }),
-    }),
+      ...(trimmedKey ? { headers: { 'Idempotency-Key': trimmedKey } } : {}),
+    });
+  },
 
   createAgent: (body: { displayName: string; description?: string; capabilities?: string[]; stellarAddress?: string }) =>
     request<{ agent: AgentRecord }>('/agents', {

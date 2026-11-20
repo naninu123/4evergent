@@ -44,14 +44,57 @@ test("allowedAssets must be an array of non-empty strings", () => {
   assert.ok(blankEntry.errors.includes("allowedAssets[0] must be a non-empty string"));
 });
 
-test("allowedDestinations must be an array of G addresses with the expected length", () => {
+test("allowedDestinations validates Stellar Ed25519 public keys with checksum", () => {
   const wrongType = validatePolicyRules({ allowedDestinations: "G" });
   assert.equal(wrongType.valid, false);
   assert.ok(wrongType.errors.includes("allowedDestinations must be an array"));
 
-  const invalidAddress = validatePolicyRules({ allowedDestinations: [`G${"A".repeat(54)}`] });
-  assert.equal(invalidAddress.valid, false);
-  assert.ok(invalidAddress.errors.some((error) => error.startsWith("allowedDestinations[0] must be a valid Stellar address")));
+  // Valid Stellar Ed25519 public key (valid base32 + CRC16-XModem checksum)
+  const validAddress = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7";
+  assert.deepEqual(validatePolicyRules({ allowedDestinations: [validAddress] }), {
+    valid: true,
+    errors: [],
+  });
+
+  // 56-character G... string with invalid checksum (last char altered)
+  const badChecksumAddress = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN2";
+  assert.equal(badChecksumAddress.length, 56);
+  const badChecksumResult = validatePolicyRules({ allowedDestinations: [badChecksumAddress] });
+  assert.equal(badChecksumResult.valid, false);
+  assert.ok(
+    badChecksumResult.errors.includes(
+      `allowedDestinations[0] must be a valid Stellar address (G...), got "${badChecksumAddress}"`,
+    ),
+  );
+
+  // Short string
+  const shortAddress = `G${"A".repeat(54)}`;
+  const shortResult = validatePolicyRules({ allowedDestinations: [shortAddress] });
+  assert.equal(shortResult.valid, false);
+  assert.ok(
+    shortResult.errors.includes(
+      `allowedDestinations[0] must be a valid Stellar address (G...), got "${shortAddress}"`,
+    ),
+  );
+
+  // Non-G string
+  const nonGAddress = "SBGWSG6BTNCKCOB3DIFBGCVMUPQFYPA2G4O34RMTB343OYPXU5DJDVMN";
+  const nonGResult = validatePolicyRules({ allowedDestinations: [nonGAddress] });
+  assert.equal(nonGResult.valid, false);
+  assert.ok(
+    nonGResult.errors.includes(
+      `allowedDestinations[0] must be a valid Stellar address (G...), got "${nonGAddress}"`,
+    ),
+  );
+
+  // Non-string entry
+  const nonStringResult = validatePolicyRules({ allowedDestinations: [12345] });
+  assert.equal(nonStringResult.valid, false);
+  assert.ok(
+    nonStringResult.errors.includes(
+      `allowedDestinations[0] must be a valid Stellar address (G...), got "12345"`,
+    ),
+  );
 });
 
 test("allowedContractIds rejects blank identifiers", () => {

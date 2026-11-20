@@ -20,7 +20,7 @@ import { ExecutionRecoveryService } from "./execution-recovery.js";
 import { ScheduleRecoveryService } from "./schedule-recovery.js";
 import { TransactionStatusReconciler, ApprovalRecoveryService, DEFAULT_SUBMITTED_MAX_AGE_MS } from "@4evergent/stellar";
 import { AccountSequenceCoordinator } from "./account-sequence-coordinator.js";
-import type { ExecutionRecord, ExecutionStatus } from "@4evergent/database";
+import type { ExecutionRecord, ExecutionStatus, ScheduleRecord } from "@4evergent/database";
 import type { ScheduleExecutionResult } from "./schedule-execution.js";
 import {
   InMemoryActivityStore,
@@ -1489,14 +1489,35 @@ export async function createApiServer(options: ServerOptions) {
     const schedule = await schedules.get(scheduleId);
     if (!schedule) return apiError(res, "SCHEDULE_NOT_FOUND");
 
-    const patch: any = {};
-    if ((body as any)?.scheduleExpression !== undefined) {
-      const { validateScheduleExpression } = await import("@4evergent/database");
-      const result = validateScheduleExpression((body as any)?.scheduleExpression, schedule.timezone);
-      if (!result.valid) return apiError(res, "VALIDATION_ERROR", { message: result.error });
-      patch.scheduleExpression = (body as any).scheduleExpression;
-      patch.nextRunAt = result.nextRunAt ?? schedule.nextRunAt;
+    // Reject any body that contains fields other than the one accepted field.
+    // A PATCH that sends {"cronExpression":"..."} or {"amount":"5"} looks like
+    // success from the caller's perspective but changes nothing — a silent lie.
+    // Unknown keys are named in the error so the caller can self-correct.
+    const ACCEPTED_FIELDS = new Set(["scheduleExpression"]);
+    const bodyKeys = body !== null && typeof body === "object" ? Object.keys(body) : [];
+    const unknownKeys = bodyKeys.filter((k) => !ACCEPTED_FIELDS.has(k));
+    if (unknownKeys.length > 0) {
+      return apiError(res, "VALIDATION_ERROR", {
+        message: `unknown field(s): ${unknownKeys.join(", ")}; accepted field: scheduleExpression`,
+      });
     }
+
+    // An empty body or a body with no recognized field carries no update — reject
+    // rather than bumping updatedAt for a no-op.
+    if (!bodyKeys.includes("scheduleExpression")) {
+      return apiError(res, "VALIDATION_ERROR", {
+        message: "body must include scheduleExpression; no other fields are accepted",
+      });
+    }
+
+    const { validateScheduleExpression } = await import("@4evergent/database");
+    const result = validateScheduleExpression((body as any).scheduleExpression, schedule.timezone);
+    if (!result.valid) return apiError(res, "VALIDATION_ERROR", { message: result.error });
+
+    const patch: Partial<ScheduleRecord> = {
+      scheduleExpression: (body as any).scheduleExpression,
+      nextRunAt: result.nextRunAt ?? schedule.nextRunAt,
+    };
 
     const updated = await schedules.update(scheduleId, patch);
     return json(res, { schedule: updated });
