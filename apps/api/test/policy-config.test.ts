@@ -75,7 +75,7 @@ test("POLICY: PUT /agents/:id/policy saves and returns custom policy", async () 
     const customPolicy: PolicyRules = {
       maxTxAmount: { XLM: "50" },
       dailySpendingLimit: { XLM: "200" },
-      allowedAssets: ["XLM", "USDC"],
+      allowedAssets: ["XLM", "USDC:GDI73WJ4SX7LOG3XZDJC3KCK6ED6E5NBYK2JUBQSPBCNNWEG3ZN7T75U"],
       allowedDestinations: [],
       allowedContractIds: [],
       txTypeRestrictions: {
@@ -99,7 +99,7 @@ test("POLICY: PUT /agents/:id/policy saves and returns custom policy", async () 
     assert.equal(putBody.agentId, agentId);
     assert.equal(putBody.policy.maxTxAmount.XLM, "50");
     assert.equal(putBody.policy.dailySpendingLimit.XLM, "200");
-    assert.deepEqual(putBody.policy.allowedAssets, ["XLM", "USDC"]);
+    assert.deepEqual(putBody.policy.allowedAssets, ["XLM", "USDC:GDI73WJ4SX7LOG3XZDJC3KCK6ED6E5NBYK2JUBQSPBCNNWEG3ZN7T75U"]);
 
     // GET should return the saved policy
     const getRes = await fetch(`${baseUrl}/agents/${agentId}/policy`);
@@ -362,7 +362,7 @@ test("POLICY: owner A cannot read owner B's policy", async () => {
     const policyB: PolicyRules = {
       maxTxAmount: { XLM: "999" },
       dailySpendingLimit: { XLM: "9999" },
-      allowedAssets: ["XLM", "USDC"],
+      allowedAssets: ["XLM", "USDC:GDI73WJ4SX7LOG3XZDJC3KCK6ED6E5NBYK2JUBQSPBCNNWEG3ZN7T75U"],
       allowedDestinations: [],
       allowedContractIds: [],
       txTypeRestrictions: { payment: true, trustline: true, contract_call: false, account_settings: false },
