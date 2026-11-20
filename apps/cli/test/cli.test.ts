@@ -1919,4 +1919,79 @@ test("CLI: --help documents --issuer option", () => {
   assert.match(r.stdout, /--issuer/);
 });
 
+test("CLI: policy update 400 VALIDATION_ERROR prints code and per-field details", () => {
+  const r = run(["policy", "update", "agent-1", "--rules", '{"maxTxAmount":{"XLM":0}}'], {
+    responses: [
+      {
+        match: "/agents/agent-1/policy",
+        status: 400,
+        body: {
+          code: "VALIDATION_ERROR",
+          error: "invalid policy",
+          details: [
+            "maxTxAmount.XLM must be a positive number, got 0",
+            "dailyLimit.XLM must be a positive number, got -5",
+          ],
+        },
+      },
+    ],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /HTTP 400 \[VALIDATION_ERROR\]: invalid policy/);
+  assert.match(r.stderr, /maxTxAmount\.XLM must be a positive number, got 0/);
+  assert.match(r.stderr, /dailyLimit\.XLM must be a positive number, got -5/);
+  assert.doesNotMatch(r.stderr, /\["maxTxAmount/);
+});
+
+test("CLI: agent status transition 409 prints code and current/requested status", () => {
+  const r = run(["agent", "resume", "agent-1"], {
+    responses: [
+      {
+        match: "/agents/agent-1/status",
+        status: 409,
+        body: {
+          code: "AGENT_STATUS_INVALID_TRANSITION",
+          error: "Agent status does not allow this transition",
+          details: {
+            currentStatus: "disabled",
+            requestedStatus: "active",
+          },
+        },
+      },
+    ],
+  });
+  assert.equal(r.code, 1);
+  assert.match(
+    r.stderr,
+    /HTTP 409 \[AGENT_STATUS_INVALID_TRANSITION\]: Agent status does not allow this transition/
+  );
+  assert.match(r.stderr, /currentStatus: disabled/);
+  assert.match(r.stderr, /requestedStatus: active/);
+  assert.doesNotMatch(r.stderr, /\{"currentStatus"/);
+});
+
+test("CLI: API error without server code does not invent one", () => {
+  const r = run(["agent", "get", "missing-agent"], {
+    responses: [
+      {
+        match: "/agents/missing-agent",
+        status: 404,
+        body: { error: "Agent not found" },
+      },
+    ],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /HTTP 404: Agent not found/);
+  assert.doesNotMatch(r.stderr, /HTTP 404 \[/);
+});
+
+test("CLI: API error timeout still exits with code 3", () => {
+  const r = run(["agent", "list"], {
+    hang: true,
+    env: { FOREGENT_API_TIMEOUT_MS: "100" },
+  });
+  assert.equal(r.code, 3);
+  assert.match(r.stderr, /Request timed out/);
+});
+
 

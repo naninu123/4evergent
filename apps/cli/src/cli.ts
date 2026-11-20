@@ -54,12 +54,63 @@ const API_TIMEOUT_MS = resolveApiTimeoutMs(process.env.FOREGENT_API_TIMEOUT_MS);
 // the documented timeout exit code without duplicating it in each catch block.
 let requestTimedOut = false;
 
+function formatApiErrorDetails(details: unknown): string {
+  if (details === undefined || details === null) return "";
+  if (typeof details === "string") {
+    const trimmed = details.trim();
+    return trimmed ? `\n  ${trimmed}` : "";
+  }
+  if (Array.isArray(details)) {
+    const lines = details
+      .filter((item): item is string | number | boolean =>
+        typeof item === "string" || typeof item === "number" || typeof item === "boolean"
+      )
+      .map((item) => String(item).trim())
+      .filter((line) => line.length > 0);
+    return lines.length > 0 ? lines.map((line) => `\n  - ${line}`).join("") : "";
+  }
+  if (typeof details === "object") {
+    const lines: string[] = [];
+    for (const [key, value] of Object.entries(details as Record<string, unknown>)) {
+      if (value === undefined || value === null) continue;
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        lines.push(`\n  ${key}: ${value}`);
+      } else if (Array.isArray(value)) {
+        const scalars = value
+          .filter((item): item is string | number | boolean =>
+            typeof item === "string" || typeof item === "number" || typeof item === "boolean"
+          )
+          .map((item) => String(item).trim())
+          .filter((item) => item.length > 0);
+        if (scalars.length > 0) {
+          lines.push(`\n  ${key}: ${scalars.join(", ")}`);
+        }
+      }
+    }
+    return lines.join("");
+  }
+  return "";
+}
+
 class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  public readonly code?: string;
+  public readonly details?: unknown;
+
+  constructor(public status: number, message: string, code?: string, details?: unknown) {
     // status 0 means "no HTTP response" (connection failure or timeout);
     // prefixing it with "HTTP 0:" would be misleading.
-    super(status === 0 ? message : `HTTP ${status}: ${message}`);
+    const normalizedCode = typeof code === "string" && code.trim() !== "" ? code.trim() : undefined;
+    const header =
+      status === 0
+        ? message
+        : normalizedCode
+          ? `HTTP ${status} [${normalizedCode}]: ${message}`
+          : `HTTP ${status}: ${message}`;
+    const formattedDetails = status === 0 ? "" : formatApiErrorDetails(details);
+    super(`${header}${formattedDetails}`);
     this.name = "ApiError";
+    this.code = normalizedCode;
+    this.details = details;
   }
 }
 
@@ -122,7 +173,8 @@ async function request(path: string, init: RequestInit = {}): Promise<ApiRespons
 
   if (!res.ok) {
     const msg = body?.error ?? body?.message ?? `Request failed`;
-    throw new ApiError(res.status, msg);
+    const code = typeof body?.code === "string" ? body.code : undefined;
+    throw new ApiError(res.status, msg, code, body?.details);
   }
 
   return { status: res.status, body };
