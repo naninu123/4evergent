@@ -1,132 +1,122 @@
-/**
- * Canonical asset identities for policy configuration, enforcement, and
- * reporting.
- *
- * Policy limits and allowlists are keyed by strings that clients can produce.
- * The same asset must resolve to the same key regardless of whether an intent
- * carries structured `assetDetails` or only an `asset` string.
- *
- * Canonical forms:
- * - native XLM: `XLM`
- * - issued payment asset: `CODE:ISSUER`
- * - trustline: `trustline:CODE:ISSUER`
- */
+import type { AgentIntent, PolicyRules } from "@4evergent/shared";
 
-import type { AgentIntent, AssetDetails } from "@4evergent/shared";
+/**
+ * Canonical policy asset identities (#367).
+ *
+ * One asset must produce one key everywhere policy is written, enforced, or
+ * reported:
+ *
+ * - native XLM: `XLM`
+ * - issued asset: `CODE:ISSUER` (for example `USDC:G...`)
+ * - trustline limit key: `trustline:CODE:ISSUER`
+ *
+ * `native` is kept as a legacy fallback *lookup* key in `maxTxAmount` and
+ * `dailySpendingLimit`; it is not an asset identity and is never matched by a
+ * `contract_call` or `account_settings` intent. Those intents carry no asset,
+ * so asset-scoped checks (including `allowedAssets`) do not apply to them.
+ */
+export const NATIVE_ASSET_IDENTITY = "XLM";
+export const NATIVE_FALLBACK_KEY = "native";
+const TRUSTLINE_PREFIX = "trustline:";
 
 const ASSET_CODE_PATTERN = /^[A-Za-z0-9_]{1,12}$/;
-const STELLAR_ACCOUNT_PATTERN = /^G[A-Z2-7]{55}$/;
-const CANONICAL_ASSET_PATTERN = /^([A-Za-z0-9_]{1,12}):(G[A-Z2-7]{55})$/;
-const CANONICAL_TRUSTLINE_PATTERN = /^trustline:([A-Za-z0-9_]{1,12}):(G[A-Z2-7]{55})$/;
+// StrKey-encoded ed25519 public key: version byte 'G' + 55 base32 characters.
+const ISSUER_PATTERN = /^G[A-Z2-7]{55}$/;
 
-export const NATIVE_ASSET_IDENTITY = "XLM";
-
-/** Build the canonical identity for an issued asset. */
-export function canonicalAssetIdentity(code: string, issuer: string): string {
+/** Build the canonical identity for an asset, or `null` if it is malformed. */
+export function canonicalAssetIdentity(
+  code: string | null | undefined,
+  issuer: string | null | undefined
+): string | null {
+  if (code === NATIVE_ASSET_IDENTITY) return NATIVE_ASSET_IDENTITY;
+  if (!code || !ASSET_CODE_PATTERN.test(code)) return null;
+  if (!issuer || !ISSUER_PATTERN.test(issuer)) return null;
   return `${code}:${issuer}`;
 }
 
-/** Build the canonical identity for a trustline. */
-export function canonicalTrustlineIdentity(code: string, issuer: string): string {
-  return `trustline:${code}:${issuer}`;
+/** True when `value` is `XLM` or a canonical `CODE:ISSUER` identity. */
+export function isCanonicalAssetIdentity(value: string): boolean {
+  if (value === NATIVE_ASSET_IDENTITY) return true;
+  const separator = value.indexOf(":");
+  if (separator <= 0) return false;
+  const code = value.slice(0, separator);
+  const issuer = value.slice(separator + 1);
+  return canonicalAssetIdentity(code, issuer) === value;
 }
 
-/** Whether `key` is `XLM` or `CODE:ISSUER` with a valid code and issuer. */
-export function isCanonicalAssetIdentity(key: string): boolean {
-  if (key === NATIVE_ASSET_IDENTITY) return true;
-  const match = CANONICAL_ASSET_PATTERN.exec(key);
-  return match !== null && ASSET_CODE_PATTERN.test(match[1]);
+/** True when `value` is a canonical `trustline:CODE:ISSUER` limit key. */
+export function isCanonicalTrustlineIdentity(value: string): boolean {
+  if (!value.startsWith(TRUSTLINE_PREFIX)) return false;
+  const asset = value.slice(TRUSTLINE_PREFIX.length);
+  if (asset === NATIVE_ASSET_IDENTITY) return false;
+  return isCanonicalAssetIdentity(asset);
 }
 
-/** Whether `key` is `trustline:CODE:ISSUER` with a valid code and issuer. */
-export function isCanonicalTrustlineIdentity(key: string): boolean {
-  return CANONICAL_TRUSTLINE_PATTERN.test(key);
+/** True for keys accepted in `maxTxAmount` / `dailySpendingLimit`. */
+export function isCanonicalPolicyLimitKey(value: string): boolean {
+  return (
+    value === NATIVE_FALLBACK_KEY ||
+    isCanonicalAssetIdentity(value) ||
+    isCanonicalTrustlineIdentity(value)
+  );
 }
 
-/** Whether `key` is a canonical `maxTxAmount` / `dailySpendingLimit` key. */
-export function isCanonicalPolicyLimitKey(key: string): boolean {
-  // `native` remains a legacy fallback lookup key for existing policies.
-  return key === "native" || isCanonicalAssetIdentity(key);
+/** True for entries accepted in `allowedAssets`. */
+export function isCanonicalAllowedAsset(value: string): boolean {
+  return isCanonicalAssetIdentity(value) || isCanonicalTrustlineIdentity(value);
 }
 
-/** Whether `key` is a canonical `allowedAssets` entry. */
-export function isCanonicalAllowedAsset(key: string): boolean {
-  return isCanonicalAssetIdentity(key) || isCanonicalTrustlineIdentity(key);
-}
-
-function fromAssetDetails(details: AssetDetails): string | null {
-  if (details.type === "native") return NATIVE_ASSET_IDENTITY;
-  const { code, issuer } = details;
-  if (typeof code !== "string" || typeof issuer !== "string") return null;
-  if (!ASSET_CODE_PATTERN.test(code) || !STELLAR_ACCOUNT_PATTERN.test(issuer)) return null;
-  return canonicalAssetIdentity(code, issuer);
-}
-
-function fromAssetString(
-  asset: string,
-  trustline: boolean,
-  policyAssetKeys: readonly string[],
+/**
+ * Resolve the canonical asset identity an intent is checked against.
+ *
+ * Returns `null` for intents that carry no asset (`contract_call`,
+ * `account_settings`) and for payments whose non-native asset cannot be
+ * identified. A payment without `assetDetails` can still be canonicalized:
+ * either its `asset` field is already `CODE:ISSUER`, or the policy names
+ * exactly one issuer for that bare code. Anything ambiguous is rejected by the
+ * engine rather than silently bypassing per-asset limits (#367).
+ */
+export function extractAssetIdentity(
+  intent: AgentIntent,
+  rules?: Partial<PolicyRules>
 ): string | null {
-  if (asset === "native" || asset === NATIVE_ASSET_IDENTITY) {
-    return trustline ? null : NATIVE_ASSET_IDENTITY;
-  }
-
-  const assetMatch = CANONICAL_ASSET_PATTERN.exec(asset);
-  if (assetMatch) {
-    return trustline
-      ? canonicalTrustlineIdentity(assetMatch[1], assetMatch[2])
-      : canonicalAssetIdentity(assetMatch[1], assetMatch[2]);
-  }
-
-  // A bare code has no issuer. Resolve it only when the policy names exactly
-  // one issuer for that code; otherwise the caller must deny the intent rather
-  // than let it bypass per-asset limits.
-  if (ASSET_CODE_PATTERN.test(asset)) {
-    const issuers = new Set<string>();
-    for (const key of policyAssetKeys) {
-      const match = CANONICAL_ASSET_PATTERN.exec(key);
-      if (match && match[1] === asset) issuers.add(match[2]);
+  if (intent.type === "payment") {
+    if (intent.assetDetails) {
+      return canonicalAssetIdentity(intent.assetDetails.code, intent.assetDetails.issuer);
     }
-    if (issuers.size === 1) {
-      const [issuer] = issuers;
-      return trustline
-        ? canonicalTrustlineIdentity(asset, issuer)
-        : canonicalAssetIdentity(asset, issuer);
-    }
+    if (intent.asset === NATIVE_ASSET_IDENTITY) return NATIVE_ASSET_IDENTITY;
+    if (isCanonicalAssetIdentity(intent.asset)) return intent.asset;
+    return resolveBareAssetCode(intent.asset, rules);
   }
-
+  if (intent.type === "trustline") {
+    const asset = canonicalAssetIdentity(intent.assetCode, intent.issuer);
+    return asset === null ? null : `${TRUSTLINE_PREFIX}${asset}`;
+  }
   return null;
 }
 
 /**
- * Resolve an intent to the canonical asset key used by policy limits.
- *
- * Returns `null` when the intent carries no asset (contract calls and account
- * settings), or when an asset-bearing intent cannot be resolved unambiguously.
+ * A bare non-native code has no issuer of its own. It is only resolvable when
+ * the policy names exactly one canonical issuer for that code; otherwise the
+ * payment is ambiguous and the engine denies it instead of letting it bypass
+ * the per-asset configuration.
  */
-export function extractAssetIdentity(
-  intent: AgentIntent,
-  policyAssetKeys: readonly string[] = [],
+function resolveBareAssetCode(
+  code: string,
+  rules?: Partial<PolicyRules>
 ): string | null {
-  if (intent.type === "contract_call" || intent.type === "account_settings") {
-    return null;
-  }
+  if (!rules || !ASSET_CODE_PATTERN.test(code)) return null;
 
-  const trustline = intent.type === "trustline";
+  const candidates = new Set<string>();
+  const collect = (key: string) => {
+    if (!key.startsWith(`${code}:`)) return;
+    const issuer = key.slice(code.length + 1);
+    if (canonicalAssetIdentity(code, issuer) === key) candidates.add(key);
+  };
 
-  if (intent.assetDetails) {
-    const identity = fromAssetDetails(intent.assetDetails);
-    if (!identity) return null;
-    return trustline && identity !== NATIVE_ASSET_IDENTITY
-      ? `trustline:${identity}`
-      : identity;
-  }
+  for (const key of Object.keys(rules.maxTxAmount ?? {})) collect(key);
+  for (const key of Object.keys(rules.dailySpendingLimit ?? {})) collect(key);
+  for (const key of rules.allowedAssets ?? []) collect(key);
 
-  if (typeof intent.asset === "string" && intent.asset.length > 0) {
-    return fromAssetString(intent.asset, trustline, policyAssetKeys);
-  }
-
-  // A payment with no asset fields is a native XLM payment (the shared type
-  // defaults `asset` to `XLM`). A trustline with no asset fields is invalid.
-  return trustline ? null : NATIVE_ASSET_IDENTITY;
+  return candidates.size === 1 ? [...candidates][0]! : null;
 }
