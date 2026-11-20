@@ -1,244 +1,173 @@
 import type { PolicyRules } from "@4evergent/shared";
-import { parseStrictAmount } from "./amount.js";
+import { DEFAULT_RULES } from "./types.js";
+import {
+  isCanonicalAllowedAsset,
+  isCanonicalPolicyLimitKey,
+} from "./asset-identity.js";
 
-const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-const ED25519_PUBLIC_KEY_VERSION_BYTE = 6 << 3; // 'G'
+const TX_TYPES = ["payment", "trustline", "contract_call", "account_settings"] as const;
 
-/**
- * Validates a Stellar Ed25519 public key (StrKey `G...` address) including
- * RFC 4648 base32 decoding, version byte, and CRC16-XModem checksum.
- */
-function isValidStellarEd25519PublicKey(address: string): boolean {
-  if (address.length !== 56 || !address.startsWith("G")) {
-    return false;
-  }
+type TxType = (typeof TX_TYPES)[number];
 
-  const decoded = new Uint8Array(35);
-  let buffer = 0;
-  let bitsLeft = 0;
-  let outIndex = 0;
-
-  for (let i = 0; i < address.length; i++) {
-    const val = BASE32_ALPHABET.indexOf(address[i]!);
-    if (val === -1) {
-      return false;
-    }
-    buffer = (buffer << 5) | val;
-    bitsLeft += 5;
-    if (bitsLeft >= 8) {
-      bitsLeft -= 8;
-      decoded[outIndex++] = (buffer >>> bitsLeft) & 0xff;
-    }
-  }
-
-  if (outIndex !== 35 || decoded[0] !== ED25519_PUBLIC_KEY_VERSION_BYTE) {
-    return false;
-  }
-
-  let crc = 0x0000;
-  for (let i = 0; i < 33; i++) {
-    crc ^= decoded[i]! << 8;
-    for (let bit = 0; bit < 8; bit++) {
-      if ((crc & 0x8000) !== 0) {
-        crc = ((crc << 1) ^ 0x1021) & 0xffff;
-      } else {
-        crc = (crc << 1) & 0xffff;
-      }
-    }
-  }
-
-  const expectedChecksum = decoded[33]! | (decoded[34]! << 8);
-  return crc === expectedChecksum;
-}
-
-/**
- * Policy validation result.
- */
 export interface PolicyValidationResult {
   valid: boolean;
   errors: string[];
+  rules: PolicyRules;
 }
 
-/**
- * Supported transaction types for txTypeRestrictions.
- */
-const SUPPORTED_TX_TYPES = ["payment", "trustline", "contract_call", "account_settings"];
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-/**
- * Validates a policy configuration object.
- *
- * Rules:
- * - Numeric values must be finite and non-negative
- * - maxTxAmount values must be positive where present
- * - dailySpendingLimit values must be positive where present
- * - approvalThreshold must be positive if provided
- * - allowedAssets must be non-empty strings
- * - allowedDestinations must be valid Stellar addresses (G...) if present
- * - allowedContractIds must be non-empty strings if present
- * - txTypeRestrictions keys must be supported transaction types
- * - txTypeRestrictions values must be booleans
- */
-export function validatePolicyRules(rules: any): PolicyValidationResult {
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function parseAmount(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function validateAmountMap(
+  field: "maxTxAmount" | "dailySpendingLimit",
+  value: unknown,
+  errors: string[],
+  allowZero: boolean,
+): Record<string, string> {
+  if (!isRecord(value)) {
+    errors.push(`${field} must be an object mapping asset identities to amounts`);
+    return {};
+  }
+
+  const result: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (!isCanonicalPolicyLimitKey(key)) {
+      errors.push(
+        `${field} key '${key}' is not a canonical asset identity; use 'XLM', 'CODE:ISSUER', or the legacy 'native' key`,
+      );
+      continue;
+    }
+    const amount = parseAmount(raw);
+    if (amount === null) {
+      errors.push(`${field}.${key} must be a finite number`);
+      continue;
+    }
+    if (allowZero ? amount < 0 : amount <= 0) {
+      errors.push(`${field}.${key} must be ${allowZero ? "zero or greater" : "greater than zero"}`);
+      continue;
+    }
+    result[key] = typeof raw === "string" ? raw : String(raw);
+  }
+  return result;
+}
+
+function validateAllowedAssets(value: unknown, errors: string[]): string[] {
+  if (!Array.isArray(value)) {
+    errors.push("allowedAssets must be an array of canonical asset identities");
+    return [];
+  }
+
+  const result: string[] = [];
+  for (const entry of value) {
+    if (!isNonEmptyString(entry)) {
+      errors.push("allowedAssets entries must be non-empty strings");
+      continue;
+    }
+    if (!isCanonicalAllowedAsset(entry)) {
+      errors.push(
+        `allowedAssets entry '${entry}' is not a canonical asset identity; use 'XLM', 'CODE:ISSUER', or 'trustline:CODE:ISSUER'`,
+      );
+      continue;
+    }
+    result.push(entry);
+  }
+  return result;
+}
+
+export function normalizePolicyRules(input: unknown): PolicyRules {
+  const raw = isRecord(input) ? input : {};
+  const rules: PolicyRules = {
+    ...DEFAULT_RULES,
+    maxTxAmount: { ...DEFAULT_RULES.maxTxAmount },
+    dailySpendingLimit: { ...DEFAULT_RULES.dailySpendingLimit },
+    allowedAssets: [...DEFAULT_RULES.allowedAssets],
+    allowedDestinations: [...DEFAULT_RULES.allowedDestinations],
+    allowedContractIds: [...DEFAULT_RULES.allowedContractIds],
+    txTypeRestrictions: { ...DEFAULT_RULES.txTypeRestrictions },
+  };
+
+  if (raw.maxTxAmount !== undefined) {
+    rules.maxTxAmount = validateAmountMap("maxTxAmount", raw.maxTxAmount, [], false);
+  }
+  if (raw.dailySpendingLimit !== undefined) {
+    rules.dailySpendingLimit = validateAmountMap(
+      "dailySpendingLimit",
+      raw.dailySpendingLimit,
+      [],
+      true,
+    );
+  }
+  if (raw.allowedAssets !== undefined) {
+    rules.allowedAssets = Array.isArray(raw.allowedAssets)
+      ? raw.allowedAssets.filter(isNonEmptyString)
+      : [];
+  }
+  if (Array.isArray(raw.allowedDestinations)) {
+    rules.allowedDestinations = raw.allowedDestinations.filter(isNonEmptyString);
+  }
+  if (Array.isArray(raw.allowedContractIds)) {
+    rules.allowedContractIds = raw.allowedContractIds.filter(isNonEmptyString);
+  }
+  if (isRecord(raw.txTypeRestrictions)) {
+    for (const type of TX_TYPES) {
+      const value = raw.txTypeRestrictions[type];
+      if (typeof value === "boolean") rules.txTypeRestrictions[type] = value;
+    }
+  }
+
+  if (raw.requireHumanApprovalForAmountAbove !== undefined) {
+    rules.requireHumanApprovalForAmountAbove = String(raw.requireHumanApprovalForAmountAbove);
+  } else if (raw.approvalThreshold !== undefined) {
+    rules.requireHumanApprovalForAmountAbove = String(raw.approvalThreshold);
+  }
+  if (raw.approvalThreshold !== undefined) {
+    rules.approvalThreshold = String(raw.approvalThreshold);
+  } else if (raw.requireHumanApprovalForAmountAbove !== undefined) {
+    rules.approvalThreshold = String(raw.requireHumanApprovalForAmountAbove);
+  }
+
+  return rules;
+}
+
+export function validatePolicyRules(input: unknown): PolicyValidationResult {
   const errors: string[] = [];
-
-  if (!rules || typeof rules !== "object" || Array.isArray(rules)) {
-    return { valid: false, errors: ["Policy must be an object"] };
+  if (!isRecord(input)) {
+    return { valid: false, errors: ["policy must be an object"], rules: { ...DEFAULT_RULES } };
   }
 
-  // Validate maxTxAmount
-  if (rules.maxTxAmount !== undefined) {
-    if (typeof rules.maxTxAmount !== "object" || rules.maxTxAmount === null) {
-      errors.push("maxTxAmount must be an object");
-    } else {
-      for (const [asset, amount] of Object.entries(rules.maxTxAmount)) {
-        if (typeof amount !== "string" && typeof amount !== "number") {
-          errors.push(`maxTxAmount.${asset} must be a string or number`);
-        } else {
-          const num = parseStrictAmount(amount);
-          if (num === null || num <= 0) {
-            errors.push(`maxTxAmount.${asset} must be a positive number, got ${amount}`);
-          }
-        }
-      }
-    }
+  const rules = normalizePolicyRules(input);
+
+  if (input.maxTxAmount !== undefined) {
+    const maxTxAmount = validateAmountMap("maxTxAmount", input.maxTxAmount, errors, false);
+    if (errors.length === 0) rules.maxTxAmount = maxTxAmount;
+  }
+  if (input.dailySpendingLimit !== undefined) {
+    const dailySpendingLimit = validateAmountMap(
+      "dailySpendingLimit",
+      input.dailySpendingLimit,
+      errors,
+      true,
+    );
+    if (errors.length === 0) rules.dailySpendingLimit = dailySpendingLimit;
+  }
+  if (input.allowedAssets !== undefined) {
+    const allowedAssets = validateAllowedAssets(input.allowedAssets, errors);
+    if (errors.length === 0) rules.allowedAssets = allowedAssets;
   }
 
-  // Validate dailySpendingLimit
-  if (rules.dailySpendingLimit !== undefined) {
-    if (typeof rules.dailySpendingLimit !== "object" || rules.dailySpendingLimit === null) {
-      errors.push("dailySpendingLimit must be an object");
-    } else {
-      for (const [asset, limit] of Object.entries(rules.dailySpendingLimit)) {
-        if (typeof limit !== "string" && typeof limit !== "number") {
-          errors.push(`dailySpendingLimit.${asset} must be a string or number`);
-        } else {
-          const num = parseStrictAmount(limit);
-          if (num === null || num < 0) {
-            errors.push(`dailySpendingLimit.${asset} must be a non-negative number, got ${limit}`);
-          }
-        }
-      }
-    }
-  }
-
-  // Validate approvalThreshold
-  if (rules.approvalThreshold !== undefined && rules.approvalThreshold !== null) {
-    if (typeof rules.approvalThreshold !== "string" && typeof rules.approvalThreshold !== "number") {
-      errors.push("approvalThreshold must be a string or number");
-    } else {
-      const num = parseStrictAmount(rules.approvalThreshold);
-      if (num === null || num < 0) {
-        errors.push(`approvalThreshold must be a non-negative number, got ${rules.approvalThreshold}`);
-      }
-    }
-  }
-
-  // Validate requireHumanApprovalForAmountAbove (alias for approvalThreshold)
-  if (rules.requireHumanApprovalForAmountAbove !== undefined && rules.requireHumanApprovalForAmountAbove !== null) {
-    if (typeof rules.requireHumanApprovalForAmountAbove !== "string" && typeof rules.requireHumanApprovalForAmountAbove !== "number") {
-      errors.push("requireHumanApprovalForAmountAbove must be a string or number");
-    } else {
-      const num = parseStrictAmount(rules.requireHumanApprovalForAmountAbove);
-      if (num === null || num < 0) {
-        errors.push(`requireHumanApprovalForAmountAbove must be a non-negative number, got ${rules.requireHumanApprovalForAmountAbove}`);
-      }
-    }
-  }
-
-  // Validate allowedAssets
-  if (rules.allowedAssets !== undefined) {
-    if (!Array.isArray(rules.allowedAssets)) {
-      errors.push("allowedAssets must be an array");
-    } else {
-      for (let i = 0; i < rules.allowedAssets.length; i++) {
-        const asset = rules.allowedAssets[i];
-        if (typeof asset !== "string" || asset.trim() === "") {
-          errors.push(`allowedAssets[${i}] must be a non-empty string`);
-        }
-      }
-    }
-  }
-
-  // Validate allowedDestinations
-  if (rules.allowedDestinations !== undefined) {
-    if (!Array.isArray(rules.allowedDestinations)) {
-      errors.push("allowedDestinations must be an array");
-    } else {
-      for (let i = 0; i < rules.allowedDestinations.length; i++) {
-        const dest = rules.allowedDestinations[i];
-        if (typeof dest !== "string" || !isValidStellarEd25519PublicKey(dest)) {
-          errors.push(`allowedDestinations[${i}] must be a valid Stellar address (G...), got "${dest}"`);
-        }
-      }
-    }
-  }
-
-  // Validate allowedContractIds
-  if (rules.allowedContractIds !== undefined) {
-    if (!Array.isArray(rules.allowedContractIds)) {
-      errors.push("allowedContractIds must be an array");
-    } else {
-      for (let i = 0; i < rules.allowedContractIds.length; i++) {
-        const id = rules.allowedContractIds[i];
-        if (typeof id !== "string" || id.trim() === "") {
-          errors.push(`allowedContractIds[${i}] must be a non-empty string`);
-        }
-      }
-    }
-  }
-
-  // Validate txTypeRestrictions
-  if (rules.txTypeRestrictions !== undefined) {
-    if (typeof rules.txTypeRestrictions !== "object" || rules.txTypeRestrictions === null) {
-      errors.push("txTypeRestrictions must be an object");
-    } else {
-      for (const [type, allowed] of Object.entries(rules.txTypeRestrictions)) {
-        if (!SUPPORTED_TX_TYPES.includes(type)) {
-          errors.push(`txTypeRestrictions.${type} is not a supported transaction type`);
-        }
-        if (typeof allowed !== "boolean") {
-          errors.push(`txTypeRestrictions.${type} must be a boolean`);
-        }
-      }
-    }
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-  };
-}
-
-/**
- * Normalizes a partial policy input into a complete PolicyRules object.
- *
- * Fills in DEFAULT_RULES for any missing fields.
- */
-export function normalizePolicyRules(partial: Partial<PolicyRules>): PolicyRules {
-  const DEFAULT_RULES: PolicyRules = {
-    maxTxAmount: { XLM: "100" },
-    dailySpendingLimit: { XLM: "500" },
-    allowedAssets: ["XLM"],
-    allowedDestinations: [],
-    allowedContractIds: [],
-    txTypeRestrictions: {
-      payment: true,
-      trustline: true,
-      contract_call: false,
-      account_settings: false,
-    },
-    approvalThreshold: "50",
-    requireHumanApprovalForAmountAbove: "50",
-  };
-
-  return {
-    maxTxAmount: { ...DEFAULT_RULES.maxTxAmount, ...partial.maxTxAmount },
-    dailySpendingLimit: { ...DEFAULT_RULES.dailySpendingLimit, ...partial.dailySpendingLimit },
-    allowedAssets: partial.allowedAssets ?? DEFAULT_RULES.allowedAssets,
-    allowedDestinations: partial.allowedDestinations ?? DEFAULT_RULES.allowedDestinations,
-    allowedContractIds: partial.allowedContractIds ?? DEFAULT_RULES.allowedContractIds,
-    txTypeRestrictions: { ...DEFAULT_RULES.txTypeRestrictions, ...partial.txTypeRestrictions },
-    approvalThreshold: partial.approvalThreshold ?? partial.requireHumanApprovalForAmountAbove ?? DEFAULT_RULES.approvalThreshold,
-    requireHumanApprovalForAmountAbove: partial.requireHumanApprovalForAmountAbove ?? partial.approvalThreshold ?? DEFAULT_RULES.requireHumanApprovalForAmountAbove,
-  };
+  return { valid: errors.length === 0, errors, rules };
 }
