@@ -10,7 +10,7 @@
  *   STELLAR_HORIZON_URL         — Horizon URL (default: https://horizon-testnet.stellar.org)
  *   PORT                        — Server port (default: 3000)
  *   HOST                        — Bind host (default: 127.0.0.1; set 0.0.0.0 in a container)
- *   DATABASE_PATH               — SQLite file path (optional, in-memory if unset)
+ *   DATABASE_PATH               — SQLite file path (optional, in-memory if unset; relative paths resolve from the repo root)
  *   DEV_OWNER_ID                — Development owner identity (default: "operator")
  *   RECONCILIATION_INTERVAL_MS  — Reconciliation worker interval in ms (default: 30000)
  *   EXECUTION_QUEUE_INTERVAL_MS — Execution queue worker interval in ms (default: 10000)
@@ -31,12 +31,48 @@
  *     traffic on a public interface by accident.
  */
 
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createApiServer } from "./index.js";
 import { TestnetLocalSigner, TESTNET_HORIZON_URL } from "@4evergent/stellar";
 import { DevAuthProvider, ProductionApiKeyAuthProvider } from "@4evergent/shared";
 import { createAuthModule } from "./auth.js";
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
+
+/**
+ * Stable anchor directory for relative DATABASE_PATH values: the repository root.
+ * Works identically whether executed from `apps/api/src/server.ts` (tsx) or
+ * `apps/api/dist/server.js` (node), regardless of process.cwd().
+ */
+export const DEFAULT_DATABASE_ANCHOR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  ".."
+);
+
+/**
+ * Resolve DATABASE_PATH against a stable anchor directory (defaults to the
+ * repository root) so relative paths like `./4evergent.db` map to the same
+ * SQLite file regardless of the process working directory.
+ *
+ * Returns `undefined` when unset/blank (preserving in-memory fallback),
+ * preserves `":memory:"` verbatim, and returns a normalized absolute path
+ * for both relative and absolute inputs.
+ */
+export function resolveDatabasePath(
+  rawPath: string | undefined,
+  anchorDir: string = DEFAULT_DATABASE_ANCHOR
+): string | undefined {
+  if (rawPath === undefined) return undefined;
+  const trimmed = rawPath.trim();
+  if (trimmed === "") return undefined;
+  if (trimmed === ":memory:") return ":memory:";
+  return path.isAbsolute(trimmed)
+    ? path.resolve(trimmed)
+    : path.resolve(anchorDir, trimmed);
+}
 
 function parseRetentionDays(value: string | undefined, fallback: number): number {
   if (value === undefined || value.trim() === "") return fallback;
@@ -260,7 +296,7 @@ async function main() {
   const horizonUrl = process.env.STELLAR_HORIZON_URL || TESTNET_HORIZON_URL;
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || "127.0.0.1";
-  const dbPath = process.env.DATABASE_PATH || undefined;
+  const dbPath = resolveDatabasePath(process.env.DATABASE_PATH);
   const devOwnerId = process.env.DEV_OWNER_ID || "operator";
 
   let workerIntervals: WorkerIntervals;

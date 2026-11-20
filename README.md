@@ -148,7 +148,7 @@ pnpm --filter @4evergent/api start
 node apps/api/dist/server.js
 ```
 
-The server starts on `http://localhost:3000`. See [docs/testnet.md](docs/testnet.md) for the full Testnet workflow including funding, simulation, and live submission (`LIVE_SUBMIT=1`).
+The server starts on `http://localhost:3000`. Relative `DATABASE_PATH` values (such as `./4evergent.db`) always resolve against the repository root regardless of working directory, and the resolved absolute path is printed in the startup log (if you previously created a database under `apps/api/4evergent.db`, move it to the repo root or set an absolute `DATABASE_PATH`). See [docs/testnet.md](docs/testnet.md) for the full Testnet workflow including funding, simulation, and live submission (`LIVE_SUBMIT=1`).
 For startup failures and connection troubleshooting, see [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ### Watch the API server (edit → reload)
