@@ -6,6 +6,7 @@ import type { AgentRecord, ActivityRecord, PolicyRules } from '../types';
 import { ScheduleManagement } from './ScheduleManagement';
 import { ExecutionList } from './ExecutionList';
 import { StatusBadge, Skeleton, EmptyState } from '../components';
+import { stellarAddressError } from '../validation';
 
 type SpendingData = Record<string, { used: number; limit: string; remaining: number }>;
 
@@ -249,13 +250,23 @@ function PolicySettings({ agentId }: { agentId: string }) {
     });
   };
 
-  const addListItem = (field: 'allowedAssets' | 'allowedDestinations' | 'allowedContractIds', value: string) => {
-    if (!value.trim()) return;
+  const [destinationError, setDestinationError] = useState<string | null>(null);
+
+  const addListItem = (field: 'allowedAssets' | 'allowedDestinations' | 'allowedContractIds', value: string): boolean => {
+    if (!value.trim()) return false;
+    if (field === 'allowedDestinations') {
+      // Only whitelist values that can match a real destination; the server
+      // would otherwise store an entry that never matches anything.
+      const err = stellarAddressError(value.trim(), 'Destination');
+      setDestinationError(err);
+      if (err) return false;
+    }
     setForm((prev) => {
       if (!prev) return prev;
       if (prev[field].includes(value.trim())) return prev;
       return { ...prev, [field]: [...prev[field], value.trim()] };
     });
+    return true;
   };
 
   const removeListItem = (field: 'allowedAssets' | 'allowedDestinations' | 'allowedContractIds', value: string) => {
@@ -398,15 +409,20 @@ function PolicySettings({ agentId }: { agentId: string }) {
             type="text"
             aria-label="Add allowed destination"
             placeholder="Add destination (G...)"
+            aria-invalid={!!destinationError}
+            aria-describedby={destinationError ? 'policy-destination-error' : undefined}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
-                addListItem('allowedDestinations', (e.target as HTMLInputElement).value);
-                (e.target as HTMLInputElement).value = '';
+                // Keep the typed value when it is rejected so it can be fixed.
+                if (addListItem('allowedDestinations', (e.target as HTMLInputElement).value)) {
+                  (e.target as HTMLInputElement).value = '';
+                }
               }
             }}
           />
         </div>
+        {destinationError && <div id="policy-destination-error" role="alert" className="field-error">{destinationError}</div>}
         <small>Optional whitelist of allowed destination addresses. Empty means any destination is allowed.</small>
       </div>
 

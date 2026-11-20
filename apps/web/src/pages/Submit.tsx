@@ -2,6 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import type { SubmitPaymentIntent } from '../types';
+import { assetCodeError, stellarAddressError } from '../validation';
+
+type FieldErrors = Partial<Record<'destination' | 'asset-code' | 'issuer' | 'tl-asset-code' | 'tl-issuer', string>>;
+
+function FieldError({ id, message }: { id: string; message?: string }) {
+  if (!message) return null;
+  return <div id={`${id}-error`} role="alert" className="field-error">{message}</div>;
+}
 
 interface SubmitResult {
   agentId: string;
@@ -38,6 +46,7 @@ export default function Submit() {
   const [error, setError] = useState<string | null>(null);
   const [failure, setFailure] = useState<SubmitFailure | null>(null);
   const [result, setResult] = useState<SubmitResult | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const attemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
 
   const getOrCreateIdempotencyKey = (agentId: string, intent: unknown): string => {
@@ -86,10 +95,32 @@ export default function Submit() {
     if (!selectedAgent) return setError('Select an agent');
     if (!reason || reason.length < 3) return setError('Reason must be at least 3 characters');
 
+    // Field-level checks mirror the server's rules (see ../validation) so an
+    // invalid value is reported at its field and no request is sent.
+    const nextFieldErrors: FieldErrors = {};
+    if (intentType === 'payment') {
+      const destErr = stellarAddressError(destination, 'Destination');
+      if (destErr) nextFieldErrors.destination = destErr;
+      if (assetCode === 'other') {
+        const codeErr = assetCodeError(otherAssetCode, 'Asset code');
+        if (codeErr) nextFieldErrors['asset-code'] = codeErr;
+      }
+      if (assetCode !== 'XLM' && issuer) {
+        const issuerErr = stellarAddressError(issuer, 'Issuer');
+        if (issuerErr) nextFieldErrors.issuer = issuerErr;
+      }
+    } else {
+      const codeErr = assetCodeError(trustlineAssetCode, 'Asset code');
+      if (codeErr) nextFieldErrors['tl-asset-code'] = codeErr;
+      const issuerErr = trustlineIssuer ? stellarAddressError(trustlineIssuer, 'Issuer') : 'Issuer is required.';
+      if (issuerErr) nextFieldErrors['tl-issuer'] = issuerErr;
+    }
+    setFieldErrors(nextFieldErrors);
+    if (Object.keys(nextFieldErrors).length > 0) return;
+
     setLoading(true);
     if (intentType === 'payment') {
       if (!amount || parseFloat(amount) <= 0) { setLoading(false); return setError('Amount must be positive'); }
-      if (!destination || !destination.startsWith('G')) { setLoading(false); return setError('Destination must be a valid Stellar account (G...)'); }
       const isNativeXLM = assetCode === 'XLM';
       const actualAssetCode = assetCode === 'other' ? otherAssetCode : assetCode;
       const intent: SubmitPaymentIntent = {
@@ -109,9 +140,7 @@ export default function Submit() {
         .catch((e: any) => handleFailure(selectedAgent, e))
         .finally(() => setLoading(false));
     } else {
-      if (!trustlineAssetCode || trustlineAssetCode.length < 1) { setLoading(false); return setError('Asset code is required'); }
       if (trustlineAssetCode === 'XLM') { setLoading(false); return setError('XLM is native — use payment instead'); }
-      if (!trustlineIssuer || !trustlineIssuer.startsWith('G')) { setLoading(false); return setError('Issuer must be a valid Stellar account (G...)'); }
       const intent = {
         type: 'trustline' as const,
         assetCode: trustlineAssetCode,
@@ -225,14 +254,16 @@ export default function Submit() {
             {assetCode === 'other' && (
               <div className="field">
                 <label htmlFor="asset-code">Asset Code</label>
-                <input id="asset-code" type="text" value={otherAssetCode} onChange={(e) => setOtherAssetCode(e.target.value)} placeholder="e.g. USDC" className="input" aria-describedby="asset-code-hint" />
+                <input id="asset-code" type="text" value={otherAssetCode} onChange={(e) => setOtherAssetCode(e.target.value)} placeholder="e.g. USDC" className="input" aria-invalid={!!fieldErrors['asset-code']} aria-describedby={fieldErrors['asset-code'] ? 'asset-code-hint asset-code-error' : 'asset-code-hint'} />
                 <div id="asset-code-hint" className="field-hint">Enter the asset code, e.g. USDC.</div>
+                <FieldError id="asset-code" message={fieldErrors['asset-code']} />
               </div>
             )}
             {assetCode !== 'XLM' && (
               <div className="field">
                 <label htmlFor="issuer">Issuer (Stellar G...)</label>
-                <input id="issuer" type="text" value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="G..." className="input" />
+                <input id="issuer" type="text" value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="G..." className="input" aria-invalid={!!fieldErrors.issuer} aria-describedby={fieldErrors.issuer ? 'issuer-error' : undefined} />
+                <FieldError id="issuer" message={fieldErrors.issuer} />
               </div>
             )}
             <div className="field">
@@ -241,18 +272,21 @@ export default function Submit() {
             </div>
             <div className="field">
               <label htmlFor="destination">Destination (Stellar G...)</label>
-              <input id="destination" type="text" value={destination} onChange={(e) => setDestination(e.target.value)} className="input" />
+              <input id="destination" type="text" value={destination} onChange={(e) => setDestination(e.target.value)} className="input" aria-invalid={!!fieldErrors.destination} aria-describedby={fieldErrors.destination ? 'destination-error' : undefined} />
+              <FieldError id="destination" message={fieldErrors.destination} />
             </div>
           </>
         ) : (
           <>
             <div className="field">
               <label htmlFor="tl-asset-code">Asset Code</label>
-              <input id="tl-asset-code" type="text" value={trustlineAssetCode} onChange={(e) => setTrustlineAssetCode(e.target.value)} placeholder="e.g. USDC" className="input" />
+              <input id="tl-asset-code" type="text" value={trustlineAssetCode} onChange={(e) => setTrustlineAssetCode(e.target.value)} placeholder="e.g. USDC" className="input" aria-invalid={!!fieldErrors['tl-asset-code']} aria-describedby={fieldErrors['tl-asset-code'] ? 'tl-asset-code-error' : undefined} />
+              <FieldError id="tl-asset-code" message={fieldErrors['tl-asset-code']} />
             </div>
             <div className="field">
               <label htmlFor="tl-issuer">Issuer (Stellar G...)</label>
-              <input id="tl-issuer" type="text" value={trustlineIssuer} onChange={(e) => setTrustlineIssuer(e.target.value)} placeholder="G..." className="input" />
+              <input id="tl-issuer" type="text" value={trustlineIssuer} onChange={(e) => setTrustlineIssuer(e.target.value)} placeholder="G..." className="input" aria-invalid={!!fieldErrors['tl-issuer']} aria-describedby={fieldErrors['tl-issuer'] ? 'tl-issuer-error' : undefined} />
+              <FieldError id="tl-issuer" message={fieldErrors['tl-issuer']} />
             </div>
             <div className="field">
               <label htmlFor="tl-limit">Trustline Limit (optional)</label>
