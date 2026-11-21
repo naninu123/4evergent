@@ -921,6 +921,7 @@ export async function createApiServer(options: ServerOptions) {
       };
     }
 
+    try {
     // Phase 28U: USER AUTH routes (/auth/*) — handled before the auth gate.
     // These are the login/session endpoints (register, login, challenge,
     // verify, google start/callback, logout, me, config).
@@ -934,8 +935,8 @@ export async function createApiServer(options: ServerOptions) {
     const requestScopedCtx = principalToContext(resolution.principal);
     ownerId = requestScopedCtx.ownerId;
 
-    return runRequestIdContext(requestId, () => {
-    return als.run(requestScopedCtx, () => {
+    await runRequestIdContext(requestId, () =>
+      als.run(requestScopedCtx, async () => {
       // Health check is public
       if (method === "GET" && url === "/health") {
         const schemaVersion = options.dbPath
@@ -1069,8 +1070,29 @@ export async function createApiServer(options: ServerOptions) {
       return handleCancelExecution(requestScopedCtx, req, res);
     }
     apiError(res, "NOT_FOUND");
-    }); // End als.run
-    }); // End runRequestIdContext
+      }), // End als.run
+    ); // End runRequestIdContext
+    } catch (err) {
+      let pathname = url;
+      try {
+        pathname = new URL(url, "http://localhost").pathname;
+      } catch {
+        // keep raw url
+      }
+      log("error", "unhandled request error", {
+        method,
+        path: pathname,
+        requestId,
+        ownerId,
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      if (!res.headersSent && !res.writableEnded) {
+        apiError(res, "INTERNAL_ERROR");
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    }
   });
 
   async function handleListAgents(ctx: RequestContext, req: any, res: any) {
@@ -2036,7 +2058,7 @@ export async function createApiServer(options: ServerOptions) {
         createdAt: now,
         updatedAt: now,
       };
-      void executionQueue.enqueue(executionRecord);
+      await executionQueue.enqueue(executionRecord);
     } else {
       // Fallback: Phase 8 fire-and-forget behavior
       // Phase 26A: Must also use sequence coordinator

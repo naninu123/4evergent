@@ -28,6 +28,7 @@ export const API_ERRORS = {
   EXECUTION_CONFLICT: { status: 409, message: "Execution state changed; please refresh", description: "The execution changed concurrently." },
   APPROVAL_CONFLICT: { status: 409, message: "Approval state changed; please refresh", description: "The approval was decided concurrently by another request." },
   APPROVAL_EXPIRED: { status: 410, message: "Approval expired", description: "The approval passed its expiry before it was approved." },
+  INTERNAL_ERROR: { status: 500, message: "internal_error", description: "An unexpected internal error occurred." },
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERRORS;
