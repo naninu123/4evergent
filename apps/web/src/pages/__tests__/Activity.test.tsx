@@ -113,4 +113,22 @@ describe('Activity page', () => {
     expect(screen.getByText('submitted')).toBeInTheDocument();
     expect(screen.getByText('payment')).toBeInTheDocument();
   });
+
+  it('shows friendly actionable message on network failure', async () => {
+    mockListActivity.mockRejectedValue(new TypeError('Failed to fetch'));
+    render(<MemoryRouter><Activity /></MemoryRouter>);
+    await waitFor(() => {
+      expect(screen.getByText('Could not reach the API — check your connection and that the API is running.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Failed to fetch')).not.toBeInTheDocument();
+  });
+
+  it('shows friendly message naming status on bare 500 API error', async () => {
+    mockListActivity.mockRejectedValue(new Error('API error 500'));
+    render(<MemoryRouter><Activity /></MemoryRouter>);
+    await waitFor(() => {
+      expect(screen.getByText(/HTTP 500/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText('API error 500')).not.toBeInTheDocument();
+  });
 });

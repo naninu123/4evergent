@@ -299,7 +299,9 @@ describe('Submit', () => {
 
     const alertBanner = screen.getByRole('alert');
     expect(alertBanner).toHaveClass('error-banner');
-    expect(alertBanner).toHaveTextContent('Failed to fetch');
+    expect(alertBanner).toHaveTextContent(
+      'Could not reach the API — check your connection and that the API is running.'
+    );
     expect(screen.queryByText('View activity')).not.toBeInTheDocument();
   });
 
@@ -471,7 +473,9 @@ describe('Submit', () => {
     // 1st attempt fails
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('Failed to fetch');
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Could not reach the API — check your connection and that the API is running.'
+      );
     });
 
     // Edit amount -> different intent -> must get a fresh key
@@ -493,5 +497,47 @@ describe('Submit', () => {
     expect(mockSubmitPayment.mock.calls[2]![2]).toBe('99999999-9999-4999-8999-999999999999');
 
     uuidSpy.mockRestore();
+  });
+
+  test('shows friendly actionable message on network failure during submit', async () => {
+    mockSubmitPayment.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    renderSubmit();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Agent')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Monthly payment' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Could not reach the API — check your connection and that the API is running.'
+      );
+    });
+    expect(screen.queryByText('Failed to fetch')).not.toBeInTheDocument();
+  });
+
+  test('shows friendly message naming status on bare 500 API error during submit', async () => {
+    mockSubmitPayment.mockRejectedValue(new ApiError(500, 'API error 500'));
+
+    renderSubmit();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Agent')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Monthly payment' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/HTTP 500/);
+    });
+    expect(screen.queryByText('API error 500')).not.toBeInTheDocument();
   });
 });

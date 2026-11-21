@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, ApiError } from '../api';
+import { describeApiError } from '../apiErrors';
 import type { SubmitPaymentIntent } from '../types';
 
 interface SubmitResult {
@@ -58,7 +59,7 @@ export default function Submit() {
         setAgents(a.agents.map((x) => ({ id: x.id, displayName: x.displayName })));
         if (a.agents.length > 0) setSelectedAgent(a.agents[0]!.id);
       })
-      .catch((e: any) => setError(e.message));
+      .catch((e: any) => setError(describeApiError(e, 'Failed to load agents')));
   }, []);
 
   const handleFailure = (agentId: string, e: any) => {
@@ -66,7 +67,7 @@ export default function Submit() {
       const body = e.responseBody as any;
       if (body.activityId) {
         setFailure({
-          message: e.message,
+          message: describeApiError(e, 'Failed to submit intent'),
           agentId,
           activityId: body.activityId,
           policyDecision: body.policyDecision,
@@ -74,7 +75,7 @@ export default function Submit() {
         return;
       }
     }
-    setError(e?.message ?? 'Failed to submit intent');
+    setError(describeApiError(e, 'Failed to submit intent'));
   };
 
   const handleSubmit = (e: React.FormEvent) => {

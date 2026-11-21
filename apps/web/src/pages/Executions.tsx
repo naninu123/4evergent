@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { describeApiError } from '../apiErrors';
 import type { ExecutionRecord, QueueSummary, ExecutionStatus } from '../types';
 import { EmptyState, PaginationFooter, Skeleton } from '../components';
 
@@ -64,7 +65,7 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
       setHasMore(r.hasMore);
       setNextOffset(offset + r.executions.length);
     } catch (e: any) {
-      setError(e.message ?? 'Failed to load executions');
+      setError(describeApiError(e, 'Failed to load executions'));
     }
   }, []);
 
@@ -80,7 +81,7 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
       setNextOffset(r.executions.length);
       setQueue(q);
     } catch (e: any) {
-      setError(e.message ?? 'Failed to load executions');
+      setError(describeApiError(e, 'Failed to load executions'));
     } finally {
       setLoading(false);
     }

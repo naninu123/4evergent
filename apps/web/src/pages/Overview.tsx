@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { describeApiError } from '../apiErrors';
 import { Card, Skeleton, EmptyState, StatusBadge, Section } from '../components';
 import type { AgentRecord, ActivityRecord, ApprovalRecord } from '../types';
 
@@ -48,10 +49,10 @@ export default function Overview() {
           const att = await api.getOverviewAttention();
           if (!cancelled) setAttention(att);
         } catch (e: any) {
-          if (!cancelled) setAttentionError(e.message ?? 'Failed to load operational status');
+          if (!cancelled) setAttentionError(describeApiError(e, 'Failed to load operational status'));
         }
       } catch (e: any) {
-        if (!cancelled) setError(e.message ?? 'Failed to fetch');
+        if (!cancelled) setError(describeApiError(e, 'Failed to load overview'));
       } finally {
         if (!cancelled) setLoading(false);
       }

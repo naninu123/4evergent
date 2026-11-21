@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../api';
+import { describeApiError } from '../apiErrors';
 import type { ExecutionRecord, ExecutionStatus } from '../types';
 import { PaginationFooter, Skeleton } from '../components';
 
@@ -53,8 +54,9 @@ export function ExecutionList({ agentId: propAgentId, onError, onExecutionClick 
       setHasMore(r.hasMore);
       setNextOffset(offset + r.executions.length);
     } catch (e: any) {
-      setError(e.message);
-      onError?.(e.message);
+      const msg = describeApiError(e, 'Failed to load executions');
+      setError(msg);
+      onError?.(msg);
     }
   }, [agentId, onError]);
 

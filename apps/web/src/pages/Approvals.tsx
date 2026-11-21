@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { describeApiError } from '../apiErrors';
 import type { ApprovalRecord } from '../types';
 import { ConfirmationModal, Skeleton, EmptyState, PaginationFooter } from '../components';
 
@@ -24,7 +25,7 @@ export default function Approvals() {
       setTotal(r.total ?? null);
       setNextOffset(offset + r.approvals.length);
     } catch (e: any) {
-      setError(e.message);
+      setError(describeApiError(e, 'Failed to load approvals'));
     }
   }, []);
 
