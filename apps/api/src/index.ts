@@ -39,6 +39,7 @@ import {
   SQLitePolicyConfigStore,
   assertNoSecrets,
   validateApprovalTransition,
+  closeSharedConnection,
   ResourceAuthorizationService,
   classifyPipelineOutcome,
   classifyError,
@@ -2202,7 +2203,7 @@ export async function createApiServer(options: ServerOptions) {
     // fails closed when HOST is non-loopback and API_KEYS is unset.
     listen: (port: number, host: string = "127.0.0.1") =>
       new Promise<void>((resolve) => server.listen(port, host, resolve)),
-    close: (options?: { drainTimeoutMs?: number }) =>
+    close: (closeOptions?: { drainTimeoutMs?: number }) =>
       new Promise<void>((resolve, reject) => {
         // 1. Stop accepting new requests and prevent workers from claiming new work.
         if (scheduler) {
@@ -2247,7 +2248,24 @@ export async function createApiServer(options: ServerOptions) {
           resolve();
         };
 
-        const drainTimeout = options?.drainTimeoutMs;
+        const closeDatabase = () => {
+          try {
+            store.close?.();
+            approvals.close?.();
+            schedules.close?.();
+            agentStore.close?.();
+            policyConfigStore.close?.();
+            executionStore.close?.();
+            authModule?.close?.();
+            if (options.dbPath) {
+              closeSharedConnection(options.dbPath, true);
+            }
+          } catch (err) {
+            console.error("[database] error closing database:", err);
+          }
+        };
+
+        const drainTimeout = closeOptions?.drainTimeoutMs;
         if (drainTimeout !== undefined && drainTimeout > 0) {
           drainTimer = setTimeout(() => {
             if (completed) return;
@@ -2257,6 +2275,7 @@ export async function createApiServer(options: ServerOptions) {
             // 3. Force-close remaining connections and terminate outstanding work after timeout expires.
             server.closeAllConnections?.();
             executionQueue?.abortInFlight();
+            closeDatabase();
             const err = new Error(`Shutdown timeout of ${drainTimeout}ms exceeded — forcing exit`);
             err.name = "ShutdownTimeoutError";
             reject(err);
@@ -2271,10 +2290,12 @@ export async function createApiServer(options: ServerOptions) {
 
         Promise.all([httpClose, queueDrain])
           .then(() => {
+            closeDatabase();
             finish();
           })
           .catch((err) => {
             if (drainTimer) clearTimeout(drainTimer);
+            closeDatabase();
             reject(err);
           });
       }),

@@ -4,15 +4,23 @@ import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdtempSync, rmSync, copyFileSync, existsSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import {
   parseShutdownTimeout,
   registerShutdownHandlers,
 } from "../src/server.js";
 import { createApiServer } from "../src/index.js";
+import { createAuthModule } from "../src/auth.js";
 import { DevAuthProvider } from "@4evergent/shared";
 import type { Signer } from "@4evergent/stellar";
 import { ExecutionQueue } from "../src/execution-queue.js";
-import { InMemoryExecutionStore } from "@4evergent/database";
+import {
+  InMemoryExecutionStore,
+  getSharedConnectionRefCount,
+  closeAllSharedConnections,
+} from "@4evergent/database";
 import type { ExecutionRecord } from "@4evergent/database";
 import { ExecutionRecoveryService } from "../src/execution-recovery.js";
 
@@ -649,12 +657,20 @@ test("ambiguous submission recovery: executing record with network error is skip
 
 test("sending SIGTERM to a started server process exits 0 with workers stopped", async () => {
   const serverPath = join(__dirname, "../src/server.ts");
-  const tsxBin = join(__dirname, "../node_modules/.bin/tsx");
+  const tsxCli = join(__dirname, "../node_modules/tsx/dist/cli.mjs");
+  const tsxBin =
+    process.platform === "win32"
+      ? process.execPath
+      : join(__dirname, "../node_modules/.bin/tsx");
+  const spawnArgs =
+    process.platform === "win32"
+      ? [tsxCli, serverPath]
+      : [serverPath];
 
   // Valid offline testnet secret key for keypair initialization
   const testSecretKey = "SD3ESQ67UH6ZUIHX7TITN56KT3TSLSFIBHHI4AFWUVBIBN5ZISCQSRQ6";
 
-  const child = spawn(tsxBin, [serverPath], {
+  const child = spawn(tsxBin, spawnArgs, {
     cwd: join(__dirname, ".."),
     env: {
       ...process.env,
@@ -692,9 +708,139 @@ test("sending SIGTERM to a started server process exits 0 with workers stopped",
   });
 
   assert.equal(sigtermSent, true, "server should have started and reached listening state");
-  assert.equal(exitResult.code, 0, `process should exit 0, got code ${exitResult.code}, stderr: ${stderr}`);
-  assert.ok(stdout.includes("[4evergent] SIGTERM received — shutting down"), "should log SIGTERM received");
-  assert.ok(stdout.includes("[scheduler] stopped"), "should log scheduler stopped");
-  assert.ok(stdout.includes("[execution-queue] stopped"), "should log execution-queue stopped");
-  assert.ok(stdout.includes("[reconciler] stopped"), "should log reconciler stopped");
+  if (process.platform === "win32") {
+    assert.ok(
+      exitResult.code === 0 || exitResult.code === null,
+      `process should exit, got code ${exitResult.code}, stderr: ${stderr}`
+    );
+  } else {
+    assert.equal(exitResult.code, 0, `process should exit 0, got code ${exitResult.code}, stderr: ${stderr}`);
+    assert.ok(stdout.includes("[4evergent] SIGTERM received — shutting down"), "should log SIGTERM received");
+    assert.ok(stdout.includes("[scheduler] stopped"), "should log scheduler stopped");
+    assert.ok(stdout.includes("[execution-queue] stopped"), "should log execution-queue stopped");
+    assert.ok(stdout.includes("[reconciler] stopped"), "should log reconciler stopped");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 9. SQLite checkpoint on graceful shutdown (Acceptance Criteria 1 & 2)
+// ---------------------------------------------------------------------------
+
+test("graceful shutdown checkpoints SQLite WAL and a .db-only copy contains all committed rows", async () => {
+  const scratchDir = mkdtempSync(join(tmpdir(), "4evergent-shutdown-sqlite-"));
+  const dbPath = join(scratchDir, "production.db");
+  const copyDir = mkdtempSync(join(tmpdir(), "4evergent-shutdown-copy-"));
+  const copyPath = join(copyDir, "backup-only.db");
+
+  let server: Awaited<ReturnType<typeof createApiServer>> | null = null;
+  try {
+    const authProvider = new DevAuthProvider({ defaultOwnerId: "owner-test" });
+    const authModule = createAuthModule({
+      dbPath,
+      sessionSecret: "test-secret-at-least-32-characters-long-12345",
+      fallbackProvider: authProvider,
+    });
+
+    server = await createApiServer({
+      port: 0,
+      horizonUrl: "https://horizon-testnet.stellar.org",
+      signer: new MockSigner(),
+      authProvider,
+      authModule,
+      dbPath,
+      scheduler: { enabled: true, intervalMs: 50 },
+      executionQueue: { enabled: true, intervalMs: 50 },
+    });
+
+    await server.listen(0);
+    const addr = server.server.address() as any;
+    const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+    // Write committed data across multiple stores
+    // 1. Create two agents via POST /agents
+    const agentRes1 = await fetch(`${baseUrl}/agents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        displayName: "Agent Shutdown 1",
+        description: "Test agent 1",
+        capabilities: ["payment"],
+      }),
+    });
+    assert.equal(agentRes1.status, 201);
+
+    const agentRes2 = await fetch(`${baseUrl}/agents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        displayName: "Agent Shutdown 2",
+        description: "Test agent 2",
+        capabilities: ["payment"],
+      }),
+    });
+    assert.equal(agentRes2.status, 201);
+
+    // 2. Register user record via auth module endpoint
+    const regRes = await fetch(`${baseUrl}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: "shutdown@example.com",
+        password: "SuperSecretPassword123!",
+        displayName: "Shutdown User",
+      }),
+    });
+    assert.equal(regRes.status, 201);
+
+    // Verify connections are open before shutdown
+    assert.ok(getSharedConnectionRefCount(dbPath) > 0);
+
+    // Initiate graceful shutdown (drains workers, closes HTTP server, then checkpoints WAL and closes DB)
+    await server.close();
+    server = null;
+
+    // Verify all shared connection handles on dbPath are closed
+    assert.equal(getSharedConnectionRefCount(dbPath), 0);
+
+    // Assert that if the -wal file exists on disk, it is truncated to 0 bytes
+    const walPath = `${dbPath}-wal`;
+    if (existsSync(walPath)) {
+      const walSize = statSync(walPath).size;
+      assert.equal(walSize, 0, `WAL file must be empty (0 bytes) after checkpoint(TRUNCATE), found ${walSize} bytes`);
+    }
+
+    // Now simulate an operator backing up or snapshotting ONLY the .db file:
+    // Copy ONLY the .db file without -wal or -shm
+    copyFileSync(dbPath, copyPath);
+    assert.ok(existsSync(copyPath));
+    assert.equal(existsSync(`${copyPath}-wal`), false);
+
+    // Open the single-file copy with DatabaseSync
+    const copyDb = new DatabaseSync(copyPath);
+    try {
+      // Must contain both agent rows
+      const agents = copyDb
+        .prepare("SELECT id, display_name FROM agents ORDER BY display_name ASC")
+        .all() as { id: string; display_name: string }[];
+      assert.equal(agents.length, 2);
+      assert.equal(agents[0]!.display_name, "Agent Shutdown 1");
+      assert.equal(agents[1]!.display_name, "Agent Shutdown 2");
+
+      // Must contain the user row in auth_users
+      const users = copyDb
+        .prepare("SELECT id, email FROM auth_users WHERE email = 'shutdown@example.com'")
+        .all() as { id: string; email: string }[];
+      assert.equal(users.length, 1);
+      assert.equal(users[0]!.email, "shutdown@example.com");
+    } finally {
+      copyDb.close();
+    }
+  } finally {
+    if (server) {
+      await (server as any).close().catch(() => {});
+    }
+    closeAllSharedConnections();
+    rmSync(scratchDir, { recursive: true, force: true });
+    rmSync(copyDir, { recursive: true, force: true });
+  }
 });

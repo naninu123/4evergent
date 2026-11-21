@@ -236,10 +236,16 @@ runStoreTests("InMemory", () => ({
 runStoreTests("SQLite", () => {
   const dir = mkdtempSync(join(tmpdir(), "4evergent-test-"));
   const path = join(dir, "test.db");
+  const activity = new SQLiteActivityStore(path);
+  const approval = new SQLiteApprovalStore(path);
   return {
-    activity: new SQLiteActivityStore(path),
-    approval: new SQLiteApprovalStore(path),
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    activity,
+    approval,
+    cleanup: () => {
+      activity.close();
+      approval.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
   };
 });
 

@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import type { PolicyRules } from "@4evergent/shared";
-import { getSharedConnection } from "./shared-connection.js";
+import { getSharedConnection, closeSharedConnection } from "./shared-connection.js";
 
 export interface PolicyConfigStore {
   get(agentId: string): Promise<PolicyRules | null>;
@@ -11,12 +11,16 @@ export interface PolicyConfigStore {
   upsert(agentId: string, ownerId: string, rules: PolicyRules): Promise<{ rules: PolicyRules; version: number }>;
   delete(agentId: string): Promise<boolean>;
   listByOwner(ownerId: string): Promise<Array<{ agentId: string; rules: PolicyRules }>>;
+  close?(): void;
 }
 
 export class SQLitePolicyConfigStore implements PolicyConfigStore {
   private db: DatabaseSync;
+  private dbPath: string;
+  private closed = false;
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     this.db = getSharedConnection(dbPath);
     this.initSchema();
   }
@@ -121,6 +125,8 @@ export class SQLitePolicyConfigStore implements PolicyConfigStore {
   }
 
   close(): void {
-    // Shared connection — managed by closeSharedConnection() / closeAllSharedConnections()
+    if (this.closed) return;
+    this.closed = true;
+    closeSharedConnection(this.dbPath);
   }
 }

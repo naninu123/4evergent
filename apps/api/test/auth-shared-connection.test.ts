@@ -110,7 +110,7 @@ test("auth stores use the shared SQLite connection and pragmas even when constru
     assert.ok(names.has("auth_users"), "auth_users table should be created on the shared connection");
     assert.ok(names.has("auth_sessions"), "auth_sessions table should be created on the shared connection");
   } finally {
-    closeSharedConnection(dbPath);
+    closeSharedConnection(dbPath, true);
     rmSync(dir, { recursive: true, force: true });
   }
 });

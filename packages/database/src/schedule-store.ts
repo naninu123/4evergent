@@ -95,6 +95,8 @@ export class InMemoryScheduleStore implements ScheduleStore {
   async delete(id: string): Promise<boolean> {
     return this.records.delete(id);
   }
+
+  close(): void {}
 }
 
 interface ScheduleRow {
@@ -125,6 +127,7 @@ interface ScheduleRow {
 export class SQLiteScheduleStore implements ScheduleStore {
   private db: DatabaseSync;
   private dbPath: string;
+  private closed = false;
 
   constructor(dbPath: string) {
     this.dbPath = dbPath;
@@ -339,6 +342,8 @@ export class SQLiteScheduleStore implements ScheduleStore {
   }
 
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     closeSharedConnection(this.dbPath);
   }
 }

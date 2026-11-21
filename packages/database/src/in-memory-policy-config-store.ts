@@ -64,4 +64,6 @@ export class InMemoryPolicyConfigStore implements PolicyConfigStore {
     }
     return results;
   }
+
+  close(): void {}
 }

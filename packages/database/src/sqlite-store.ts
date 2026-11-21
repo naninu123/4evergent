@@ -6,7 +6,7 @@ import type {
   PolicyDecision,
   SimulationResult,
 } from "@4evergent/shared";
-import { getSharedConnection } from "./shared-connection.js";
+import { getSharedConnection, closeSharedConnection } from "./shared-connection.js";
 import { clampOffset, clampLimit } from "./pagination.js";
 import { ensureTable, MigrationError } from "./migration.js";
 import type {
@@ -28,8 +28,11 @@ import type {
  */
 export class SQLiteActivityStore implements ActivityStore {
   private db: DatabaseSync;
+  private dbPath: string;
+  private closed = false;
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     this.db = getSharedConnection(dbPath);
     this.initSchema();
   }
@@ -333,7 +336,9 @@ export class SQLiteActivityStore implements ActivityStore {
   }
 
   close(): void {
-    // Shared connection — managed by closeSharedConnection() / closeAllSharedConnections()
+    if (this.closed) return;
+    this.closed = true;
+    closeSharedConnection(this.dbPath);
   }
 }
 
@@ -355,8 +360,11 @@ export class SQLiteActivityStore implements ActivityStore {
  */
 export class SQLiteApprovalStore implements ApprovalStore {
   private db: DatabaseSync;
+  private dbPath: string;
+  private closed = false;
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     this.db = getSharedConnection(dbPath);
     this.initSchema();
   }
@@ -604,7 +612,9 @@ export class SQLiteApprovalStore implements ApprovalStore {
   }
 
   close(): void {
-    // Shared connection — managed by closeSharedConnection() / closeAllSharedConnections()
+    if (this.closed) return;
+    this.closed = true;
+    closeSharedConnection(this.dbPath);
   }
 }
 

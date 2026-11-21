@@ -69,4 +69,5 @@ export interface ExecutionStore {
   update(id: string, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null>;
   updateIfStatus(id: string, expectedStatus: ExecutionStatus, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null>;
   delete(id: string): Promise<boolean>;
+  close?(): void;
 }

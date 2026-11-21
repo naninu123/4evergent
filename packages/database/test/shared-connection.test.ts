@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, copyFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import {
   getSharedConnection,
+  getSharedConnectionRefCount,
   getSchemaVersion,
   setSchemaVersion,
   closeSharedConnection,
@@ -154,5 +156,114 @@ test("concurrent writes from two stores on the same path complete without SQLITE
   const created = await Promise.all(writes);
   assert.equal(created.length, 20);
   assert.equal((await first.listByOwner("owner-a")).length, 20);
+  cleanup();
+});
+
+test("reference counting: connection stays open until refCount drops to 0", () => {
+  const dir = makeTmpDir();
+  const dbPath = join(dir, "refcount.db");
+
+  const db1 = getSharedConnection(dbPath);
+  assert.equal(getSharedConnectionRefCount(dbPath), 1);
+
+  const db2 = getSharedConnection(dbPath);
+  assert.equal(db1, db2);
+  assert.equal(getSharedConnectionRefCount(dbPath), 2);
+
+  // Closing once decrements refCount to 1; connection is still open and usable
+  closeSharedConnection(dbPath);
+  assert.equal(getSharedConnectionRefCount(dbPath), 1);
+  assert.doesNotThrow(() => db1.prepare("SELECT 1").get());
+
+  // Closing second time drops refCount to 0; closes connection and removes from map
+  closeSharedConnection(dbPath);
+  assert.equal(getSharedConnectionRefCount(dbPath), 0);
+
+  // Re-requesting opens a new connection
+  const db3 = getSharedConnection(dbPath);
+  assert.equal(getSharedConnectionRefCount(dbPath), 1);
+  assert.notEqual(db1, db3);
+  cleanup();
+});
+
+test("reference counting: force close terminates connection immediately regardless of refCount", () => {
+  const dir = makeTmpDir();
+  const dbPath = join(dir, "force-close.db");
+
+  getSharedConnection(dbPath);
+  getSharedConnection(dbPath);
+  getSharedConnection(dbPath);
+  assert.equal(getSharedConnectionRefCount(dbPath), 3);
+
+  closeSharedConnection(dbPath, true);
+  assert.equal(getSharedConnectionRefCount(dbPath), 0);
+  cleanup();
+});
+
+test("store close is idempotent and does not double-decrement refCount", () => {
+  const dir = makeTmpDir();
+  const dbPath = join(dir, "idempotent.db");
+
+  const store1 = new SQLiteActivityStore(dbPath);
+  const store2 = new SQLiteAgentStore(dbPath);
+  assert.equal(getSharedConnectionRefCount(dbPath), 2);
+
+  store1.close();
+  assert.equal(getSharedConnectionRefCount(dbPath), 1);
+  store1.close(); // idempotent
+  assert.equal(getSharedConnectionRefCount(dbPath), 1);
+
+  store2.close();
+  assert.equal(getSharedConnectionRefCount(dbPath), 0);
+  store2.close(); // idempotent
+  assert.equal(getSharedConnectionRefCount(dbPath), 0);
+  cleanup();
+});
+
+test("checkpoint on close: single .db file copy after clean close contains all committed rows", async () => {
+  const dir = makeTmpDir();
+  const dbPath = join(dir, "checkpoint.db");
+
+  const store = new SQLiteAgentStore(dbPath);
+  await store.create({
+    id: "agent-chk-1",
+    displayName: "Checkpoint Agent 1",
+    ownerId: "owner-chk",
+  });
+  await store.create({
+    id: "agent-chk-2",
+    displayName: "Checkpoint Agent 2",
+    ownerId: "owner-chk",
+  });
+
+  // Close the store (which triggers checkpoint and closes connection)
+  store.close();
+  assert.equal(getSharedConnectionRefCount(dbPath), 0);
+
+  // Copy ONLY the .db file (ignoring -wal and -shm files) to an isolated folder
+  const copyDir = makeTmpDir();
+  const copyPath = join(copyDir, "checkpoint-copy.db");
+  copyFileSync(dbPath, copyPath);
+
+  // The copy must open cleanly and contain all committed records
+  const copyDb = new DatabaseSync(copyPath);
+  try {
+    const rows = copyDb.prepare("SELECT id, display_name FROM agents ORDER BY id ASC").all() as {
+      id: string;
+      display_name: string;
+    }[];
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]!.id, "agent-chk-1");
+    assert.equal(rows[1]!.id, "agent-chk-2");
+  } finally {
+    copyDb.close();
+  }
+
+  // Also assert that if a -wal file exists at all, it is empty (0 bytes) after checkpoint(TRUNCATE)
+  const walPath = `${dbPath}-wal`;
+  if (existsSync(walPath)) {
+    assert.equal(statSync(walPath).size, 0, "WAL file should be truncated to 0 bytes");
+  }
+
   cleanup();
 });

@@ -39,4 +39,5 @@ export interface AgentStore {
   update(id: string, patch: Partial<Agent>): Promise<Agent | null>;
   transitionStatus(id: string, status: AgentStatus): Promise<AgentStatusTransitionResult>;
   delete(id: string): Promise<boolean>;
+  close?(): void;
 }

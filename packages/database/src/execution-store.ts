@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import type { ExecutionStore, ExecutionRecord, ExecutionStatus } from "./execution-types.js";
-import { getSharedConnection } from "./shared-connection.js";
+import { getSharedConnection, closeSharedConnection } from "./shared-connection.js";
 import { clampOffset, clampLimit } from "./pagination.js";
 import { ensureColumn, MigrationError } from "./migration.js";
 
@@ -117,6 +117,8 @@ export class InMemoryExecutionStore implements ExecutionStore {
   async delete(id: string): Promise<boolean> {
     return this.records.delete(id);
   }
+
+  close(): void {}
 }
 
 /**
@@ -244,8 +246,11 @@ interface ExecutionRow {
  */
 export class SQLiteExecutionStore implements ExecutionStore {
   private db: DatabaseSync;
+  private dbPath: string;
+  private closed = false;
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     this.db = getSharedConnection(dbPath);
     this.initSchema();
   }
@@ -449,7 +454,9 @@ export class SQLiteExecutionStore implements ExecutionStore {
   }
 
   close(): void {
-    // Shared connection — managed by closeSharedConnection() / closeAllSharedConnections()
+    if (this.closed) return;
+    this.closed = true;
+    closeSharedConnection(this.dbPath);
   }
 }
 

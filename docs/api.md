@@ -818,12 +818,37 @@ That combination exits with a `FATAL` error rather than serving an
 unauthenticated API on a public interface. Setting `ALLOW_DEV_AUTH=1` is an
 explicit operator opt-in and must not be used for a real deployment.
 
-### Persistent filesystem
+### Persistent filesystem and backups
 
 `DATABASE_PATH` must live on storage that survives restarts and redeploys —
 a container volume or attached disk. An ephemeral container filesystem loses
 agents, activities, approvals, schedules, executions, and policy config on every
 restart, and the SQLite file cannot be reliably shared between instances.
+
+#### SQLite WAL mode and backup procedure
+
+The database operates in Write-Ahead Logging (`WAL`) mode (`PRAGMA journal_mode = WAL;`) with normal synchronization (`PRAGMA synchronous = NORMAL;`). Under WAL mode, newly committed transactions are written to the companion `<DATABASE_PATH>-wal` file before a checkpoint transfers them back into the main `.db` file.
+
+**Single-file `.db` copies are NOT sufficient while the database is uncheckpointed:**
+Copying or snapshotting only the `.db` file while uncheckpointed data resides in the `-wal` file causes data loss or missing tables on restore.
+
+To back up or move database files safely:
+
+1. **Clean shutdown (Recommended):**
+   Stop the API server gracefully via `SIGTERM` or `SIGINT`. During graceful shutdown, the server drains active requests, closes background workers, forces a full WAL checkpoint (`PRAGMA wal_checkpoint(TRUNCATE)`), and closes all open database handles. After graceful shutdown completes, all committed transactions reside in the main `.db` file, and the `.db` file can be safely copied alone (or copied along with any zero-byte `-wal` and `-shm` companion files).
+
+2. **Cold backup while server is stopped:**
+   If copying database files while the server is stopped without a graceful shutdown, always copy all three files together if they exist:
+   - `<DATABASE_PATH>` (the main `.db` file)
+   - `<DATABASE_PATH>-wal` (the write-ahead log)
+   - `<DATABASE_PATH>-shm` (shared-memory index)
+
+3. **Hot backup / manual checkpoint:**
+   If taking a snapshot or single-file `.db` backup without stopping the server, first execute a truncate checkpoint on the SQLite database:
+   ```sql
+   PRAGMA wal_checkpoint(TRUNCATE);
+   ```
+   Once the checkpoint reports `(0, total_frames, checkpointed_frames)`, the `-wal` is truncated and the main `.db` file contains all committed data.
 
 ### Background workers
 

@@ -29,4 +29,5 @@ export interface ScheduleStore {
     patch: Partial<ScheduleRecord>
   ): Promise<ScheduleRecord | null>;
   delete(id: string): Promise<boolean>;
+  close?(): void;
 }
