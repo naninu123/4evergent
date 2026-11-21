@@ -492,12 +492,10 @@ function isValidStellarAddress(value: string): boolean {
 /**
  * Build a typed intent object from CLI args.
  * Mirrors the AgentIntent union consumed by POST /agents/:id/intents.
- * `account_settings` is intentionally NOT exposed — the transaction
- * pipeline does not support it yet (server rejects with 400).
  */
 function buildIntentArgs(args: string[]): { intent: any; error?: string } {
   const type = args[0];
-  if (!type) return { intent: null, error: "intent type required (payment | trustline | contract_call)" };
+  if (!type) return { intent: null, error: "intent type required (payment | trustline | contract_call | account_settings)" };
 
   switch (type) {
     case "payment": {
@@ -612,10 +610,29 @@ function buildIntentArgs(args: string[]): { intent: any; error?: string } {
         },
       };
     }
-    case "account_settings":
-      return { intent: null, error: "account_settings is not supported by the transaction pipeline" };
+    case "account_settings": {
+      const [, setting, value, reason] = args;
+      if (!setting || !value || !reason) {
+        return { intent: null, error: "account_settings requires: <setting> <value> <reason>" };
+      }
+      // Attempt to parse value as JSON; if it fails, keep it as a plain string
+      let parsedValue: any;
+      try {
+        parsedValue = JSON.parse(value);
+      } catch {
+        parsedValue = value;
+      }
+      return {
+        intent: {
+          type: "account_settings",
+          setting,
+          value: parsedValue,
+          reason,
+        },
+      };
+    }
     default:
-      return { intent: null, error: `unknown intent type '${type}' (supported: payment, trustline, contract_call)` };
+      return { intent: null, error: `unknown intent type '${type}' (supported: payment, trustline, contract_call, account_settings)` };
   }
 }
 
@@ -725,7 +742,7 @@ async function cmdScheduleGet(agentId: string, scheduleId: string) {
 async function cmdIntentSubmit(agentId: string, args: string[], idempotencyKey: string | null) {
   if (!agentId) {
     console.error("Usage: 4evergent intent submit <agent-id> <type> [args...] [--issuer <G...>] [--idempotency-key <key>]");
-    console.error("Types: payment | trustline | contract_call");
+    console.error("Types: payment | trustline | contract_call | account_settings");
     return 1;
   }
 

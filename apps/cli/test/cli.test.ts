@@ -14,7 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { COMMAND_TREE, COMMANDS_HELP } from "../src/commands.js";
+import { COMMAND_TREE, COMMANDS_HELP, INTENT_TYPES } from "../src/commands.js";
 
 // Resolve the tsx CLI entry point directly so we can spawn `node tsx/cli`
 // instead of `npx tsx`, which goes through a .ps1 wrapper that fails under
@@ -747,10 +747,83 @@ test("CLI v2: intent submit 409 conflict", () => {
   assert.match(r.stderr, /409/);
 });
 
-test("CLI v2: intent submit account_settings rejected locally", () => {
-  const r = run(["intent", "submit", "agent-1", "account_settings", "setting", "value", "reason"]);
+test("CLI v2: intent submit account_settings plain string value → 202", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "some_setting", "enabled", "User requested this change"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 202, body: { activityId: "act-12", agentId: "agent-1", status: "requires_approval", approvalId: "ap-12" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /act-12/);
+  assert.equal(r.requests[0]?.body.type, "account_settings");
+  assert.equal(r.requests[0]?.body.setting, "some_setting");
+  assert.equal(r.requests[0]?.body.value, "enabled");
+  assert.equal(r.requests[0]?.body.reason, "User requested this change");
+});
+
+test("CLI v2: intent submit account_settings JSON object value → 202 with parsed object", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "thresholds", '{"low":1,"medium":2}', "Update thresholds"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 202, body: { activityId: "act-13", agentId: "agent-1", status: "requires_approval", approvalId: "ap-13" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /act-13/);
+  assert.equal(r.requests[0]?.body.type, "account_settings");
+  assert.equal(r.requests[0]?.body.setting, "thresholds");
+  assert.deepEqual(r.requests[0]?.body.value, { low: 1, medium: 2 });
+  assert.equal(r.requests[0]?.body.reason, "Update thresholds");
+});
+
+test("CLI v2: intent submit account_settings JSON number value → 202 with parsed number", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "max_limit", "42", "Set limit"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 202, body: { activityId: "act-14", agentId: "agent-1", status: "requires_approval" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.requests[0]?.body.value, 42);
+});
+
+test("CLI v2: intent submit account_settings JSON boolean value → 202 with parsed boolean", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "enabled", "true", "Enable feature"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 202, body: { activityId: "act-15", agentId: "agent-1", status: "requires_approval" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.requests[0]?.body.value, true);
+});
+
+test("CLI v2: intent submit account_settings missing setting → usage error", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings"]);
   assert.equal(r.code, 1);
-  assert.match(r.stderr, /not supported/);
+  assert.match(r.stderr, /account_settings requires/);
+});
+
+test("CLI v2: intent submit account_settings missing value → usage error", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "some_setting"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /account_settings requires/);
+});
+
+test("CLI v2: intent submit account_settings missing reason → usage error", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "some_setting", "value"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /account_settings requires/);
+});
+
+test("CLI v2: INTENT_TYPES includes account_settings", () => {
+  assert.ok(INTENT_TYPES.includes("account_settings" as any));
+  assert.equal(INTENT_TYPES.length, 4);
+  assert.deepEqual([...INTENT_TYPES], ["payment", "trustline", "contract_call", "account_settings"]);
+});
+
+test("CLI v2: intent submit help includes account_settings in types", () => {
+  const r = run(["intent", "submit", "--help"]);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /account_settings/);
+  assert.match(r.stdout, /payment.*trustline.*contract_call.*account_settings/s);
 });
 
 test("CLI v2: intent submit missing args → usage", () => {
@@ -1443,12 +1516,61 @@ test("buildIntentArgs: contract_call valid JSON array, invalid JSON error, and n
   assert.match(missingContractArgs.error ?? "", /contract_call requires/);
 });
 
-test("buildIntentArgs: account_settings rejection and unknown/missing type errors", async () => {
+test("buildIntentArgs: account_settings with string and JSON values, unknown/missing type errors", async () => {
   const { buildIntentArgs } = await loadCliHandlers();
 
-  const accountSettings = buildIntentArgs(["account_settings", "set", "value", "reason"]);
-  assert.equal(accountSettings.intent, null);
-  assert.match(accountSettings.error ?? "", /account_settings is not supported/);
+  // String value
+  const stringValue = buildIntentArgs(["account_settings", "some_setting", "enabled", "User requested this change"]);
+  assert.equal(stringValue.error, undefined);
+  assert.deepEqual(stringValue.intent, {
+    type: "account_settings",
+    setting: "some_setting",
+    value: "enabled",
+    reason: "User requested this change",
+  });
+
+  // JSON object value
+  const jsonObjectValue = buildIntentArgs(["account_settings", "thresholds", '{"low":1,"medium":2}', "Update thresholds"]);
+  assert.equal(jsonObjectValue.error, undefined);
+  assert.deepEqual(jsonObjectValue.intent, {
+    type: "account_settings",
+    setting: "thresholds",
+    value: { low: 1, medium: 2 },
+    reason: "Update thresholds",
+  });
+
+  // JSON number value
+  const jsonNumberValue = buildIntentArgs(["account_settings", "max_limit", "42", "Set limit"]);
+  assert.equal(jsonNumberValue.error, undefined);
+  assert.deepEqual(jsonNumberValue.intent, {
+    type: "account_settings",
+    setting: "max_limit",
+    value: 42,
+    reason: "Set limit",
+  });
+
+  // JSON boolean value
+  const jsonBooleanValue = buildIntentArgs(["account_settings", "enabled", "true", "Enable feature"]);
+  assert.equal(jsonBooleanValue.error, undefined);
+  assert.deepEqual(jsonBooleanValue.intent, {
+    type: "account_settings",
+    setting: "enabled",
+    value: true,
+    reason: "Enable feature",
+  });
+
+  // Missing arguments
+  const missingSetting = buildIntentArgs(["account_settings"]);
+  assert.equal(missingSetting.intent, null);
+  assert.match(missingSetting.error ?? "", /account_settings requires/);
+
+  const missingValue = buildIntentArgs(["account_settings", "some_setting"]);
+  assert.equal(missingValue.intent, null);
+  assert.match(missingValue.error ?? "", /account_settings requires/);
+
+  const missingReason = buildIntentArgs(["account_settings", "some_setting", "value"]);
+  assert.equal(missingReason.intent, null);
+  assert.match(missingReason.error ?? "", /account_settings requires/);
 
   const unknownType = buildIntentArgs(["swap", "XLM", "USDC"]);
   assert.equal(unknownType.intent, null);
