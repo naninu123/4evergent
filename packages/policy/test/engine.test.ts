@@ -252,3 +252,17 @@ test("daily limit: next day resets limit", async () => {
   const decision = await engine.evaluate(baseIntent({ amount: "60" }), "GAGENT");
   assert.equal(decision.result, "allow");
 });
+
+// #326: the enforced approval-threshold field is requireHumanApprovalForAmountAbove
+// (see packages/policy/src/engine.ts:173). Pin the three-point boundary so the
+// editor's single control can be verified against the engine, not only the UI.
+test("requireHumanApprovalForAmountAbove: below allows, at/above requires approval", async () => {
+  const engine = new PolicyEngine({ requireHumanApprovalForAmountAbove: "50" });
+  const below = await engine.evaluate(baseIntent({ amount: "49.9999999" }), "GAGENT");
+  assert.equal(below.result, "allow");
+  const at = await engine.evaluate(baseIntent({ amount: "50" }), "GAGENT");
+  assert.equal(at.result, "requires_approval");
+  assert.equal(at.rule, "approvalThreshold");
+  const above = await engine.evaluate(baseIntent({ amount: "100" }), "GAGENT");
+  assert.equal(above.result, "requires_approval");
+});

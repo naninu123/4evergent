@@ -174,7 +174,8 @@ function PolicySummary({ agentId }: { agentId: string }) {
         ))}
         <div className="policy-summary-item">
           <span className="policy-summary-label">Approval Threshold</span>
-          <span className="policy-summary-value">{policy.approvalThreshold}</span>
+          {/* Engine enforces requireHumanApprovalForAmountAbove (packages/policy/src/engine.ts:173). */}
+          <span className="policy-summary-value">{policy.requireHumanApprovalForAmountAbove}</span>
         </div>
         {assets.map(([asset, limit]) => (
           <div key={`daily-${asset}`} className="policy-summary-item">
@@ -272,7 +273,16 @@ function PolicySettings({ agentId }: { agentId: string }) {
     setError(null);
     setSuccess(null);
     try {
-      const res = await api.updatePolicy(agentId, form);
+      // #326: the policy engine only reads `requireHumanApprovalForAmountAbove`
+      // (packages/policy/src/engine.ts:173). Send both fields with the same
+      // value so a saved policy cannot carry two diverging thresholds.
+      const enforced = form.requireHumanApprovalForAmountAbove;
+      const payload: PolicyRules = {
+        ...form,
+        approvalThreshold: enforced,
+        requireHumanApprovalForAmountAbove: enforced,
+      };
+      const res = await api.updatePolicy(agentId, payload);
       setPolicy(deepClonePolicy(res.policy));
       setForm(deepClonePolicy(res.policy));
       setVersion(res.version);
@@ -327,19 +337,6 @@ function PolicySettings({ agentId }: { agentId: string }) {
             <small>Aggregate daily spending limit enforced by backend. Once reached, further intents are denied until the next day.</small>
           </label>
           <label>
-            <span>Approval Threshold (XLM)</span>
-            <input
-              id="policy-approval-threshold"
-              type="number"
-              step="0.0000001"
-              min="0"
-              value={form.approvalThreshold}
-              onChange={(e) => updateForm({ approvalThreshold: e.target.value })}
-              placeholder="50"
-            />
-            <small>Intents above this amount require human approval before execution.</small>
-          </label>
-          <label>
             <span>Require Human Approval Above (XLM)</span>
             <input
               id="policy-require-human-approval-above"
@@ -347,10 +344,17 @@ function PolicySettings({ agentId }: { agentId: string }) {
               step="0.0000001"
               min="0"
               value={form.requireHumanApprovalForAmountAbove}
-              onChange={(e) => updateForm({ requireHumanApprovalForAmountAbove: e.target.value })}
+              onChange={(e) => {
+                const v = e.target.value;
+                // Keep both fields in lockstep; only requireHumanApprovalForAmountAbove is enforced.
+                updateForm({
+                  approvalThreshold: v,
+                  requireHumanApprovalForAmountAbove: v,
+                });
+              }}
               placeholder="50"
             />
-            <small>Amount above which human approval is required. Should match approval threshold.</small>
+            <small>Intents at or above this amount require human approval before execution.</small>
           </label>
         </div>
       </div>
@@ -361,7 +365,7 @@ function PolicySettings({ agentId }: { agentId: string }) {
           {form.allowedAssets.map((asset) => (
             <span key={asset} className="chip">
               {asset}
-              <button type="button" className="chip-remove" aria-label={`Remove allowed asset ${asset}`} onClick={() => removeListItem('allowedAssets', asset)}>×</button>
+              <button type="button" className="chip-remove" aria-label={`Remove allowed asset ${asset}`} onClick={() => removeListItem('allowedAssets', asset)}>&times;</button>
             </span>
           ))}
         </div>
@@ -389,7 +393,7 @@ function PolicySettings({ agentId }: { agentId: string }) {
           {form.allowedDestinations.map((dest) => (
             <span key={dest} className="chip">
               {dest}
-              <button type="button" className="chip-remove" aria-label={`Remove allowed destination ${dest}`} onClick={() => removeListItem('allowedDestinations', dest)}>×</button>
+              <button type="button" className="chip-remove" aria-label={`Remove allowed destination ${dest}`} onClick={() => removeListItem('allowedDestinations', dest)}>&times;</button>
             </span>
           ))}
         </div>
