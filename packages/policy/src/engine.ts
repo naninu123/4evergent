@@ -2,6 +2,7 @@ import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
 import { type PolicyRules } from "./types.js";
 import { normalizePolicyRules } from "./validation.js";
 import { parseStrictAmount } from "./amount.js";
+import { extractAssetIdentity } from "./asset-identity.js";
 
 /**
  * PolicyEngine — deterministic, pure policy evaluation.
@@ -149,11 +150,13 @@ export class PolicyEngine {
     }
 
     const amount = extractAmount(intent);
-    const asset = extractAsset(intent);
+    const asset = extractAssetIdentity(intent, rules);
 
     // 2. Per-transaction max amount
     if (amount !== null) {
-      const maxForAsset = rules.maxTxAmount[asset] ?? rules.maxTxAmount["native"];
+      const maxForAsset = asset !== null
+        ? rules.maxTxAmount[asset] ?? rules.maxTxAmount["native"]
+        : undefined;
       if (maxForAsset && compareAmounts(amount, maxForAsset) > 0) {
         return decide("deny", `Amount ${amount} ${asset} exceeds max_tx_amount ${maxForAsset}`, "maxTxAmount");
       }
@@ -163,8 +166,28 @@ export class PolicyEngine {
     // #353: allowlist checks run BEFORE the daily-spending reservation, so
     // an intent denied here never reserves (previously step 3 reserved first
     // and the reservation leaked until end of day).
-    if (rules.allowedAssets.length > 0 && !rules.allowedAssets.includes(asset)) {
-      return decide("deny", `Asset '${asset}' is not in allowed_assets`, "allowedAssets");
+    // #367: allowedAssets is an asset allowlist for payments and trustlines.
+    // Contract calls and account settings carry no asset and are gated by
+    // txTypeRestrictions (and allowedContractIds), not by a fake identity.
+    if (
+      rules.allowedAssets.length > 0 &&
+      (intent.type === "payment" || intent.type === "trustline") &&
+      (asset === null || !rules.allowedAssets.includes(asset))
+    ) {
+      return decide("deny", `Asset '${asset ?? "unknown"}' is not in allowed_assets`, "allowedAssets");
+    }
+
+    // #367: an asset-bearing intent that still has no canonical identity is
+    // ambiguous (for example a bare non-native code with no policy issuer to
+    // resolve it). Deny it rather than letting it fall through every
+    // per-asset map uncapped.
+    if ((intent.type === "payment" || intent.type === "trustline") && asset === null) {
+      const raw = intent.type === "payment" ? intent.asset : `${intent.assetCode}:${intent.issuer}`;
+      return decide(
+        "deny",
+        `Asset '${raw}' is not a canonical asset identity; expected "XLM" or "CODE:ISSUER"`,
+        "assetIdentity"
+      );
     }
 
     // 4. Destination allowlist (payments only)
@@ -185,7 +208,9 @@ export class PolicyEngine {
     // This is the ONLY step that reserves: one evaluate() = at most one
     // reservation, and only for intents that passed every deny check above.
     if (amountStr !== null && this.activityStore) {
-      const dailyLimit = rules.dailySpendingLimit[asset] ?? rules.dailySpendingLimit["native"];
+      const dailyLimit = asset !== null
+        ? rules.dailySpendingLimit[asset] ?? rules.dailySpendingLimit["native"]
+        : undefined;
       if (dailyLimit) {
         if (options?.skipReservation) {
           // Skip reservation but still check the limit (read-only).
@@ -200,7 +225,7 @@ export class PolicyEngine {
           // time, so the check is simply: does the CURRENT limit still
           // cover everything already reserved? If policy was tightened
           // below the reserved total, deny.
-          const reservedTotal = await this.getReservedTotal(asset, agentId);
+          const reservedTotal = await this.getReservedTotal(asset!, agentId);
           if (reservedTotal !== null) {
             if (reservedTotal > limitNum) {
               return decide(
@@ -212,7 +237,7 @@ export class PolicyEngine {
           } else {
             // Store cannot report reservations (e.g. a minimal test double):
             // fall back to the pre-#353 submitted-activity check.
-            const spent = await this.getDailySpent(asset, agentId);
+            const spent = await this.getDailySpent(asset!, agentId, rules);
             const remaining = limitNum - spent;
             if ((amountNum as number) > remaining) {
               return decide(
@@ -224,7 +249,7 @@ export class PolicyEngine {
           }
         } else if (this.activityStore.reserveDailySpending) {
           const reservedOk = await this.activityStore.reserveDailySpending(
-            agentId, asset, amountStr, dailyLimit
+            agentId, asset!, amountStr, dailyLimit
           );
           if (!reservedOk) {
             return decide(
@@ -233,9 +258,9 @@ export class PolicyEngine {
               "dailySpendingLimit"
             );
           }
-          reserved = { asset, amount: amountStr };
+          reserved = { asset: asset!, amount: amountStr };
         } else {
-          const spent = await this.getDailySpent(asset, agentId);
+          const spent = await this.getDailySpent(asset!, agentId, rules);
           // See the skipReservation branch above for the NaN fallback.
           const limitNum = parseStrictAmount(dailyLimit) ?? Number.NaN;
           const remaining = limitNum - spent;
@@ -256,9 +281,13 @@ export class PolicyEngine {
     //    is a hard boundary, the threshold is only a "ask a human" gate for
     //    otherwise-permitted intents. (Previously the threshold returned
     //    first, so a disallowed intent above threshold looked approvable.)
-    // 4a. Asset allowlist
-    if (rules.allowedAssets.length > 0 && !rules.allowedAssets.includes(asset)) {
-      return decide("deny", `Asset '${asset}' is not in allowed_assets`, "allowedAssets");
+    // 4a. Asset allowlist (#367: payments and trustlines only)
+    if (
+      rules.allowedAssets.length > 0 &&
+      (intent.type === "payment" || intent.type === "trustline") &&
+      (asset === null || !rules.allowedAssets.includes(asset))
+    ) {
+      return decide("deny", `Asset '${asset ?? "unknown"}' is not in allowed_assets`, "allowedAssets");
     }
 
     // 4b. Destination allowlist (payments only)
@@ -308,7 +337,11 @@ export class PolicyEngine {
    * Only activities with status "submitted" are counted. Pending, rejected,
    * and failed activities do NOT count toward the daily limit.
    */
-  private async getDailySpent(asset: string, agentId: string): Promise<number> {
+  private async getDailySpent(
+    asset: string,
+    agentId: string,
+    rules?: PolicyRules
+  ): Promise<number> {
     if (!this.activityStore) return 0;
 
     const now = new Date();
@@ -321,7 +354,7 @@ export class PolicyEngine {
     for (const activity of activities) {
       if (activity.status !== "submitted") continue;
       if (activity.createdAt < startOfDayIso) continue;
-      const activityAsset = extractAsset(activity.intent);
+      const activityAsset = extractAssetIdentity(activity.intent, rules);
       if (activityAsset !== asset) continue;
       const amount = extractAmount(activity.intent);
       if (amount !== null) {
@@ -339,20 +372,6 @@ function extractAmount(intent: AgentIntent): string | null {
   if (intent.type === "payment") return intent.amount;
   if (intent.type === "trustline" && intent.limit) return intent.limit;
   return null;
-}
-
-function extractAsset(intent: AgentIntent): string {
-  if (intent.type === "payment") {
-    if (intent.assetDetails) {
-      if (intent.assetDetails.code === "XLM") return "XLM";
-      return `${intent.assetDetails.code}:${intent.assetDetails.issuer}`;
-    }
-    return intent.asset;
-  }
-  if (intent.type === "trustline") {
-    return `trustline:${intent.assetCode}:${intent.issuer}`;
-  }
-  return "native";
 }
 
 function compareAmounts(a: string, b: string): number {

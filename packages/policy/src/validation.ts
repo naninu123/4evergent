@@ -1,5 +1,9 @@
 import type { PolicyRules } from "@4evergent/shared";
 import { parseStrictAmount } from "./amount.js";
+import {
+  isCanonicalAllowedAsset,
+  isCanonicalPolicyLimitKey,
+} from "./asset-identity.js";
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const ED25519_PUBLIC_KEY_VERSION_BYTE = 6 << 3; // 'G'
@@ -91,6 +95,11 @@ export function validatePolicyRules(rules: any): PolicyValidationResult {
       errors.push("maxTxAmount must be an object");
     } else {
       for (const [asset, amount] of Object.entries(rules.maxTxAmount)) {
+        if (!isCanonicalPolicyLimitKey(asset)) {
+          errors.push(
+            `maxTxAmount.${asset} must use a canonical asset identity: "XLM" for native, "CODE:ISSUER" for an issued asset, or "trustline:CODE:ISSUER" for a trustline (got "${asset}")`
+          );
+        }
         if (typeof amount !== "string" && typeof amount !== "number") {
           errors.push(`maxTxAmount.${asset} must be a string or number`);
         } else {
@@ -109,6 +118,11 @@ export function validatePolicyRules(rules: any): PolicyValidationResult {
       errors.push("dailySpendingLimit must be an object");
     } else {
       for (const [asset, limit] of Object.entries(rules.dailySpendingLimit)) {
+        if (!isCanonicalPolicyLimitKey(asset)) {
+          errors.push(
+            `dailySpendingLimit.${asset} must use a canonical asset identity: "XLM" for native, "CODE:ISSUER" for an issued asset, or "trustline:CODE:ISSUER" for a trustline (got "${asset}")`
+          );
+        }
         if (typeof limit !== "string" && typeof limit !== "number") {
           errors.push(`dailySpendingLimit.${asset} must be a string or number`);
         } else {
@@ -154,6 +168,10 @@ export function validatePolicyRules(rules: any): PolicyValidationResult {
         const asset = rules.allowedAssets[i];
         if (typeof asset !== "string" || asset.trim() === "") {
           errors.push(`allowedAssets[${i}] must be a non-empty string`);
+        } else if (!isCanonicalAllowedAsset(asset)) {
+          errors.push(
+            `allowedAssets[${i}] must use a canonical asset identity: "XLM" for native or "CODE:ISSUER" for an issued asset (got "${asset}")`
+          );
         }
       }
     }
