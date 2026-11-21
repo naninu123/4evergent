@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { useAgentNames } from '../agentNames';
 import type { ActivityRecord } from '../types';
-import { StatusBadge, Skeleton, EmptyState, IntentAmount, PaginationFooter } from '../components';
+import { AgentName, StatusBadge, Skeleton, EmptyState, IntentAmount, PaginationFooter } from '../components';
 
 const PAGE_SIZE = 50;
 
@@ -13,6 +14,7 @@ export default function Activity() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const agentNames = useAgentNames();
 
   const loadPage = useCallback(async (offset: number, replace: boolean) => {
     try {
@@ -77,7 +79,7 @@ export default function Activity() {
                 onClick={() => navigate(`/agents/${r.agentId}/activity/${r.id}`)}
               >
                 <td><code>{r.id.slice(0, 8)}</code></td>
-                <td><code>{r.agentId.slice(0, 8)}</code></td>
+                <td><AgentName agentId={r.agentId} agentNames={agentNames} /></td>
                 <td>{r.intent.type}</td>
                 <td><IntentAmount intent={r.intent} /></td>
                 <td><StatusBadge status={r.status} /></td>

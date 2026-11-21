@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../api';
+import { buildAgentNameMap } from '../agentNames';
 import { describeApiError } from '../apiErrors';
 import type { AgentRecord, ActivityRecord, PolicyRules } from '../types';
 import { ScheduleManagement } from './ScheduleManagement';
 import { ExecutionList } from './ExecutionList';
-import { StatusBadge, Skeleton, EmptyState } from '../components';
+import { AgentName, StatusBadge, Skeleton, EmptyState } from '../components';
 
 type SpendingData = Record<string, { used: number; limit: string; remaining: number }>;
 
@@ -531,6 +532,7 @@ export default function AgentDetail() {
   const handleStatusChange = (newStatus: string) => {
     setAgent((prev) => prev ? { ...prev, status: newStatus as typeof prev.status } : prev);
   };
+  const agentNames = buildAgentNameMap([agent]);
 
   return (
     <section>
@@ -562,12 +564,13 @@ export default function AgentDetail() {
         ) : (
           <table>
             <thead>
-              <tr><th>ID</th><th>Type</th><th>Amount</th><th>Status</th><th>Time</th></tr>
+              <tr><th>ID</th><th>Agent</th><th>Type</th><th>Amount</th><th>Status</th><th>Time</th></tr>
             </thead>
             <tbody>
               {activity.map((r) => (
                 <tr key={r.id}>
                   <td><code>{r.id.slice(0, 8)}</code></td>
+                  <td><AgentName agentId={r.agentId} agentNames={agentNames} /></td>
                   <td>{r.intent.type}</td>
                   <td>{r.intent.amount || '-'} {r.intent.asset || ''}</td>
                   <td><StatusBadge status={r.status} /></td>

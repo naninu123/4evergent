@@ -320,7 +320,7 @@ describe('Overview page', () => {
     });
 
     expect(screen.getByText('activity')).toBeInTheDocument();
-    expect(screen.getByText('agent-12')).toBeInTheDocument();
+    expect(screen.getByText('agent-12345678')).toBeInTheDocument();
     expect(screen.getByText('submitted')).toBeInTheDocument();
   });
 });

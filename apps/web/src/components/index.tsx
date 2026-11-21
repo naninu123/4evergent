@@ -344,6 +344,36 @@ export function PaginationFooter({
 }
 
 /* ==========================================================================
+   AgentName (displays resolved agent name with raw ID as secondary detail)
+   ========================================================================== */
+
+export function AgentName({
+  agentId,
+  agentNames,
+  showId = false,
+}: {
+  agentId: string;
+  agentNames: Record<string, string>;
+  showId?: boolean;
+}) {
+  const displayName = agentNames[agentId];
+  if (!displayName) {
+    return <code title={agentId}>{agentId}</code>;
+  }
+  if (showId) {
+    return (
+      <span title={agentId}>
+        {displayName}{' '}
+        <code className="muted" style={{ fontSize: 'var(--text-xs)' }}>
+          {agentId}
+        </code>
+      </span>
+    );
+  }
+  return <span title={agentId}>{displayName}</span>;
+}
+
+/* ==========================================================================
    Re-exports
    ========================================================================== */
 

@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { useAgentNames } from '../agentNames';
 import type { ApprovalRecord } from '../types';
-import { ConfirmationModal, Skeleton, EmptyState, PaginationFooter } from '../components';
+import { AgentName, ConfirmationModal, Skeleton, EmptyState, PaginationFooter } from '../components';
 
 const PAGE_SIZE = 50;
 
@@ -15,6 +16,7 @@ export default function Approvals() {
   const [error, setError] = useState<string | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const agentNames = useAgentNames();
 
   const loadPage = useCallback(async (offset: number, replace: boolean) => {
     try {
@@ -80,7 +82,7 @@ export default function Approvals() {
             {approvals.map((a) => (
               <tr key={a.id}>
                 <td><Link to={`/approvals/${a.id}`} className="table-row-link">{a.id.slice(0, 8)}</Link></td>
-                <td><code>{a.agentId}</code></td>
+                <td><AgentName agentId={a.agentId} agentNames={agentNames} /></td>
                 <td>{a.intent.type}</td>
                 <td>{a.intent.amount || '-'}</td>
                 <td>{a.intent.asset || ''}</td>

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { useAgentNames, resolveAgentName } from '../agentNames';
 import { describeApiError } from '../apiErrors';
 import type { ActivityRecord, ExecutionRecord } from '../types';
-import { Skeleton, EmptyState, IntentAmount, DetailCard, Section, StatusBadge, Address } from '../components';
+import { AgentName, Skeleton, EmptyState, IntentAmount, DetailCard, Section, StatusBadge, Address } from '../components';
 
 export default function ActivityDetail() {
   const { agentId, activityId } = useParams<{ agentId: string; activityId: string }>();
@@ -13,6 +14,7 @@ export default function ActivityDetail() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
+  const agentNames = useAgentNames();
 
   useEffect(() => {
     if (!agentId || !activityId) return;
@@ -53,13 +55,16 @@ export default function ActivityDetail() {
       <div className="page-header">
         <div>
           <h1>Activity Detail</h1>
-          <p className="muted">Agent: {agentId?.slice(0, 8)} · Activity: {activityId?.slice(0, 8)}</p>
+          <p className="muted" title={agentId}>
+            Agent: {agentId ? resolveAgentName(agentId, agentNames) : '-'} · Activity: {activityId?.slice(0, 8)}
+          </p>
         </div>
         <button className="btn btn-ghost btn-sm" onClick={() => navigate(-1)}>← Back</button>
       </div>
 
       <div className="detail-grid">
         <DetailCard title="Activity ID"><code>{activity.id}</code></DetailCard>
+        <DetailCard title="Agent"><AgentName agentId={activity.agentId} agentNames={agentNames} showId /></DetailCard>
         <DetailCard title="Status">
           <StatusBadge status={activity.status} />
         </DetailCard>

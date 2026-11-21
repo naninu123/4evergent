@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
+import { useAgentNames, resolveAgentName } from '../agentNames';
 import { describeApiError } from '../apiErrors';
 import type { ExecutionRecord, ExecutionStatus } from '../types';
-import { Skeleton, EmptyState, DetailCard, IntentAmount } from '../components';
+import { AgentName, Skeleton, EmptyState, DetailCard, IntentAmount } from '../components';
 
 function statusLabel(status: ExecutionStatus): string {
   switch (status) {
@@ -49,6 +50,7 @@ export default function ExecutionDetail() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const agentNames = useAgentNames();
 
   useEffect(() => {
     if (!executionId) return;
@@ -122,8 +124,8 @@ export default function ExecutionDetail() {
       <div className="page-header">
         <div>
           <h1>Execution <code>{execution.id.slice(0, 8)}</code></h1>
-          <p className="muted">
-            Agent: {execution.agentId.slice(0, 8)} · {execution.intent.type}
+          <p className="muted" title={execution.agentId}>
+            Agent: {resolveAgentName(execution.agentId, agentNames)} · {execution.intent.type}
           </p>
         </div>
         <Link to="/executions" className="btn btn-ghost btn-sm">← Executions</Link>
@@ -136,7 +138,7 @@ export default function ExecutionDetail() {
             {desc && <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>{desc}</span>}
           </div>
         </DetailCard>
-        <DetailCard title="Agent"><code>{execution.agentId.slice(0, 8)}</code></DetailCard>
+        <DetailCard title="Agent"><AgentName agentId={execution.agentId} agentNames={agentNames} showId /></DetailCard>
         <DetailCard title="Intent">{execution.intent.type}</DetailCard>
         <DetailCard title="Amount"><IntentAmount intent={execution.intent} /></DetailCard>
         <DetailCard title="Transaction Hash">

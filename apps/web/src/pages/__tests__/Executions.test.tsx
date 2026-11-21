@@ -5,13 +5,14 @@ import { MemoryRouter } from 'react-router-dom';
 import Executions from '../Executions';
 
 // Mock API — hoisted so vi.fn references are available in the mock factory
-const { mockListAllExecutions, mockGetQueueStatus, mockGetAgent, mockListAgentExecutions, mockListActivity, mockListAgents } = vi.hoisted(() => ({
+const { mockListAllExecutions, mockGetQueueStatus, mockGetAgent, mockListAgentExecutions, mockListActivity, mockListAgents, mockListAllAgents } = vi.hoisted(() => ({
   mockListAllExecutions: vi.fn(),
   mockGetQueueStatus: vi.fn(),
   mockGetAgent: vi.fn(),
   mockListAgentExecutions: vi.fn(),
   mockListActivity: vi.fn(),
   mockListAgents: vi.fn(),
+  mockListAllAgents: vi.fn(),
 }));
 
 vi.mock('../../api', () => ({
@@ -22,6 +23,7 @@ vi.mock('../../api', () => ({
     listAgentExecutions: mockListAgentExecutions,
     listActivity: mockListActivity,
     listAgents: mockListAgents,
+    listAllAgents: mockListAllAgents,
   },
 }));
 
@@ -228,5 +230,89 @@ describe('Executions page', () => {
     });
     expect(mockListAgents).not.toHaveBeenCalled();
     expect(mockListAgentExecutions).not.toHaveBeenCalled();
+  });
+
+  it('renders agent display names for known agents and falls back to raw ID for unknown agents', async () => {
+    mockListAllAgents.mockResolvedValue({
+      agents: [
+        { id: 'agent-1', displayName: 'Treasury' },
+        { id: 'agent-2', displayName: 'Payroll' },
+      ],
+      total: 2,
+      truncated: false,
+    });
+    mockListAllExecutions.mockResolvedValue({
+      executions: [
+        {
+          id: 'exec-1',
+          ownerId: 'owner-a',
+          agentId: 'agent-1',
+          approvalId: null,
+          activityId: null,
+          intent: { type: 'payment', asset: 'XLM', amount: '10', destination: 'G...', reason: 'test' },
+          status: 'confirmed',
+          policyDecision: null,
+          simulationResult: null,
+          txHash: null,
+          error: null,
+          attempt: 1,
+          nextRetryAt: null,
+          startedAt: null,
+          completedAt: null,
+          errorClass: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'exec-2',
+          ownerId: 'owner-a',
+          agentId: 'agent-2',
+          approvalId: null,
+          activityId: null,
+          intent: { type: 'payment', asset: 'XLM', amount: '20', destination: 'G...', reason: 'test' },
+          status: 'confirmed',
+          policyDecision: null,
+          simulationResult: null,
+          txHash: null,
+          error: null,
+          attempt: 1,
+          nextRetryAt: null,
+          startedAt: null,
+          completedAt: null,
+          errorClass: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'exec-3',
+          ownerId: 'owner-a',
+          agentId: 'agent-unknown-9999',
+          approvalId: null,
+          activityId: null,
+          intent: { type: 'payment', asset: 'XLM', amount: '30', destination: 'G...', reason: 'test' },
+          status: 'failed',
+          policyDecision: null,
+          simulationResult: null,
+          txHash: null,
+          error: null,
+          attempt: 1,
+          nextRetryAt: null,
+          startedAt: null,
+          completedAt: null,
+          errorClass: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+      hasMore: false,
+    });
+    mockGetQueueStatus.mockResolvedValue({ running: true, byStatus: {} });
+
+    render(<MemoryRouter><Executions /></MemoryRouter>);
+
+    expect(await screen.findByText('Treasury')).toBeInTheDocument();
+    expect(screen.getByText('Payroll')).toBeInTheDocument();
+    expect(screen.getByText('agent-unknown-9999')).toBeInTheDocument();
+    expect(mockListAllAgents).toHaveBeenCalledTimes(1);
   });
 });
