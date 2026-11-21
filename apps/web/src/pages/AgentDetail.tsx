@@ -578,7 +578,7 @@ export default function AgentDetail() {
           </table>
         )}
       </div>
-      <div className="block">
+      <div className="block" id="schedules">
         <h2>Schedules</h2>
         {scheduleError && <div className="error" role="alert">{scheduleError}</div>}
         <ScheduleManagement agentId={agentId} onError={setScheduleError} />

@@ -15,6 +15,7 @@ import Approvals from './pages/Approvals';
 import ApprovalDetail from './pages/ApprovalDetail';
 import Executions from './pages/Executions';
 import ExecutionDetail from './pages/ExecutionDetail';
+import Schedules from './pages/Schedules';
 import Submit from './pages/Submit';
 
 /* ==========================================================================
@@ -29,6 +30,7 @@ function Layout({ children }: { children: React.ReactNode }) {
     { path: '/overview', label: 'Overview', section: 'OPERATE' },
     { path: '/approvals', label: 'Approvals', section: 'OPERATE' },
     { path: '/executions', label: 'Executions', section: 'OPERATE' },
+    { path: '/schedules', label: 'Schedules', section: 'OPERATE' },
     { path: '/activity', label: 'Activity', section: 'OPERATE' },
     { path: '/submit', label: 'Submit Intent', section: 'OPERATE' },
     { path: '/agents', label: 'Agents', section: 'CONFIGURE' },
@@ -212,6 +214,7 @@ export default function App() {
                     <Route path="/approvals/:approvalId" element={<ApprovalDetail />} />
                     <Route path="/executions" element={<Executions />} />
                     <Route path="/executions/:executionId" element={<ExecutionDetail />} />
+                    <Route path="/schedules" element={<Schedules />} />
                     <Route path="/activity" element={<Activity />} />
                     <Route path="/agents/:agentId/activity/:activityId" element={<ActivityDetail />} />
                     <Route path="/agents" element={<Agents />} />
