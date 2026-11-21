@@ -140,7 +140,19 @@ function deepClonePolicy(policy: PolicyRules): PolicyRules {
   };
 }
 
-function PolicySummary({ agentId }: { agentId: string }) {
+/** Label shown wherever an allowed asset has no entry in a per-asset limit map. */
+const NO_CAP_LABEL = 'No cap (uncapped)';
+
+/** Allowed assets that have no entry in the given per-asset limit map. */
+function uncappedAssets(policy: PolicyRules, field: 'maxTxAmount' | 'dailySpendingLimit'): string[] {
+  return policy.allowedAssets.filter((asset) => !(asset in policy[field]));
+}
+
+function assetInputId(prefix: string, asset: string): string {
+  return `${prefix}-${asset.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+
+function PolicySummary({ agentId, refreshKey = 0 }: { agentId: string; refreshKey?: number }) {
   const [policy, setPolicy] = useState<PolicyRules | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -149,19 +161,24 @@ function PolicySummary({ agentId }: { agentId: string }) {
     (async () => {
       try {
         const res = await api.getPolicy(agentId);
-        if (!cancelled) setPolicy(res.policy);
+        if (!cancelled) {
+          setPolicy(res.policy);
+          setError(null);
+        }
       } catch (e: any) {
         if (!cancelled) setError(e.message ?? 'Failed to load policy summary');
       }
     })();
     return () => { cancelled = true; };
-  }, [agentId]);
+  }, [agentId, refreshKey]);
 
   if (error) return null;
   if (!policy) return null;
 
   const limits = Object.entries(policy.maxTxAmount);
   const assets = Object.entries(policy.dailySpendingLimit);
+  const uncappedTx = uncappedAssets(policy, 'maxTxAmount');
+  const uncappedDaily = uncappedAssets(policy, 'dailySpendingLimit');
 
   return (
     <div className="policy-summary">
@@ -172,6 +189,12 @@ function PolicySummary({ agentId }: { agentId: string }) {
             <span className="policy-summary-value">{amount}</span>
           </div>
         ))}
+        {uncappedTx.map((asset) => (
+          <div key={`tx-uncapped-${asset}`} className="policy-summary-item">
+            <span className="policy-summary-label">Max Tx ({asset})</span>
+            <span className="policy-summary-value muted">{NO_CAP_LABEL}</span>
+          </div>
+        ))}
         <div className="policy-summary-item">
           <span className="policy-summary-label">Approval Threshold</span>
           <span className="policy-summary-value">{policy.approvalThreshold}</span>
@@ -180,6 +203,12 @@ function PolicySummary({ agentId }: { agentId: string }) {
           <div key={`daily-${asset}`} className="policy-summary-item">
             <span className="policy-summary-label">Daily Limit ({asset})</span>
             <span className="policy-summary-value">{limit}</span>
+          </div>
+        ))}
+        {uncappedDaily.map((asset) => (
+          <div key={`daily-uncapped-${asset}`} className="policy-summary-item">
+            <span className="policy-summary-label">Daily Limit ({asset})</span>
+            <span className="policy-summary-value muted">{NO_CAP_LABEL}</span>
           </div>
         ))}
         <div className="policy-summary-item">
@@ -197,7 +226,7 @@ function PolicySummary({ agentId }: { agentId: string }) {
   );
 }
 
-function PolicySettings({ agentId }: { agentId: string }) {
+function PolicySettings({ agentId, onSaved }: { agentId: string; onSaved?: () => void }) {
   const [policy, setPolicy] = useState<PolicyRules | null>(null);
   const [version, setVersion] = useState<number | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
@@ -261,7 +290,18 @@ function PolicySettings({ agentId }: { agentId: string }) {
   const removeListItem = (field: 'allowedAssets' | 'allowedDestinations' | 'allowedContractIds', value: string) => {
     setForm((prev) => {
       if (!prev) return prev;
-      return { ...prev, [field]: prev[field].filter((v) => v !== value) };
+      const next: PolicyRules = { ...prev, [field]: prev[field].filter((v) => v !== value) };
+      if (field === 'allowedAssets') {
+        // Removing an asset removes its limit rows, so its per-asset map
+        // entries go too (same delete-on-empty semantics as updateAmountField).
+        const maxTxAmount = { ...prev.maxTxAmount };
+        const dailySpendingLimit = { ...prev.dailySpendingLimit };
+        delete maxTxAmount[value];
+        delete dailySpendingLimit[value];
+        next.maxTxAmount = maxTxAmount;
+        next.dailySpendingLimit = dailySpendingLimit;
+      }
+      return next;
     });
   };
 
@@ -278,6 +318,7 @@ function PolicySettings({ agentId }: { agentId: string }) {
       setVersion(res.version);
       setUpdatedAt(new Date().toISOString());
       setSuccess(`Policy updated (version ${res.version})`);
+      onSaved?.();
     } catch (e: any) {
       setError(e.message ?? 'Failed to save policy');
     } finally {
@@ -299,33 +340,52 @@ function PolicySettings({ agentId }: { agentId: string }) {
 
       <div className="policy-section">
         <h3>Limits</h3>
+        {form.allowedAssets.length === 0 && (
+          <p className="muted">No allowed assets. Add an asset under Allowed Assets to set its limits.</p>
+        )}
+        {form.allowedAssets.map((asset) => {
+          const maxTx = form.maxTxAmount[asset];
+          const daily = form.dailySpendingLimit[asset];
+          return (
+            <div key={`limits-${asset}`} className="form-grid" data-testid={`limits-${asset}`}>
+              <label>
+                <span>Max Transaction Amount ({asset})</span>
+                <input
+                  id={assetInputId('policy-max-tx', asset)}
+                  type="number"
+                  step="0.0000001"
+                  min="0"
+                  value={maxTx ?? ''}
+                  onChange={(e) => updateAmountField('maxTxAmount', asset, e.target.value)}
+                  placeholder={NO_CAP_LABEL}
+                />
+                {maxTx === undefined ? (
+                  <small className="muted">{NO_CAP_LABEL}: any single {asset} intent passes the max-tx check.</small>
+                ) : (
+                  <small>Maximum {asset} amount allowed for a single intent. Transactions above this are denied.</small>
+                )}
+              </label>
+              <label>
+                <span>Daily Spending Limit ({asset})</span>
+                <input
+                  id={assetInputId('policy-daily-limit', asset)}
+                  type="number"
+                  step="0.0000001"
+                  min="0"
+                  value={daily ?? ''}
+                  onChange={(e) => updateAmountField('dailySpendingLimit', asset, e.target.value)}
+                  placeholder={NO_CAP_LABEL}
+                />
+                {daily === undefined ? (
+                  <small className="muted">{NO_CAP_LABEL}: no daily {asset} spending limit is enforced.</small>
+                ) : (
+                  <small>Aggregate daily {asset} spending limit enforced by backend. Once reached, further intents are denied until the next day.</small>
+                )}
+              </label>
+            </div>
+          );
+        })}
         <div className="form-grid">
-          <label>
-            <span>Max Transaction Amount (XLM)</span>
-            <input
-              id="policy-max-tx-xlm"
-              type="number"
-              step="0.0000001"
-              min="0"
-              value={form.maxTxAmount.XLM ?? ''}
-              onChange={(e) => updateAmountField('maxTxAmount', 'XLM', e.target.value)}
-              placeholder="100"
-            />
-            <small>Maximum amount allowed for a single intent. Transactions above this are denied.</small>
-          </label>
-          <label>
-            <span>Daily Spending Limit (XLM)</span>
-            <input
-              id="policy-daily-limit-xlm"
-              type="number"
-              step="0.0000001"
-              min="0"
-              value={form.dailySpendingLimit.XLM ?? ''}
-              onChange={(e) => updateAmountField('dailySpendingLimit', 'XLM', e.target.value)}
-              placeholder="500"
-            />
-            <small>Aggregate daily spending limit enforced by backend. Once reached, further intents are denied until the next day.</small>
-          </label>
           <label>
             <span>Approval Threshold (XLM)</span>
             <input
@@ -477,6 +537,7 @@ export default function AgentDetail() {
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [spending, setSpending] = useState<SpendingData | null>(null);
   const [spendingError, setSpendingError] = useState<string | null>(null);
+  const [policyRefreshKey, setPolicyRefreshKey] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -589,9 +650,9 @@ export default function AgentDetail() {
       </div>
       <div className="block">
         <h2>Policy</h2>
-        <PolicySummary agentId={agentId} />
+        <PolicySummary agentId={agentId} refreshKey={policyRefreshKey} />
         <div className="policy-edit-section">
-          <PolicySettings agentId={agentId} />
+          <PolicySettings agentId={agentId} onSaved={() => setPolicyRefreshKey((k) => k + 1)} />
         </div>
       </div>
     </section>
