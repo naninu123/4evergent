@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { ExecutionList } from '../ExecutionList';
+import type { ExecutionRecord } from '../../types';
 
 const { mockListAgentExecutions } = vi.hoisted(() => ({
   mockListAgentExecutions: vi.fn(),
@@ -13,6 +14,35 @@ vi.mock('../../api', () => ({
     listAgentExecutions: mockListAgentExecutions,
   },
 }));
+
+function execution(id: string, amount: string): ExecutionRecord {
+  return {
+    id,
+    ownerId: 'owner-1',
+    agentId: 'agent-1',
+    approvalId: null,
+    activityId: null,
+    intent: {
+      type: 'payment',
+      asset: 'XLM',
+      amount,
+      destination: 'GDESTINATION123',
+      reason: 'pagination test',
+    },
+    status: 'confirmed',
+    policyDecision: null,
+    simulationResult: null,
+    txHash: null,
+    error: null,
+    attempt: 1,
+    nextRetryAt: null,
+    startedAt: null,
+    completedAt: null,
+    errorClass: null,
+    createdAt: '2026-03-01T10:00:00Z',
+    updatedAt: '2026-03-01T10:00:00Z',
+  };
+}
 
 describe('ExecutionList component', () => {
   beforeEach(() => {
@@ -243,6 +273,35 @@ describe('ExecutionList component', () => {
     await waitFor(() => {
       expect(screen.getByText('20 XLM')).toBeInTheDocument();
     });
+  });
+
+  it('preserves rows and shows inline retry after a load-more failure', async () => {
+    const onError = vi.fn();
+    mockListAgentExecutions
+      .mockResolvedValueOnce({ executions: [execution('exec-first-row', '10')], hasMore: true })
+      .mockRejectedValueOnce(new Error('Network error loading more executions'))
+      .mockResolvedValueOnce({ executions: [execution('exec-second-row', '20')], hasMore: false });
+
+    render(
+      <MemoryRouter>
+        <ExecutionList agentId="agent-1" onError={onError} />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('exec-fir')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Load more/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Network error loading more executions');
+    expect(screen.getByText('exec-fir')).toBeInTheDocument();
+    expect(onError).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('20 XLM')).toBeInTheDocument();
+    expect(screen.getByText('exec-fir')).toBeInTheDocument();
+    expect(screen.getByText('exec-sec')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it('reads agentId from route params when not supplied in props', async () => {

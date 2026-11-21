@@ -13,6 +13,7 @@ export default function Approvals() {
   const [nextOffset, setNextOffset] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
@@ -23,8 +24,10 @@ export default function Approvals() {
       setHasMore(r.hasMore);
       setTotal(r.total ?? null);
       setNextOffset(offset + r.approvals.length);
+      if (!replace) setLoadMoreError(null);
     } catch (e: any) {
-      setError(e.message);
+      if (replace) setError(e.message);
+      else setLoadMoreError(e.message ?? 'Failed to load more approvals');
     }
   }, []);
 
@@ -33,6 +36,12 @@ export default function Approvals() {
   }, [loadPage]);
 
   const loadMore = () => {
+    setLoadingMore(true);
+    loadPage(nextOffset, false).finally(() => setLoadingMore(false));
+  };
+
+  const retryLoadMore = () => {
+    setLoadMoreError(null);
     setLoadingMore(true);
     loadPage(nextOffset, false).finally(() => setLoadingMore(false));
   };
@@ -108,6 +117,7 @@ export default function Approvals() {
       </div>
 
       <PaginationFooter hasMore={hasMore} loadingMore={loadingMore} onLoadMore={loadMore} itemCount={approvals.length} />
+      {loadMoreError && <div className="error" role="alert">{loadMoreError} <button className="btn btn-secondary btn-sm" onClick={retryLoadMore}>Retry</button></div>}
       {rejectId !== null && (
         <ConfirmationModal title="Reject this approval?" actionLabel="Reject"
           onCancel={() => setRejectId(null)}

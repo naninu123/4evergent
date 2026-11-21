@@ -12,6 +12,7 @@ export default function Activity() {
   const [nextOffset, setNextOffset] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const loadPage = useCallback(async (offset: number, replace: boolean) => {
@@ -20,8 +21,10 @@ export default function Activity() {
       setActivity(replace ? r.activity : (prev) => (prev ?? []).concat(r.activity));
       setHasMore(r.hasMore);
       setNextOffset(offset + r.activity.length);
+      if (!replace) setLoadMoreError(null);
     } catch (e: any) {
-      setError(e.message);
+      if (replace) setError(e.message);
+      else setLoadMoreError(e.message ?? 'Failed to load more activity');
     }
   }, []);
 
@@ -30,6 +33,12 @@ export default function Activity() {
   }, [loadPage]);
 
   const loadMore = () => {
+    setLoadingMore(true);
+    loadPage(nextOffset, false).finally(() => setLoadingMore(false));
+  };
+
+  const retryLoadMore = () => {
+    setLoadMoreError(null);
     setLoadingMore(true);
     loadPage(nextOffset, false).finally(() => setLoadingMore(false));
   };
@@ -89,6 +98,7 @@ export default function Activity() {
       </div>
 
       <PaginationFooter hasMore={hasMore} loadingMore={loadingMore} onLoadMore={loadMore} itemCount={activity.length} />
+      {loadMoreError && <div className="error" role="alert">{loadMoreError} <button className="btn btn-secondary btn-sm" onClick={retryLoadMore}>Retry</button></div>}
     </section>
   );
 }
