@@ -115,7 +115,7 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
       <h1>Executions</h1>
 
       {queue && (
-        <div className="cards" style={{ marginBottom: 16 }}>
+        <div className="cards" style={{ marginBottom: 'var(--space-md)' }}>
           <Card title="Queue Running" value={queue.running ? 'Yes' : 'No'} />
           <Card title="Queued" value={String(queue.byStatus['queued'] ?? 0)} />
           <Card title="Executing" value={String(queue.byStatus['executing'] ?? 0)} />
