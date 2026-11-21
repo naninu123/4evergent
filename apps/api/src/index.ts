@@ -9,6 +9,7 @@ import type {
   SimulationResult,
 } from "@4evergent/shared";
 import { API_ERRORS, type ApiErrorCode } from "./error-codes.js";
+import { parsePaginationQuery } from "./pagination-query.js";
 import { IntentValidator } from "@4evergent/agent-core";
 import { PolicyEngine, DEFAULT_RULES, validatePolicyRules, normalizePolicyRules, parseStrictAmount } from "@4evergent/policy";
 import { StellarAdapter } from "@4evergent/agent-core";
@@ -53,7 +54,6 @@ import {
   type PolicyConfigStore,
   createActivity,
   isOffsetAtCeiling,
-  clampOffset,
   getSharedConnection,
   getSchemaVersion,
 } from "@4evergent/database";
@@ -1107,40 +1107,13 @@ export async function createApiServer(options: ServerOptions) {
   async function handleListAgents(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const capability = urlObj.searchParams.get("capability");
-    const hasLimit = urlObj.searchParams.has("limit");
-    const rawLimit = urlObj.searchParams.get("limit");
-    const hasOffset = urlObj.searchParams.has("offset");
-    const rawOffset = urlObj.searchParams.get("offset");
 
-    let limit: number | undefined;
-    if (hasLimit) {
-      // Empty string, non-numeric, or fractional values are rejected.
-      if (rawLimit === null || rawLimit.trim() === "") {
-        return apiError(res, "VALIDATION_ERROR", { message: "limit must be a valid integer" });
-      }
-      const parsed = Number(rawLimit);
-      if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
-        return apiError(res, "VALIDATION_ERROR", { message: "limit must be a valid integer" });
-      }
-      limit = Math.max(1, Math.min(MAX_LIMIT, parsed));
+    const paginationResult = parsePaginationQuery(urlObj.searchParams, { max: MAX_LIMIT });
+    if (!paginationResult.success) {
+      return apiError(res, "VALIDATION_ERROR", { message: paginationResult.error });
     }
 
-    // Same strict validation as `limit`: empty, non-numeric, or fractional
-    // values are rejected. A negative offset clamps to 0 and an offset past
-    // MAX_OFFSET clamps to MAX_OFFSET (see clampOffset).
-    let offset = 0;
-    if (hasOffset) {
-      if (rawOffset === null || rawOffset.trim() === "") {
-        return apiError(res, "VALIDATION_ERROR", { message: "offset must be a valid integer" });
-      }
-      const parsed = Number(rawOffset);
-      if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
-        return apiError(res, "VALIDATION_ERROR", { message: "offset must be a valid integer" });
-      }
-      offset = clampOffset(parsed);
-    }
-
-    const effectiveLimit = limit ?? MAX_LIMIT;
+    const { limit: effectiveLimit, offset } = paginationResult.params;
     const [all, total] = capability !== null
       ? [
           await agentStore.listByCapability(ctx.ownerId!, capability, effectiveLimit, offset),
@@ -1255,8 +1228,13 @@ export async function createApiServer(options: ServerOptions) {
     if (!agentId) return apiError(res, "INVALID_PATH_PARAM");
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
-    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    
+    const paginationResult = parsePaginationQuery(urlObj.searchParams, { max: 100 });
+    if (!paginationResult.success) {
+      return apiError(res, "VALIDATION_ERROR", { message: paginationResult.error });
+    }
+    
+    const { limit, offset } = paginationResult.params;
     const all = await store.listByAgent(agentId, limit + 1, offset);
     const activity = all.slice(0, limit);
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
@@ -1267,8 +1245,13 @@ export async function createApiServer(options: ServerOptions) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const statusFilter = parseStatusFilter(urlObj.searchParams.get("status"), APPROVAL_STATUSES);
     if (!statusFilter.ok) return apiError(res, "VALIDATION_ERROR", { message: statusFilter.error });
-    const limit = Math.max(1, Math.min(200, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    
+    const paginationResult = parsePaginationQuery(urlObj.searchParams, { max: 200 });
+    if (!paginationResult.success) {
+      return apiError(res, "VALIDATION_ERROR", { message: paginationResult.error });
+    }
+    
+    const { limit, offset } = paginationResult.params;
     const rows = await approvals.listByOwner(ctx.ownerId!, limit, offset, statusFilter.status);
     const total = await approvals.countByOwner(ctx.ownerId!, statusFilter.status);
     // `truncated`: more matching rows exist beyond this page.
@@ -1421,8 +1404,13 @@ export async function createApiServer(options: ServerOptions) {
     if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
     const statusFilter = parseStatusFilter(urlObj.searchParams.get("status"), APPROVAL_STATUSES);
     if (!statusFilter.ok) return apiError(res, "VALIDATION_ERROR", { message: statusFilter.error });
-    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    
+    const paginationResult = parsePaginationQuery(urlObj.searchParams, { max: 100 });
+    if (!paginationResult.success) {
+      return apiError(res, "VALIDATION_ERROR", { message: paginationResult.error });
+    }
+    
+    const { limit, offset } = paginationResult.params;
     const rows =
       statusFilter.status === undefined
         ? await approvals.listByAgent(agentId, limit + 1, offset)
@@ -1470,8 +1458,13 @@ export async function createApiServer(options: ServerOptions) {
     if (!agentId) return apiError(res, "INVALID_PATH_PARAM");
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
-    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    
+    const paginationResult = parsePaginationQuery(urlObj.searchParams, { max: 100 });
+    if (!paginationResult.success) {
+      return apiError(res, "VALIDATION_ERROR", { message: paginationResult.error });
+    }
+    
+    const { limit, offset } = paginationResult.params;
     const all = await schedules.listByAgent(agentId, limit + 1, offset);
     const page = all.slice(0, limit);
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
@@ -1686,8 +1679,13 @@ export async function createApiServer(options: ServerOptions) {
     if (!agentId) return apiError(res, "INVALID_PATH_PARAM");
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
-    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    
+    const paginationResult = parsePaginationQuery(urlObj.searchParams, { max: 100 });
+    if (!paginationResult.success) {
+      return apiError(res, "VALIDATION_ERROR", { message: paginationResult.error });
+    }
+    
+    const { limit, offset } = paginationResult.params;
     const all = await executionStore.listByAgent(agentId, limit + 1, offset);
     const executions = all.slice(0, limit);
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
@@ -1741,8 +1739,13 @@ export async function createApiServer(options: ServerOptions) {
 
   async function handleListExecutions(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
-    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    
+    const paginationResult = parsePaginationQuery(urlObj.searchParams, { max: 100 });
+    if (!paginationResult.success) {
+      return apiError(res, "VALIDATION_ERROR", { message: paginationResult.error });
+    }
+    
+    const { limit, offset } = paginationResult.params;
     const all = await executionStore.listByOwner(ctx.ownerId!, limit + 1, offset);
     const executions = all.slice(0, limit);
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
@@ -1751,8 +1754,13 @@ export async function createApiServer(options: ServerOptions) {
 
   async function handleListActivity(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
-    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
-    const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
+    
+    const paginationResult = parsePaginationQuery(urlObj.searchParams, { max: 100 });
+    if (!paginationResult.success) {
+      return apiError(res, "VALIDATION_ERROR", { message: paginationResult.error });
+    }
+    
+    const { limit, offset } = paginationResult.params;
     const all = await store.listByOwner(ctx.ownerId!, limit + 1, offset);
     const activity = all.slice(0, limit);
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);

@@ -49,7 +49,7 @@ export interface CommandDef {
 
 export type CommandTree = Record<string, CommandDef>;
 
-export const INTENT_TYPES = ["payment", "trustline", "contract_call"] as const;
+export const INTENT_TYPES = ["payment", "trustline", "contract_call", "account_settings"] as const;
 export type IntentType = (typeof INTENT_TYPES)[number];
 
 export const SUPPORTED_SHELLS = ["bash", "zsh"] as const;
@@ -365,12 +365,12 @@ export function buildCommandTree(handlers?: CommandTreeHandlers): CommandTree {
       name: "intent",
       description: "Submit transactional intents",
       usage:
-        "Usage: 4evergent intent submit <agent-id> <type> [args...] [--issuer <G...>] [--idempotency-key <key>]\nTypes: payment | trustline | contract_call",
+        "Usage: 4evergent intent submit <agent-id> <type> [args...] [--issuer <G...>] [--idempotency-key <key>]\nTypes: payment | trustline | contract_call | account_settings",
       reportUnknownSubcommand: false,
       subcommands: {
         submit: {
           name: "submit",
-          description: "Submit an intent (payment, trustline, contract_call)",
+          description: "Submit an intent (payment, trustline, contract_call, account_settings)",
           usage:
             "Usage: 4evergent intent submit <agent-id> <type> [args...] [--idempotency-key <key>] [--issuer <G...>]",
           args: [
@@ -390,6 +390,10 @@ export function buildCommandTree(handlers?: CommandTreeHandlers): CommandTree {
             {
               name: "contract_call",
               usage: "contract_call <contractId> <function> <args-json> <reason>",
+            },
+            {
+              name: "account_settings",
+              usage: "account_settings <setting> <value> <reason>",
             },
           ],
           flags: ["--idempotency-key", "--issuer"],
