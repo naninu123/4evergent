@@ -14,9 +14,13 @@ interface AttentionCounts {
 
 export default function Overview() {
   const [health, setHealth] = useState<string | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentRecord[]>([]);
+  const [agentsError, setAgentsError] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
+  const [approvalsError, setApprovalsError] = useState<string | null>(null);
   const [activity, setActivity] = useState<ActivityRecord[]>([]);
+  const [activityError, setActivityError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [attention, setAttention] = useState<AttentionCounts | null>(null);
@@ -27,10 +31,14 @@ export default function Overview() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setHealthError(null);
+    setAgentsError(null);
+    setApprovalsError(null);
+    setActivityError(null);
     setAttentionError(null);
     (async () => {
       try {
-        const [h, a, ap, act] = await Promise.all([
+        const [hRes, aRes, apRes, actRes] = await Promise.allSettled([
           api.health(),
           // Page through GET /agents so the status counts cover every agent,
           // not just the first 200.
@@ -39,10 +47,45 @@ export default function Overview() {
           api.listActivity(),
         ]);
         if (cancelled) return;
-        setHealth(h.signerAccountId);
-        setAgents(a.agents);
-        setApprovals(ap.approvals);
-        setActivity(act.activity);
+
+        const allFailed =
+          hRes.status === 'rejected' &&
+          aRes.status === 'rejected' &&
+          apRes.status === 'rejected' &&
+          actRes.status === 'rejected';
+
+        if (allFailed) {
+          setError(hRes.reason?.message ?? 'Failed to fetch');
+          return;
+        }
+
+        if (hRes.status === 'fulfilled') {
+          setHealth(hRes.value.signerAccountId);
+        } else {
+          setHealth(null);
+          setHealthError(hRes.reason?.message ?? 'Failed to load signer status');
+        }
+
+        if (aRes.status === 'fulfilled') {
+          setAgents(aRes.value.agents);
+        } else {
+          setAgents([]);
+          setAgentsError(aRes.reason?.message ?? 'Failed to load agents');
+        }
+
+        if (apRes.status === 'fulfilled') {
+          setApprovals(apRes.value.approvals);
+        } else {
+          setApprovals([]);
+          setApprovalsError(apRes.reason?.message ?? 'Failed to load pending approvals');
+        }
+
+        if (actRes.status === 'fulfilled') {
+          setActivity(actRes.value.activity);
+        } else {
+          setActivity([]);
+          setActivityError(actRes.reason?.message ?? 'Failed to load recent activity');
+        }
 
         try {
           const att = await api.getOverviewAttention();
@@ -50,8 +93,6 @@ export default function Overview() {
         } catch (e: any) {
           if (!cancelled) setAttentionError(e.message ?? 'Failed to load operational status');
         }
-      } catch (e: any) {
-        if (!cancelled) setError(e.message ?? 'Failed to fetch');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -60,6 +101,50 @@ export default function Overview() {
   }, [reloadKey]);
 
   const retry = () => setReloadKey((k) => k + 1);
+
+  const retryHealth = async () => {
+    setHealthError(null);
+    try {
+      const h = await api.health();
+      setHealth(h.signerAccountId);
+    } catch (e: any) {
+      setHealth(null);
+      setHealthError(e.message ?? 'Failed to load signer status');
+    }
+  };
+
+  const retryAgents = async () => {
+    setAgentsError(null);
+    try {
+      const a = await api.listAllAgents();
+      setAgents(a.agents);
+    } catch (e: any) {
+      setAgents([]);
+      setAgentsError(e.message ?? 'Failed to load agents');
+    }
+  };
+
+  const retryApprovals = async () => {
+    setApprovalsError(null);
+    try {
+      const ap = await api.listApprovals('pending_approval');
+      setApprovals(ap.approvals);
+    } catch (e: any) {
+      setApprovals([]);
+      setApprovalsError(e.message ?? 'Failed to load pending approvals');
+    }
+  };
+
+  const retryActivity = async () => {
+    setActivityError(null);
+    try {
+      const act = await api.listActivity();
+      setActivity(act.activity);
+    } catch (e: any) {
+      setActivity([]);
+      setActivityError(e.message ?? 'Failed to load recent activity');
+    }
+  };
 
   if (loading) return <Skeleton label="Connecting to API..." />;
   if (error) return <EmptyState title="API Unavailable" message={error} error={true} actionLabel="Retry" onAction={retry} />;
@@ -90,12 +175,31 @@ export default function Overview() {
       </div>
 
       <div className="card-grid">
-        <Card title="Signer Account" value={health ? health.slice(0, 12) + '...' : 'unknown'} />
-        <Card title="Active Agents" value={String(activeAgents)} />
-        <Card title="Paused Agents" value={String(pausedAgents)} />
-        <Card title="Disabled Agents" value={String(disabledAgents)} />
-        <Card title="Pending Approvals" value={String(pendingApprovals)} />
+        <Card title="Signer Account" value={healthError ? '—' : (health ? health.slice(0, 12) + '...' : 'unknown')} />
+        <Card title="Active Agents" value={agentsError ? '—' : String(activeAgents)} />
+        <Card title="Paused Agents" value={agentsError ? '—' : String(pausedAgents)} />
+        <Card title="Disabled Agents" value={agentsError ? '—' : String(disabledAgents)} />
+        <Card title="Pending Approvals" value={approvalsError ? '—' : String(pendingApprovals)} />
       </div>
+
+      {healthError && (
+        <div className="error-banner" role="alert">
+          <span>Signer account: {healthError}</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={retryHealth}>Retry</button>
+        </div>
+      )}
+      {agentsError && (
+        <div className="error-banner" role="alert">
+          <span>Agents: {agentsError}</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={retryAgents}>Retry</button>
+        </div>
+      )}
+      {approvalsError && (
+        <div className="error-banner" role="alert">
+          <span>Pending approvals: {approvalsError}</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={retryApprovals}>Retry</button>
+        </div>
+      )}
 
       <Section title="Needs Attention">
         {attention === null && !attentionError ? (
@@ -153,25 +257,32 @@ export default function Overview() {
         )}
       </Section>
 
-      {hasRecentActivity && (
+      {(hasRecentActivity || activityError) && (
         <Section title="Recent Activity">
-          <div className="table-wrapper">
-            <table className="table">
-              <thead>
-                <tr><th>Activity</th><th>Agent</th><th>Status</th><th>Time</th></tr>
-              </thead>
-              <tbody>
-                {recentActivity.map((a) => (
-                  <tr key={a.id}>
-                    <td><code>{a.id.slice(0, 8)}</code></td>
-                    <td><code>{a.agentId.slice(0, 8)}</code></td>
-                    <td><StatusBadge status={a.status} /></td>
-                    <td className="muted">{new Date(a.createdAt).toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {activityError ? (
+            <div className="error-banner" role="alert">
+              <span>{activityError}</span>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={retryActivity}>Retry</button>
+            </div>
+          ) : (
+            <div className="table-wrapper">
+              <table className="table">
+                <thead>
+                  <tr><th>Activity</th><th>Agent</th><th>Status</th><th>Time</th></tr>
+                </thead>
+                <tbody>
+                  {recentActivity.map((a) => (
+                    <tr key={a.id}>
+                      <td><code>{a.id.slice(0, 8)}</code></td>
+                      <td><code>{a.agentId.slice(0, 8)}</code></td>
+                      <td><StatusBadge status={a.status} /></td>
+                      <td className="muted">{new Date(a.createdAt).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Section>
       )}
     </section>

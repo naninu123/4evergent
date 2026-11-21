@@ -471,6 +471,8 @@ export default function AgentDetail() {
   const agentId = useParams<{ agentId: string }>().agentId ?? '';
   const [agent, setAgent] = useState<AgentRecord | null>(null);
   const [activity, setActivity] = useState<ActivityRecord[] | null>(null);
+  const [activityError, setActivityError] = useState<string | null>(null);
+  const [activityReloadKey, setActivityReloadKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
@@ -495,15 +497,10 @@ export default function AgentDetail() {
     setError(null);
     (async () => {
       try {
-        const [a, act] = await Promise.all([
-          api.getAgent(agentId),
-          api.agentActivity(agentId, 20),
-        ]);
-        if (cancelled) return;
-        setAgent(a);
-        setActivity(act.activity);
+        const a = await api.getAgent(agentId);
+        if (!cancelled) setAgent(a);
       } catch (e: any) {
-        if (!cancelled) setError(e.message);
+        if (!cancelled) setError(e.message ?? 'Failed to load agent');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -511,7 +508,23 @@ export default function AgentDetail() {
     return () => { cancelled = true; };
   }, [agentId, reloadKey]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setActivity(null);
+    setActivityError(null);
+    (async () => {
+      try {
+        const act = await api.agentActivity(agentId, 20);
+        if (!cancelled) setActivity(act.activity);
+      } catch (e: any) {
+        if (!cancelled) setActivityError(e.message ?? 'Failed to load activity');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [agentId, reloadKey, activityReloadKey]);
+
   const retry = () => setReloadKey((k) => k + 1);
+  const retryActivity = () => setActivityReloadKey((k) => k + 1);
 
   if (loading) {
     return <Skeleton label="Loading agent..." />;
@@ -553,9 +566,14 @@ export default function AgentDetail() {
       </div>
       <div className="block">
         <h2>Recent Activity</h2>
-        {activity === null ? (
+        {activity === null && activityError === null ? (
           <Skeleton label="Loading activity..." />
-        ) : activity.length === 0 ? (
+        ) : activityError ? (
+          <div className="error-banner" role="alert">
+            <span>{activityError}</span>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={retryActivity}>Retry</button>
+          </div>
+        ) : activity && activity.length === 0 ? (
           <div className="empty-state">
             <p>This agent has no activity yet.</p>
           </div>
@@ -565,7 +583,7 @@ export default function AgentDetail() {
               <tr><th>ID</th><th>Type</th><th>Amount</th><th>Status</th><th>Time</th></tr>
             </thead>
             <tbody>
-              {activity.map((r) => (
+              {(activity ?? []).map((r) => (
                 <tr key={r.id}>
                   <td><code>{r.id.slice(0, 8)}</code></td>
                   <td>{r.intent.type}</td>

@@ -53,6 +53,7 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
   const [nextOffset, setNextOffset] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [queue, setQueue] = useState<QueueSummary | null>(null);
+  const [queueError, setQueueError] = useState<string | null>(null);
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,19 +69,39 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
     }
   }, []);
 
+  const loadQueue = useCallback(async () => {
+    setQueueError(null);
+    try {
+      const q = await api.getQueueStatus();
+      setQueue(q);
+    } catch (e: any) {
+      setQueue(null);
+      setQueueError(e.message ?? 'Failed to load queue status');
+    }
+  }, []);
+
   const loadInitial = useCallback(async () => {
     setLoading(true);
+    setError(null);
+    setQueueError(null);
     try {
-      const [r, q] = await Promise.all([
+      const [execRes, queueRes] = await Promise.allSettled([
         api.listAllExecutions(PAGE_SIZE, 0),
         api.getQueueStatus(),
       ]);
-      setExecutions(r.executions);
-      setHasMore(r.hasMore);
-      setNextOffset(r.executions.length);
-      setQueue(q);
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to load executions');
+      if (execRes.status === 'fulfilled') {
+        setExecutions(execRes.value.executions);
+        setHasMore(execRes.value.hasMore);
+        setNextOffset(execRes.value.executions.length);
+      } else {
+        setError(execRes.reason?.message ?? 'Failed to load executions');
+      }
+      if (queueRes.status === 'fulfilled') {
+        setQueue(queueRes.value);
+      } else {
+        setQueue(null);
+        setQueueError(queueRes.reason?.message ?? 'Failed to load queue status');
+      }
     } finally {
       setLoading(false);
     }
@@ -114,7 +135,12 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
     <section>
       <h1>Executions</h1>
 
-      {queue && (
+      {queueError ? (
+        <div className="error-banner" role="alert" style={{ marginBottom: 16 }}>
+          <span>{queueError}</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={loadQueue}>Retry</button>
+        </div>
+      ) : queue && (
         <div className="cards" style={{ marginBottom: 16 }}>
           <Card title="Queue Running" value={queue.running ? 'Yes' : 'No'} />
           <Card title="Queued" value={String(queue.byStatus['queued'] ?? 0)} />

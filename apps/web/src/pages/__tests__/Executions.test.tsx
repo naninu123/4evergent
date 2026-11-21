@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { MemoryRouter } from 'react-router-dom';
 import Executions from '../Executions';
@@ -228,5 +228,51 @@ describe('Executions page', () => {
     });
     expect(mockListAgents).not.toHaveBeenCalled();
     expect(mockListAgentExecutions).not.toHaveBeenCalled();
+  });
+
+  it('renders executions table and inline queue error with retry when getQueueStatus fails', async () => {
+    mockListAllExecutions.mockResolvedValue({
+      executions: [
+        {
+          id: 'exec-partial',
+          ownerId: 'owner-a',
+          agentId: 'agent-a',
+          approvalId: null,
+          activityId: null,
+          intent: { type: 'payment', asset: 'XLM', amount: '10', destination: 'G...', reason: 'test' },
+          status: 'submitted',
+          policyDecision: null,
+          simulationResult: null,
+          txHash: 'tx-hash-1',
+          error: null,
+          attempt: 1,
+          nextRetryAt: null,
+          startedAt: null,
+          completedAt: null,
+          errorClass: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+      hasMore: false,
+    });
+    mockGetQueueStatus.mockRejectedValueOnce(new Error('Queue status unavailable'));
+
+    render(<MemoryRouter><Executions /></MemoryRouter>);
+
+    await waitFor(() => {
+      expect(screen.getByText('exec-par')).toBeInTheDocument();
+      expect(screen.getByText('Queue status unavailable')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Failed to load executions')).not.toBeInTheDocument();
+
+    mockGetQueueStatus.mockResolvedValueOnce({ running: true, byStatus: { queued: 2 } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Queue Running')).toBeInTheDocument();
+      expect(screen.getByText('Yes')).toBeInTheDocument();
+    });
   });
 });

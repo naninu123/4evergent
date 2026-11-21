@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { MemoryRouter } from 'react-router-dom';
 import Overview from '../Overview';
@@ -49,11 +49,11 @@ describe('Overview page', () => {
     expect(screen.getByText('Connecting to API...')).toBeInTheDocument();
   });
 
-  it('renders error state when initial API calls reject', async () => {
+  it('renders error state when all initial API calls reject', async () => {
     mockHealth.mockRejectedValue(new Error('API server down'));
-    mockListAllAgents.mockResolvedValue({ agents: [], total: 0, truncated: false });
-    mockListApprovals.mockResolvedValue({ approvals: [] });
-    mockListActivity.mockResolvedValue({ activity: [] });
+    mockListAllAgents.mockRejectedValue(new Error('API server down'));
+    mockListApprovals.mockRejectedValue(new Error('API server down'));
+    mockListActivity.mockRejectedValue(new Error('API server down'));
 
     render(
       <MemoryRouter>
@@ -322,5 +322,110 @@ describe('Overview page', () => {
     expect(screen.getByText('activity')).toBeInTheDocument();
     expect(screen.getByText('agent-12')).toBeInTheDocument();
     expect(screen.getByText('submitted')).toBeInTheDocument();
+  });
+
+  it('degrades gracefully when health() fails while other calls succeed', async () => {
+    mockHealth.mockRejectedValueOnce(new Error('Health check failed'));
+    mockListAllAgents.mockResolvedValue({
+      agents: [
+        {
+          id: 'agent-1',
+          displayName: 'Agent 1',
+          description: '',
+          ownerId: 'o1',
+          stellarAddress: 'G1',
+          capabilities: ['payment'],
+          status: 'active',
+          active: true,
+          createdAt: '',
+          updatedAt: '',
+        },
+      ],
+      total: 1,
+      truncated: false,
+    });
+    mockListApprovals.mockResolvedValue({ approvals: [{ id: 'app-1', status: 'pending_approval' }] });
+    mockListActivity.mockResolvedValue({ activity: [] });
+    mockGetOverviewAttention.mockResolvedValue({
+      pendingApprovals: 0,
+      failedExecutions: 0,
+      deadLetterExecutions: 0,
+      retryingExecutions: 0,
+      stuckExecutions: 0,
+    });
+
+    render(
+      <MemoryRouter>
+        <Overview />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Overview')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('API Unavailable')).not.toBeInTheDocument();
+    expect(screen.getByText('Active Agents').closest('.card')).toHaveTextContent('1');
+    expect(screen.getByText('Pending Approvals').closest('.card')).toHaveTextContent('1');
+    expect(screen.getByText(/Health check failed/)).toBeInTheDocument();
+
+    mockHealth.mockResolvedValueOnce({ status: 'ok', signerAccountId: 'GD6WTESTACCOUNT1234567890' });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Signer Account').closest('.card')).toHaveTextContent('GD6WTESTACCO...');
+    });
+  });
+
+  it('degrades gracefully when listActivity() fails while other calls succeed', async () => {
+    mockHealth.mockResolvedValue({ status: 'ok', signerAccountId: 'GD6WTEST1234' });
+    mockListAllAgents.mockResolvedValue({ agents: [], total: 0, truncated: false });
+    mockListApprovals.mockResolvedValue({ approvals: [] });
+    mockListActivity.mockRejectedValueOnce(new Error('Activity endpoint down'));
+    mockGetOverviewAttention.mockResolvedValue({
+      pendingApprovals: 0,
+      failedExecutions: 0,
+      deadLetterExecutions: 0,
+      retryingExecutions: 0,
+      stuckExecutions: 0,
+    });
+
+    render(
+      <MemoryRouter>
+        <Overview />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Overview')).toBeInTheDocument();
+      expect(screen.getByText('Activity endpoint down')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('API Unavailable')).not.toBeInTheDocument();
+    expect(screen.getByText('Recent Activity')).toBeInTheDocument();
+
+    mockListActivity.mockResolvedValueOnce({
+      activity: [
+        {
+          id: 'activity-99999999',
+          agentId: 'agent-99999999',
+          ownerId: 'owner-1',
+          intent: { type: 'payment', asset: 'XLM', amount: '5' },
+          policyDecision: { result: 'allow', reason: 'ok', rule: 'rule-1', intent: {} as any },
+          authorizationStatus: null,
+          simulationResult: null,
+          txHash: null,
+          status: 'submitted',
+          error: null,
+          createdAt: '2026-03-01T12:00:00Z',
+          updatedAt: '2026-03-01T12:00:00Z',
+        },
+      ],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('activity')).toBeInTheDocument();
+    });
   });
 });

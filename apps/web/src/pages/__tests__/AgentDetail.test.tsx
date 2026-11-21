@@ -3,12 +3,13 @@ import { test, expect, describe, vi, beforeEach } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import AgentDetail from '../AgentDetail';
 
-const { mockGetPolicy, mockUpdatePolicy, mockUpdateAgentStatus, mockGetAgentSpending, mockGetAgent } = vi.hoisted(() => ({
+const { mockGetPolicy, mockUpdatePolicy, mockUpdateAgentStatus, mockGetAgentSpending, mockGetAgent, mockAgentActivity } = vi.hoisted(() => ({
   mockGetPolicy: vi.fn(),
   mockUpdatePolicy: vi.fn(),
   mockUpdateAgentStatus: vi.fn(),
   mockGetAgentSpending: vi.fn(),
   mockGetAgent: vi.fn(),
+  mockAgentActivity: vi.fn().mockResolvedValue({ agentId: 'agent-1', activity: [] }),
 }));
 
 const defaultAgent = {
@@ -27,7 +28,7 @@ const defaultAgent = {
 vi.mock('../../api', () => ({
   api: {
     getAgent: mockGetAgent || vi.fn().mockResolvedValue(defaultAgent),
-    agentActivity: vi.fn().mockResolvedValue({ agentId: 'agent-1', activity: [] }),
+    agentActivity: mockAgentActivity,
     listSchedules: vi.fn().mockResolvedValue({ agentId: 'agent-1', schedules: [] }),
     listAgentExecutions: vi.fn().mockResolvedValue({ agentId: 'agent-1', executions: [] }),
     getAgentSpending: mockGetAgentSpending,
@@ -561,6 +562,63 @@ describe('AgentDetail Regression', () => {
       // Agent header should show name once
       const nameElements = screen.getAllByText('Test Agent');
       expect(nameElements.length).toBe(1);
+    });
+  });
+});
+
+describe('AgentDetail Partial Failure Degradation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAgent.mockResolvedValue(defaultAgent);
+    mockGetAgentSpending.mockResolvedValue(defaultSpendingResponse);
+    mockGetPolicy.mockResolvedValue(defaultPolicyResponse);
+    mockAgentActivity.mockResolvedValue({ agentId: 'agent-1', activity: [] });
+  });
+
+  test('renders agent details and inline activity error with retry when agentActivity fails', async () => {
+    mockAgentActivity.mockRejectedValueOnce(new Error('Activity service unavailable'));
+
+    render(
+      <MemoryRouter initialEntries={['/agents/agent-1']}>
+        <Routes>
+          <Route path="/agents/:agentId" element={<AgentDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Agent')).toBeInTheDocument();
+      expect(screen.getByText('Activity service unavailable')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Failed to load agent')).not.toBeInTheDocument();
+    expect(screen.getByText('Financial Control')).toBeInTheDocument();
+    expect(screen.getByText('Schedules')).toBeInTheDocument();
+    expect(screen.getByText('Executions')).toBeInTheDocument();
+    expect(screen.getByText('Policy')).toBeInTheDocument();
+
+    mockAgentActivity.mockResolvedValueOnce({ agentId: 'agent-1', activity: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('This agent has no activity yet.')).toBeInTheDocument();
+    });
+  });
+
+  test('renders full-page error state when getAgent fails', async () => {
+    mockGetAgent.mockRejectedValueOnce(new Error('Agent fetch failed'));
+
+    render(
+      <MemoryRouter initialEntries={['/agents/agent-1']}>
+        <Routes>
+          <Route path="/agents/:agentId" element={<AgentDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load agent')).toBeInTheDocument();
+      expect(screen.getByText('Agent fetch failed')).toBeInTheDocument();
     });
   });
 });
