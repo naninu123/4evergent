@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { MemoryRouter } from 'react-router-dom';
 import Executions from '../Executions';
@@ -314,5 +314,81 @@ describe('Executions page', () => {
     expect(screen.getByText('Payroll')).toBeInTheDocument();
     expect(screen.getByText('agent-unknown-9999')).toBeInTheDocument();
     expect(mockListAllAgents).toHaveBeenCalledTimes(1);
+  });
+
+  it('filters failed executions server-side across >50 total rows, resets pagination on filter change, and counts filtered items', async () => {
+    const makeExecution = (id: string, status: 'confirmed' | 'failed') => ({
+      id,
+      ownerId: 'owner-a',
+      agentId: 'agent-a',
+      approvalId: null,
+      activityId: null,
+      intent: { type: 'payment', asset: 'XLM', amount: '10', destination: 'G...', reason: 'test' },
+      status,
+      policyDecision: null,
+      simulationResult: null,
+      txHash: null,
+      error: status === 'failed' ? 'boom' : null,
+      attempt: 1,
+      nextRetryAt: null,
+      startedAt: null,
+      completedAt: null,
+      errorClass: null,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+
+    // Simulate >50 total executions: 60 confirmed + 55 failed (115 total)
+    const allPage1 = Array.from({ length: 50 }, (_, i) => makeExecution(`conf-${String(i).padStart(3, '0')}`, 'confirmed'));
+    const failedPage1 = Array.from({ length: 50 }, (_, i) => makeExecution(`fail-${String(i).padStart(3, '0')}`, 'failed'));
+    const failedPage2 = Array.from({ length: 5 }, (_, i) => makeExecution(`fail-${String(50 + i).padStart(3, '0')}`, 'failed'));
+
+    mockListAllExecutions.mockImplementation(async (_limit: number, offset: number, status?: string) => {
+      if (status === 'failed') {
+        if (offset === 0) return { executions: failedPage1, hasMore: true };
+        if (offset === 50) return { executions: failedPage2, hasMore: false };
+      }
+      if (!status && offset === 0) {
+        return { executions: allPage1, hasMore: true };
+      }
+      return { executions: [], hasMore: false };
+    });
+    mockGetQueueStatus.mockResolvedValue({ running: true, byStatus: { confirmed: 60, failed: 55 } });
+
+    render(<MemoryRouter><Executions /></MemoryRouter>);
+
+    // Initial unfiltered load
+    await waitFor(() => {
+      expect(mockListAllExecutions).toHaveBeenCalledWith(50, 0, undefined);
+      expect(screen.getByText('conf-000')).toBeInTheDocument();
+    });
+
+    // Switch filter to "failed" -> resets pagination to offset 0 with server-side status='failed'
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'failed' } });
+
+    await waitFor(() => {
+      expect(mockListAllExecutions).toHaveBeenCalledWith(50, 0, 'failed');
+      expect(screen.getByText('fail-000')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('conf-000')).not.toBeInTheDocument();
+    expect(screen.getByText('50 shown')).toBeInTheDocument();
+
+    // Load more -> pages only through failed rows at offset 50
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+
+    await waitFor(() => {
+      expect(mockListAllExecutions).toHaveBeenCalledWith(50, 50, 'failed');
+      expect(screen.getByText('fail-054')).toBeInTheDocument();
+    });
+    expect(screen.getAllByRole('row')).toHaveLength(56); // 1 header + 55 failed rows
+    expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument();
+
+    // Switching back to "all" resets pagination to offset 0 with status=undefined
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'all' } });
+
+    await waitFor(() => {
+      expect(mockListAllExecutions).toHaveBeenLastCalledWith(50, 0, undefined);
+      expect(screen.getByText('conf-000')).toBeInTheDocument();
+    });
   });
 });

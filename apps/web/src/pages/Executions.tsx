@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { useAgentNames } from '../agentNames';
@@ -58,66 +58,82 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const requestIdRef = useRef(0);
   const agentNames = useAgentNames();
 
-  const loadPage = useCallback(async (offset: number, replace: boolean) => {
+  const statusParam = filter === 'all' ? undefined : filter;
+
+  const loadPage = useCallback(async (offset: number, replace: boolean, status?: ExecutionStatus) => {
+    const reqId = ++requestIdRef.current;
     try {
-      const r = await api.listAllExecutions(PAGE_SIZE, offset);
+      const r = await api.listAllExecutions(PAGE_SIZE, offset, status);
+      if (reqId !== requestIdRef.current) return;
       setExecutions(replace ? r.executions : (prev) => (prev ?? []).concat(r.executions));
-      setHasMore(r.hasMore);
+      setHasMore(Boolean(r.hasMore));
       setNextOffset(offset + r.executions.length);
       if (!replace) setLoadMoreError(null);
     } catch (e: any) {
+      if (reqId !== requestIdRef.current) return;
       if (replace) setError(e.message ?? 'Failed to load executions');
       else setLoadMoreError(e.message ?? 'Failed to load more executions');
     }
   }, []);
 
-  const loadInitial = useCallback(async () => {
+  const loadInitial = useCallback(async (status?: ExecutionStatus) => {
+    const reqId = ++requestIdRef.current;
     setLoading(true);
+    setError(null);
+    setLoadMoreError(null);
+    setHasMore(false);
+    setNextOffset(0);
     try {
       const [r, q] = await Promise.all([
-        api.listAllExecutions(PAGE_SIZE, 0),
+        api.listAllExecutions(PAGE_SIZE, 0, status),
         api.getQueueStatus(),
       ]);
+      if (reqId !== requestIdRef.current) return;
       setExecutions(r.executions);
-      setHasMore(r.hasMore);
+      setHasMore(Boolean(r.hasMore));
       setNextOffset(r.executions.length);
       setQueue(q);
     } catch (e: any) {
+      if (reqId !== requestIdRef.current) return;
       setError(e.message ?? 'Failed to load executions');
     } finally {
-      setLoading(false);
+      if (reqId === requestIdRef.current) setLoading(false);
     }
   }, []);
 
   const loadMore = () => {
     setLoadingMore(true);
-    loadPage(nextOffset, false).finally(() => setLoadingMore(false));
+    loadPage(nextOffset, false, statusParam).finally(() => setLoadingMore(false));
   };
 
   const retryLoadMore = () => {
     setLoadMoreError(null);
     setLoadingMore(true);
-    loadPage(nextOffset, false).finally(() => setLoadingMore(false));
+    loadPage(nextOffset, false, statusParam).finally(() => setLoadingMore(false));
   };
 
   const retry = () => {
     setError(null);
-    loadInitial();
+    loadInitial(statusParam);
+  };
+
+  const handleFilterChange = (nextFilter: StatusFilter) => {
+    setFilter(nextFilter);
+    setHasMore(false);
+    setNextOffset(0);
+    setLoadMoreError(null);
   };
 
   useEffect(() => {
-    loadInitial();
-  }, [loadInitial]);
+    loadInitial(statusParam);
+  }, [loadInitial, statusParam]);
 
   if (loading) return <Skeleton label="Loading executions..." />;
   if (error) return <EmptyState title="Failed to load executions" message={error} error={true} actionLabel="Retry" onAction={retry} />;
   if (executions === null) return <Skeleton label="Loading executions..." />;
-
-  const filtered = filter === 'all'
-    ? executions
-    : executions.filter((e) => e.status === filter || (filter === 'failed' && inferRetrying(e)));
 
   const retryingCount = executions.filter(inferRetrying).length;
 
@@ -138,12 +154,12 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
 
       <div className="filter-bar">
         <label>Status:</label>
-        <select value={filter} onChange={(e) => setFilter(e.target.value as StatusFilter)}>
+        <select value={filter} onChange={(e) => handleFilterChange(e.target.value as StatusFilter)}>
           {FILTER_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </div>
 
-      {filtered.length === 0 ? (
+      {executions.length === 0 ? (
         <EmptyState
           title="No executions found"
           message={filter === 'all'
@@ -166,7 +182,7 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
               </tr>
             </thead>
             <tbody>
-              {filtered.map((e) => {
+              {executions.map((e) => {
                 const isRetrying = inferRetrying(e);
                 const statusDisplay = isRetrying ? 'Retrying' : statusLabel(e.status);
                 const statusCls = isRetrying ? 'badge-warn' : statusClass(e.status);

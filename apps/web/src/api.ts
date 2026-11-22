@@ -223,10 +223,13 @@ export const api = {
 
   // ===== Executions =====
 
-  listAllExecutions: (limit = 50, offset = 0) =>
-    request<{ executions: ExecutionRecord[]; hasMore: boolean }>(
-      `/executions?limit=${limit}&offset=${offset}`
-    ),
+  listAllExecutions: (limit = 50, offset = 0, status?: ExecutionStatus) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (status) params.set('status', status);
+    return request<{ executions: ExecutionRecord[]; hasMore: boolean }>(
+      `/executions?${params.toString()}`
+    );
+  },
 
   listActivity: (limit = 50, offset = 0) =>
     request<{ activity: ActivityRecord[]; hasMore: boolean }>(

@@ -187,6 +187,10 @@ export interface ApprovalListOptions extends RequestOptions {
   status?: string;
 }
 
+export interface ExecutionListOptions extends RequestOptions {
+  status?: string;
+}
+
 export interface SubmitIntentOptions {
   idempotencyKey?: string;
 }
@@ -385,12 +389,22 @@ export class Client {
     });
   }
 
-  listAgentExecutions(agentId: string, options: RequestOptions = {}): Promise<{ agentId: string; executions: ExecutionRecord[]; hasMore?: boolean }> {
-    return this.request<{ agentId: string; executions: ExecutionRecord[]; hasMore: boolean }>(withPagination(`/agents/${encodeURIComponent(agentId)}/executions`, options));
+  listAgentExecutions(agentId: string, options: ExecutionListOptions = {}): Promise<{ agentId: string; executions: ExecutionRecord[]; hasMore?: boolean }> {
+    const params = new URLSearchParams();
+    if (options.status) params.set("status", options.status);
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    if (options.offset !== undefined) params.set("offset", String(options.offset));
+    const query = params.toString();
+    return this.request<{ agentId: string; executions: ExecutionRecord[]; hasMore: boolean }>(`/agents/${encodeURIComponent(agentId)}/executions${query ? `?${query}` : ""}`);
   }
 
-  listExecutions(options: RequestOptions = {}): Promise<{ executions: ExecutionRecord[]; hasMore?: boolean }> {
-    return this.request<{ executions: ExecutionRecord[]; hasMore: boolean }>(withPagination("/executions", options));
+  listExecutions(options: ExecutionListOptions = {}): Promise<{ executions: ExecutionRecord[]; hasMore?: boolean }> {
+    const params = new URLSearchParams();
+    if (options.status) params.set("status", options.status);
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    if (options.offset !== undefined) params.set("offset", String(options.offset));
+    const query = params.toString();
+    return this.request<{ executions: ExecutionRecord[]; hasMore: boolean }>(`/executions${query ? `?${query}` : ""}`);
   }
 
   getExecution(executionId: string): Promise<{ execution: ExecutionRecord }> {
