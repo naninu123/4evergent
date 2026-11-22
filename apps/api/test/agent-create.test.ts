@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApiServer } from "../src/index.js";
 import { DevAuthProvider } from "@4evergent/shared";
+import { Keypair, StrKey } from "@stellar/stellar-sdk";
 
 async function post(url: string, body: unknown): Promise<{ status: number; body: any }> {
   const res = await fetch(url, {
@@ -142,7 +143,7 @@ test("POST /agents validation — invalid capabilities", async () => {
   }
 });
 
-test("POST /agents validation — invalid stellarAddress", async () => {
+test("POST /agents validation — invalid stellarAddress (non-string)", async () => {
   const server = await createApiServer({
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
@@ -155,6 +156,114 @@ test("POST /agents validation — invalid stellarAddress", async () => {
     const res = await post(`${baseUrl}/agents`, { displayName: "Test", stellarAddress: 123 });
     assert.equal(res.status, 400);
     assert.equal(res.body.error, "stellarAddress must be a string");
+  } finally {
+    await server.close();
+  }
+});
+
+// A real Ed25519 public key on Stellar testnet
+const VALID_STELLAR_ADDRESS = Keypair.random().publicKey();
+
+test("POST /agents stellarAddress — valid address accepted", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    const res = await post(`${baseUrl}/agents`, {
+      displayName: "Valid Address Agent",
+      stellarAddress: VALID_STELLAR_ADDRESS,
+    });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.agent.stellarAddress, VALID_STELLAR_ADDRESS);
+  } finally {
+    await server.close();
+  }
+});
+
+test("POST /agents stellarAddress — invalid format rejected", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    const res = await post(`${baseUrl}/agents`, {
+      displayName: "Bad Address Agent",
+      stellarAddress: "not-an-address",
+    });
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /stellarAddress/);
+    assert.match(res.body.error, /Ed25519|G\.\.\./);
+  } finally {
+    await server.close();
+  }
+});
+
+test("POST /agents stellarAddress — valid length but bad checksum rejected", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    // Flip the last character of a valid address to break the checksum
+    const badChecksum = VALID_STELLAR_ADDRESS.slice(0, -1) + (VALID_STELLAR_ADDRESS.endsWith("H") ? "A" : "H");
+    const res = await post(`${baseUrl}/agents`, {
+      displayName: "Bad Checksum Agent",
+      stellarAddress: badChecksum,
+    });
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /stellarAddress/);
+  } finally {
+    await server.close();
+  }
+});
+
+test("POST /agents stellarAddress — empty string accepted", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    const res = await post(`${baseUrl}/agents`, {
+      displayName: "Empty Address Agent",
+      stellarAddress: "",
+    });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.agent.stellarAddress, "");
+  } finally {
+    await server.close();
+  }
+});
+
+test("POST /agents stellarAddress — absent field accepted", async () => {
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: makeSigner("GTEST"),
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  try {
+    const res = await post(`${baseUrl}/agents`, { displayName: "No Address Agent" });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.agent.stellarAddress, "");
   } finally {
     await server.close();
   }

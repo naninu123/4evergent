@@ -61,6 +61,7 @@ import {
 import type { PolicyRules, Agent, RequestContext, AuthorizationService, AuthProvider, AuthenticatedPrincipal } from "@4evergent/shared";
 import { createAuthModule, type PrincipalResolution } from "./auth.js";
 import { sweepRetainedData } from "./data-retention.js";
+import { StrKey } from "@stellar/stellar-sdk";
 
 const require = createRequire(import.meta.url);
 export const API_VERSION: string = (require("../package.json") as { version: string }).version;
@@ -1231,6 +1232,11 @@ export async function createApiServer(options: ServerOptions) {
     if (b.stellarAddress !== undefined) {
       if (typeof b.stellarAddress !== "string") {
         return apiError(res, "VALIDATION_ERROR", { message: "stellarAddress must be a string" });
+      }
+      if (b.stellarAddress.length > 0 && !StrKey.isValidEd25519PublicKey(b.stellarAddress)) {
+        return apiError(res, "VALIDATION_ERROR", {
+          message: "stellarAddress must be a valid Ed25519 public key (G... Stellar address)",
+        });
       }
       stellarAddress = b.stellarAddress;
     }
