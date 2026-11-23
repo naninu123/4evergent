@@ -564,3 +564,191 @@ describe('AgentDetail Regression', () => {
     });
   });
 });
+
+describe('AgentDetail per-asset limits (#327)', () => {
+  const renderPage = () =>
+    render(<MemoryRouter initialEntries={['/agents/agent-1']}><Routes><Route path="/agents/:agentId" element={<AgentDetail />} /></Routes></MemoryRouter>);
+
+  const multiAssetPolicy = (overrides: Record<string, unknown> = {}) => ({
+    ...defaultPolicyResponse,
+    policy: {
+      ...defaultPolicyResponse.policy,
+      allowedAssets: ['XLM', 'USDC'],
+      ...overrides,
+    },
+  });
+
+  /** getPolicy returns whatever was last saved, like the real backend. */
+  type PolicyResponse = Omit<typeof defaultPolicyResponse, 'policy'> & {
+    policy: Omit<typeof defaultPolicyResponse.policy, 'maxTxAmount' | 'dailySpendingLimit'> & {
+      maxTxAmount: Record<string, string>;
+      dailySpendingLimit: Record<string, string>;
+    };
+  };
+  const useStatefulPolicyApi = (initial: PolicyResponse) => {
+    let current = initial;
+    mockGetPolicy.mockImplementation(async () => current);
+    mockUpdatePolicy.mockImplementation(async (_agentId: string, policy: any) => {
+      current = { ...current, policy: JSON.parse(JSON.stringify(policy)), version: current.version + 1 };
+      return { agentId: 'agent-1', policy: current.policy, version: current.version };
+    });
+  };
+
+  const getInput = (id: string) => {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`input #${id} not found`);
+    return el as HTMLInputElement;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAgent.mockResolvedValue(defaultAgent);
+    mockGetAgentSpending.mockResolvedValue(defaultSpendingResponse);
+  });
+
+  test('editor shows limit inputs for every allowed asset', async () => {
+    mockGetPolicy.mockResolvedValue(multiAssetPolicy({
+      maxTxAmount: { XLM: '100', USDC: '50' },
+      dailySpendingLimit: { XLM: '500', USDC: '200' },
+    }));
+    renderPage();
+
+    expect(await screen.findByText('Max Transaction Amount (XLM)')).toBeInTheDocument();
+    expect(screen.getByText('Daily Spending Limit (XLM)')).toBeInTheDocument();
+    expect(screen.getByText('Max Transaction Amount (USDC)')).toBeInTheDocument();
+    expect(screen.getByText('Daily Spending Limit (USDC)')).toBeInTheDocument();
+    expect(getInput('policy-max-tx-xlm').value).toBe('100');
+    expect(getInput('policy-daily-limit-xlm').value).toBe('500');
+    expect(getInput('policy-max-tx-usdc').value).toBe('50');
+    expect(getInput('policy-daily-limit-usdc').value).toBe('200');
+  });
+
+  test('an asset without a limit is labelled as uncapped, not left silently blank', async () => {
+    mockGetPolicy.mockResolvedValue(multiAssetPolicy());
+    renderPage();
+
+    await screen.findByText('Max Transaction Amount (USDC)');
+    expect(getInput('policy-max-tx-usdc').value).toBe('');
+    expect(getInput('policy-max-tx-usdc').placeholder).toBe('No cap (uncapped)');
+    expect(screen.getByText(/any single USDC intent passes the max-tx check/)).toBeInTheDocument();
+    expect(screen.getByText(/no daily USDC spending limit is enforced/)).toBeInTheDocument();
+    // Summary also flags the uncapped asset.
+    await waitFor(() => {
+      expect(screen.getAllByText('No cap (uncapped)').length).toBe(2);
+    });
+  });
+
+  test('saving a USDC limit persists it and the summary shows it', async () => {
+    useStatefulPolicyApi(multiAssetPolicy());
+    renderPage();
+
+    await screen.findByText('Max Transaction Amount (USDC)');
+    fireEvent.change(getInput('policy-max-tx-usdc'), { target: { value: '50' } });
+    fireEvent.change(getInput('policy-daily-limit-usdc'), { target: { value: '120' } });
+    fireEvent.click(screen.getByText('Save Policy'));
+
+    await waitFor(() => {
+      expect(mockUpdatePolicy).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+        maxTxAmount: { XLM: '100', USDC: '50' },
+        dailySpendingLimit: { XLM: '500', USDC: '120' },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Max Tx (USDC)')).toBeInTheDocument();
+      expect(screen.getByText('Daily Limit (USDC)')).toBeInTheDocument();
+      expect(screen.getByText('120')).toBeInTheDocument();
+      expect(screen.queryByText('No cap (uncapped)')).not.toBeInTheDocument();
+    });
+    expect(getInput('policy-max-tx-usdc').value).toBe('50');
+  });
+
+  test('clearing a USDC limit removes the cap and labels the asset as uncapped', async () => {
+    useStatefulPolicyApi(multiAssetPolicy({
+      maxTxAmount: { XLM: '100', USDC: '50' },
+      dailySpendingLimit: { XLM: '500', USDC: '120' },
+    }));
+    renderPage();
+
+    await screen.findByText('Max Transaction Amount (USDC)');
+    fireEvent.change(getInput('policy-max-tx-usdc'), { target: { value: '' } });
+    expect(screen.getByText(/any single USDC intent passes the max-tx check/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Save Policy'));
+
+    await waitFor(() => {
+      expect(mockUpdatePolicy).toHaveBeenCalledTimes(1);
+    });
+    const saved = mockUpdatePolicy.mock.calls[0]![1];
+    expect(saved.maxTxAmount).toEqual({ XLM: '100' });
+    expect('USDC' in saved.maxTxAmount).toBe(false);
+    expect(saved.dailySpendingLimit).toEqual({ XLM: '500', USDC: '120' });
+
+    await waitFor(() => {
+      // Summary row for the cleared cap shows the uncapped label.
+      expect(screen.getByText('Max Tx (USDC)').nextSibling).toHaveTextContent('No cap (uncapped)');
+    });
+  });
+
+  test('adding an asset adds its limit rows; removing it drops rows and map entries on save', async () => {
+    useStatefulPolicyApi({
+      ...defaultPolicyResponse,
+      policy: {
+        ...defaultPolicyResponse.policy,
+        allowedAssets: ['XLM', 'EURC'],
+        maxTxAmount: { XLM: '100', EURC: '10' },
+        dailySpendingLimit: { XLM: '500', EURC: '30' },
+      },
+    });
+    renderPage();
+
+    await screen.findByText('Max Transaction Amount (EURC)');
+    expect(screen.queryByText('Max Transaction Amount (USDC)')).not.toBeInTheDocument();
+
+    const addInput = screen.getByLabelText('Add allowed asset');
+    fireEvent.change(addInput, { target: { value: 'USDC' } });
+    fireEvent.keyDown(addInput, { key: 'Enter' });
+    expect(await screen.findByText('Max Transaction Amount (USDC)')).toBeInTheDocument();
+    expect(screen.getByText('Daily Spending Limit (USDC)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('Remove allowed asset EURC'));
+    expect(screen.queryByText('Max Transaction Amount (EURC)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Daily Spending Limit (EURC)')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Save Policy'));
+    await waitFor(() => {
+      expect(mockUpdatePolicy).toHaveBeenCalledTimes(1);
+    });
+    const saved = mockUpdatePolicy.mock.calls[0]![1];
+    expect(saved.allowedAssets).toEqual(['XLM', 'USDC']);
+    expect(saved.maxTxAmount).toEqual({ XLM: '100' });
+    expect(saved.dailySpendingLimit).toEqual({ XLM: '500' });
+  });
+
+  test('an XLM-only policy renders and saves identically (no loss of other map entries)', async () => {
+    const xlmOnly = {
+      ...defaultPolicyResponse,
+      policy: {
+        ...defaultPolicyResponse.policy,
+        // A legacy "native" fallback entry that is not an allowed-asset row.
+        maxTxAmount: { XLM: '100', native: '80' },
+        dailySpendingLimit: { XLM: '500', native: '400' },
+      },
+    };
+    useStatefulPolicyApi(xlmOnly);
+    renderPage();
+
+    await screen.findByText('Max Transaction Amount (XLM)');
+    expect(screen.queryByText('Max Transaction Amount (native)')).not.toBeInTheDocument();
+    expect(getInput('policy-max-tx-xlm').value).toBe('100');
+    expect(getInput('policy-daily-limit-xlm').value).toBe('500');
+
+    // Touch an unrelated field and save: limit maps must be untouched.
+    fireEvent.change(screen.getByDisplayValue('25'), { target: { value: '30' } });
+    fireEvent.click(screen.getByText('Save Policy'));
+
+    await waitFor(() => {
+      expect(mockUpdatePolicy).toHaveBeenCalledTimes(1);
+    });
+    expect(mockUpdatePolicy.mock.calls[0]![1]).toEqual({ ...xlmOnly.policy, approvalThreshold: '30' });
+  });
+});
