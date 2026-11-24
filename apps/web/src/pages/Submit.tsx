@@ -195,7 +195,7 @@ export default function Submit() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} onReset={() => { attemptRef.current = null; }} className="surface" style={{ maxWidth: '500px' }}>
+      <form onSubmit={handleSubmit} onReset={() => { attemptRef.current = null; }} className="surface" style={{ maxWidth: 'var(--form-max-width)' }}>
         <div className="field">
           <label htmlFor="intent-type">Intent Type</label>
           <select id="intent-type" value={intentType} onChange={(e) => setIntentType(e.target.value as any)} className="select">
