@@ -35,6 +35,23 @@ binding, the single-process in-memory state, and session persistence — are
 recorded as ADRs 016–019 in [architecture.md](architecture.md). Rate limiting
 for the login endpoints is ADR-020 (Proposed).
 
+When the per-source request budget is exhausted, the auth gate returns HTTP
+`429` with the standard `{ code, error }` envelope and a `Retry-After` header
+indicating how many seconds to wait before retrying:
+
+```json
+{"code":"RATE_LIMITED","error":"rate_limited"}
+```
+
+The authenticated, money-moving endpoints have their own per-owner limit
+(#261): `POST /agents/:id/intents` and the approve / reject actions. Each
+endpoint has a separate budget (60 requests per owner per 60 seconds by
+default), so intent traffic cannot lock an owner out of approvals. Past the
+limit the endpoint returns the same `429` with `Retry-After` and the
+`RATE_LIMITED` envelope as the auth gate. Limits are per owner, never global
+across owners, and are configurable with `API_RATE_LIMIT_MAX`,
+`API_RATE_LIMIT_WINDOW_SECONDS` and `API_RATE_LIMIT_MAX_KEYS`.
+
 ### GET /auth/config
 
 Public. Returns which login methods the server has enabled:
@@ -143,7 +160,7 @@ the approval fields (`approvalId`, `activityId`, `status`, `message`). Request b
 | `RAW_TRANSACTION_REJECTED` | 400 | Raw transaction payloads are not accepted. |
 | `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key header is too long. |
 | `IDEMPOTENCY_CONFLICT` | 409 | The Idempotency-Key was already used with a different intent. |
-| `AGENT_NOT_ACTIVE` | 409 | The agent is paused or disabled. |
+| `AGENT_NOT_ACTIVE` | 409 | The agent is `paused` or `disabled`. Returned by `POST /agents/:id/intents` and `POST /approvals/:id/approve`. |
 | `AGENT_STATUS_CONFLICT` | 409 | The agent's current status does not allow the requested status transition. |
 | `INVALID_EXECUTION_STATE` | 409 | The execution status does not allow the requested action. |
 | `MAX_RETRIES_REACHED` | 409 | The execution has used all retry attempts. |
@@ -152,6 +169,7 @@ the approval fields (`approvalId`, `activityId`, `status`, `message`). Request b
 | `SCHEDULE_INVALID_TRANSITION` | 409 | The schedule status does not allow the requested pause, resume or disable. |
 | `EXECUTION_CONFLICT` | 409 | The execution changed concurrently. |
 | `APPROVAL_EXPIRED` | 410 | The approval passed its expiry before it was approved. |
+| `RATE_LIMITED` | 429 | Too many requests from this source. Retry after the number of seconds in the `Retry-After` response header. |
 
 ---
 
@@ -263,6 +281,50 @@ Match semantics:
 
 Get one agent (owner-scoped). `404` if not found or not owned.
 
+### PATCH /agents/:id
+
+Update an agent's mutable metadata. Auth: owner-scoped; a caller who does not
+own the agent gets the same `404` as for a nonexistent agent.
+
+Body: a JSON object with **at least one** of the fields below (all three may
+be sent together).
+
+| Field | Type | Rules |
+|---|---|---|
+| `displayName` | string | Optional; when supplied, non-empty after trimming and ≤100 characters (trimmed). Stored trimmed. |
+| `description` | string | Optional; may be empty; ≤500 characters. |
+| `capabilities` | string[] | Optional; ≤32 entries; each entry non-empty after trimming, ≤32 characters, and unique after trimming. The stored list is the trimmed list. |
+
+The capability caps are the same numeric limits the on-chain
+`agent-registry` contract enforces (`MAX_CAPABILITIES = 32`,
+`MAX_CAPABILITY_LEN = 32` in `contracts/agent-registry/src/lib.rs`), so an
+agent accepted here can be registered on-chain without tripping them. Two
+differences remain, and are intentional: this endpoint trims entries before
+checking length/uniqueness (the contract compares exact bytes, untrimmed), and
+it caps `displayName` at 100 characters while the contract allows 128 bytes.
+On-chain lengths are UTF-8 bytes whereas this endpoint measures UTF-16 code
+units, so a capability made of multi-byte characters can pass here and still
+be rejected on-chain.
+
+Fields that are **rejected** with `400 VALIDATION_ERROR`:
+
+- `status` — use `PATCH /agents/:id/status` instead.
+- `stellarAddress` — immutable. It binds the agent to a Stellar signer/account,
+  so changing it would repoint the agent's signing identity; register a new
+  agent with the desired address instead.
+- Any other field (`id`, `ownerId`, `active`, `metadata`, or a typo such as
+  `displayname`). Unknown fields are rejected rather than ignored, so a
+  misspelled field cannot silently do nothing.
+
+Responses:
+
+- `200` → `{ "agent": AgentRecord }` with the updated record. The same values
+  are returned by a subsequent `GET /agents/:id`.
+- `400` → invalid JSON; body not an object; no updatable field supplied; a
+  supplied field fails the rules above; `status`, `stellarAddress`, or an
+  unknown field present.
+- `404` → agent does not exist or is not owned by the caller.
+
 ### PATCH /agents/:id/status
 
 Body: `{ "status": "active" | "paused" | "disabled" }`
@@ -274,6 +336,13 @@ Body: `{ "status": "active" | "paused" | "disabled" }`
   envelope plus the conflict details, e.g.
   `{ "code": "AGENT_STATUS_CONFLICT", "error": "invalid status transition", "currentStatus": "disabled", "requestedStatus": "active" }`.
   A `disabled` agent cannot transition back to `active`.
+
+Effect on agent work when `paused` or `disabled`:
+
+- **New intents & schedules**: `POST /agents/:id/intents` rejects with `409 AGENT_NOT_ACTIVE`, and the scheduler skips non-active agents.
+- **Pending approvals**: `POST /approvals/:id/approve` rejects with `409 AGENT_NOT_ACTIVE` without enqueueing execution. For a `paused` agent, approvals remain `pending_approval` and can still be approved if the agent is resumed to `active` before the approval's TTL expires. `disabled` is terminal — the agent cannot resume, so pending approvals can never be approved (they remain `pending_approval` until TTL expiry or explicit rejection).
+- **Queued executions & retries**: already-approved queued executions (including retries) are permanently rejected before signing/submission when picked up by the queue or `executeApproved()`, marking the approval and activity `failed` and releasing any daily spending reservation.
+- **In-flight executions**: executions already past the signing step and actively submitting to Horizon are intentionally not aborted mid-flight so Stellar account sequence numbers are not corrupted by half-aborted submissions.
 
 ---
 
@@ -294,15 +363,32 @@ Headers: optional `Idempotency-Key` (≤256 chars, scoped to owner+agent).
 Same key + same intent → returns the original activity (`200`).
 Same key + different intent → `409`.
 
+Replay window: a key is honoured for **24 hours** from the creation of the
+activity it is bound to. Change it with `IDEMPOTENCY_KEY_WINDOW_SECONDS`
+(default `86400`; an unset, zero, negative or non-numeric value falls back to
+the default), or with the `idempotencyKeyWindowMs` server option.
+
+- Inside the window, both rules above apply: no second execution, no second
+  value movement.
+- After the window, the key is treated as new: the request is evaluated and
+  executed as a fresh intent, with a new activity. The earlier activity is kept
+  in the activity log; only its key stops suppressing requests.
+- Clients should finish retrying well inside the window. To repeat a payment on
+  purpose, send a new key rather than waiting for an old one to expire.
+- The window is anchored to the original activity's creation time, not the time
+  of the last retry, so retrying does not extend it.
+
 Agent status admission: the agent must be `active`. A `paused` or
 `disabled` agent rejects new intents before any activity, approval,
 execution, or queue record is created:
 
-- `409` → `{ "error": "agent is paused; new intents are rejected" }`
-- `409` → `{ "error": "agent is disabled; new intents are rejected" }`
+- `409` → `{ "code": "AGENT_NOT_ACTIVE", "error": "agent is paused; new intents are rejected" }`
+- `409` → `{ "code": "AGENT_NOT_ACTIVE", "error": "agent is disabled; new intents are rejected" }`
 
-Existing approvals and in-flight executions are unaffected by a status
-change — the gate applies to new intents only.
+Pending approvals and queued executions are also gated by agent status
+(see `POST /approvals/:id/approve` and `PATCH /agents/:id/status`);
+in-flight executions already past signing are intentionally not aborted
+to protect Stellar account sequence numbers.
 
 Behavior (policy decision):
 
@@ -330,12 +416,31 @@ identity is taken from the authenticated principal's `subject`.
 
 - `200` → `{ approvalId, activityId, agentId:"", status:"approved",
   message }` — execution is enqueued (persistent queue) or deferred
+- `409` → `AGENT_NOT_ACTIVE` when the approval's agent is `paused` or
+  `disabled` (`error` / `message`: `"agent is paused; cannot approve intent"`
+  or `"agent is disabled; cannot approve intent"`). No execution is enqueued.
 - `409` → `APPROVAL_INVALID_STATE` (e.g. already approved)
 - `410` → `APPROVAL_EXPIRED`
-- `404` → `APPROVAL_NOT_FOUND` (not found or not owned)
+- `404` → `APPROVAL_NOT_FOUND` (not found or not owned) or `AGENT_NOT_FOUND`
 
 Each error body carries `code` and `error` plus the approval-response fields
 (`approvalId`, `activityId`, `status`, `message`).
+
+Agent status & resume semantics:
+
+- **`paused`**: the approval remains in `pending_approval` until its TTL
+  expires. If the operator resumes the agent back to `active` before expiry,
+  the approval can be approved normally.
+- **`disabled`**: terminal state — the agent cannot transition back to
+  `active`. Pending approvals remain in `pending_approval` until TTL expiry
+  (or explicit rejection) and can never be approved.
+- **Queued & in-flight executions**: if an agent is paused or disabled after
+  approval (or before a retry runs), the execution queue and
+  `executeApproved()` permanently reject the execution before signing or
+  submitting to Horizon, marking the approval and activity `failed` and
+  releasing daily spending reservations. In-flight executions already past
+  the signing step are intentionally not aborted mid-flight to protect
+  Stellar account sequence numbers.
 
 Raw XDR in body → `400` `RAW_TRANSACTION_REJECTED`.
 
@@ -366,7 +471,9 @@ Returns `{ "agentId", "approvals": ApprovalRecord[] }`.
 ### GET /agents/:id/activity
 
 List activity records for an agent (owner-scoped).
-Query: `?limit=` (default 50, clamped 1–100).
+Query: `?limit=` (default 50, clamped 1–100), `?status=` optional filter
+(`pending`, `rejected`, `requires_approval`, `approved`, `signed`, `submitted`,
+`failed`); an invalid status returns `400 VALIDATION_ERROR`.
 Returns `{ "agentId", "activity": ActivityRecord[] }`.
 
 ### GET /agents/:id/activity/:activityId
@@ -480,7 +587,9 @@ validator's error message. `201` → `{ "schedule": ScheduleRecord }`.
 ### GET /agents/:id/schedules
 
 List schedules for an agent (owner-scoped). Query: `?limit=`
-(default 50, clamped 1–100). Returns `{ "agentId", "schedules": [] }`.
+(default 50, clamped 1–100), `?status=` optional filter (`active`, `paused`,
+`disabled`); an invalid status returns `400 VALIDATION_ERROR`.
+Returns `{ "agentId", "schedules": [] }`.
 
 ### GET /agents/:id/schedules/:scheduleId
 
@@ -555,7 +664,10 @@ Single execution (owner-scoped via `getForOwner`). Returns
 ### POST /executions/:id/retry
 
 Retry a `failed` or `dead_letter` execution. Requires the execution
-queue to be enabled. Cancelled executions cannot be retried.
+queue to be enabled. Cancelled executions cannot be retried. If the
+execution's agent is `paused` or `disabled` when the queue dispatches
+the retry, it is permanently rejected before signing or submitting to
+Horizon.
 
 - `200` → `{ "execution", "message": "execution queued for retry" }`
 - `409` → wrong status (e.g. attempting to retry a `cancelled` execution) / max retries reached / state conflict
@@ -605,6 +717,7 @@ Query parameters:
 | Parameter | Default | Max | Description |
 |---|---|---|---|
 | `limit` | `50` | `100` | Maximum number of records to return. Values outside 1–100 are clamped. |
+| `status` | — | — | Optional filter (`pending`, `rejected`, `requires_approval`, `approved`, `signed`, `submitted`, `failed`). An invalid status returns `400 VALIDATION_ERROR`. |
 
 Response `200`:
 
@@ -787,12 +900,37 @@ That combination exits with a `FATAL` error rather than serving an
 unauthenticated API on a public interface. Setting `ALLOW_DEV_AUTH=1` is an
 explicit operator opt-in and must not be used for a real deployment.
 
-### Persistent filesystem
+### Persistent filesystem and backups
 
 `DATABASE_PATH` must live on storage that survives restarts and redeploys —
 a container volume or attached disk. An ephemeral container filesystem loses
 agents, activities, approvals, schedules, executions, and policy config on every
 restart, and the SQLite file cannot be reliably shared between instances.
+
+#### SQLite WAL mode and backup procedure
+
+The database operates in Write-Ahead Logging (`WAL`) mode (`PRAGMA journal_mode = WAL;`) with normal synchronization (`PRAGMA synchronous = NORMAL;`). Under WAL mode, newly committed transactions are written to the companion `<DATABASE_PATH>-wal` file before a checkpoint transfers them back into the main `.db` file.
+
+**Single-file `.db` copies are NOT sufficient while the database is uncheckpointed:**
+Copying or snapshotting only the `.db` file while uncheckpointed data resides in the `-wal` file causes data loss or missing tables on restore.
+
+To back up or move database files safely:
+
+1. **Clean shutdown (Recommended):**
+   Stop the API server gracefully via `SIGTERM` or `SIGINT`. During graceful shutdown, the server drains active requests, closes background workers, forces a full WAL checkpoint (`PRAGMA wal_checkpoint(TRUNCATE)`), and closes all open database handles. After graceful shutdown completes, all committed transactions reside in the main `.db` file, and the `.db` file can be safely copied alone (or copied along with any zero-byte `-wal` and `-shm` companion files).
+
+2. **Cold backup while server is stopped:**
+   If copying database files while the server is stopped without a graceful shutdown, always copy all three files together if they exist:
+   - `<DATABASE_PATH>` (the main `.db` file)
+   - `<DATABASE_PATH>-wal` (the write-ahead log)
+   - `<DATABASE_PATH>-shm` (shared-memory index)
+
+3. **Hot backup / manual checkpoint:**
+   If taking a snapshot or single-file `.db` backup without stopping the server, first execute a truncate checkpoint on the SQLite database:
+   ```sql
+   PRAGMA wal_checkpoint(TRUNCATE);
+   ```
+   Once the checkpoint reports `(0, total_frames, checkpointed_frames)`, the `-wal` is truncated and the main `.db` file contains all committed data.
 
 ### Background workers
 

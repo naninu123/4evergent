@@ -15,6 +15,8 @@ export const API_ERRORS = {
   INVALID_PATH_PARAM: { status: 400, message: "Invalid path parameter", description: "A path identifier is missing or malformed." },
   INVALID_JSON: { status: 400, message: "Invalid JSON body", description: "The request body is not valid JSON." },
   VALIDATION_ERROR: { status: 400, message: "Validation failed", description: "A field failed validation; see message and optional details." },
+  POLICY_UNAVAILABLE: { status: 503, message: "Policy configuration unavailable", description: "The stored policy could not be read safely; no fallback policy was applied." },
+  POLICY_DENIED: { status: 403, message: "Schedule intent denied by policy", description: "The schedule intent violates the agent's current policy." },
   RAW_TRANSACTION_REJECTED: { status: 400, message: "Raw XDR and transaction blobs are not accepted; submit a typed intent", description: "Raw transaction payloads are not accepted." },
   IDEMPOTENCY_KEY_INVALID: { status: 400, message: "Idempotency-Key must be 256 characters or fewer", description: "The Idempotency-Key header is too long." },
   IDEMPOTENCY_CONFLICT: { status: 409, message: "Idempotency-Key already used with a different intent", description: "The Idempotency-Key was already used with a different intent." },
@@ -28,6 +30,8 @@ export const API_ERRORS = {
   EXECUTION_CONFLICT: { status: 409, message: "Execution state changed; please refresh", description: "The execution changed concurrently." },
   APPROVAL_CONFLICT: { status: 409, message: "Approval state changed; please refresh", description: "The approval was decided concurrently by another request." },
   APPROVAL_EXPIRED: { status: 410, message: "Approval expired", description: "The approval passed its expiry before it was approved." },
+  RATE_LIMITED: { status: 429, message: "rate_limited", description: "Too many requests from this source. Retry after the number of seconds indicated in the Retry-After response header." },
+  INTERNAL_ERROR: { status: 500, message: "internal_error", description: "An unexpected server error occurred." },
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERRORS;

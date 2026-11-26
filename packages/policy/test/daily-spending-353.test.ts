@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { PolicyEngine } from "../src/engine.js";
 import type { AgentIntent } from "@4evergent/shared";
+import { fromStroops } from "@4evergent/shared";
 import {
   InMemoryActivityStore,
   SQLiteActivityStore,
@@ -58,8 +59,11 @@ function makeStore(backend: "InMemory" | "SQLite"): { store: ActivityStore; clea
   };
 }
 
+// #374: the store holds integer stroops; convert back to a decimal XLM number
+// so the assertions keep their readable "300" form while verifying exact
+// round-trip storage.
 async function reserved(store: ActivityStore, agentId = "agent-1"): Promise<number> {
-  return (await store.getDailySpending(agentId, "XLM")) ?? 0;
+  return Number(fromStroops((await store.getDailySpending(agentId, "XLM")) ?? 0));
 }
 
 const BACKENDS = ["InMemory", "SQLite"] as const;

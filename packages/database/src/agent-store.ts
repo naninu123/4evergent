@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import type { Agent, AgentStatus } from "@4evergent/shared";
-import { getSharedConnection } from "./shared-connection.js";
+import { getSharedConnection, closeSharedConnection } from "./shared-connection.js";
 import { clampOffset } from "./pagination.js";
 import { getAllowedPreviousAgentStatuses, type AgentStatusTransitionResult, type AgentStore, type CreateAgentInput } from "./agent-types.js";
 
@@ -113,6 +113,8 @@ export class InMemoryAgentStore implements AgentStore {
   async delete(id: string): Promise<boolean> {
     return this.records.delete(id);
   }
+
+  close(): void {}
 }
 
 interface AgentRow {
@@ -133,13 +135,16 @@ interface AgentRow {
  * SQLiteAgentStore — persistent AgentStore backed by SQLite.
  *
  * Uses Node.js built-in node:sqlite (Node 22+). Schema versioned in _meta
- * (schema_version = 1). initSchema() is idempotent. Records survive process
+ * (schema_version = 5). initSchema() is idempotent. Records survive process
  * restart.
  */
 export class SQLiteAgentStore implements AgentStore {
   private db: DatabaseSync;
+  private dbPath: string;
+  private closed = false;
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     this.db = getSharedConnection(dbPath);
     this.initSchema();
   }
@@ -328,7 +333,9 @@ export class SQLiteAgentStore implements AgentStore {
   }
 
   close(): void {
-    // Shared connection — managed by closeSharedConnection() / closeAllSharedConnections()
+    if (this.closed) return;
+    this.closed = true;
+    closeSharedConnection(this.dbPath);
   }
 }
 

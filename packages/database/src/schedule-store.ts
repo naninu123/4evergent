@@ -26,10 +26,10 @@ export class InMemoryScheduleStore implements ScheduleStore {
     return this.records.get(id) ?? null;
   }
 
-  async listByAgent(agentId: string, limit = 50, offset = 0): Promise<ScheduleRecord[]> {
+  async listByAgent(agentId: string, limit = 50, offset = 0, status?: string): Promise<ScheduleRecord[]> {
     const safeOffset = clampOffset(offset);
     return [...this.records.values()]
-      .filter((r) => r.agentId === agentId)
+      .filter((r) => r.agentId === agentId && (status === undefined || r.status === status))
       .sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt))
       .slice(safeOffset, safeOffset + clampLimit(limit));
   }
@@ -95,6 +95,8 @@ export class InMemoryScheduleStore implements ScheduleStore {
   async delete(id: string): Promise<boolean> {
     return this.records.delete(id);
   }
+
+  close(): void {}
 }
 
 interface ScheduleRow {
@@ -119,12 +121,13 @@ interface ScheduleRow {
  * database server required. Data persists across process restarts in a file
  * at the path provided to the constructor.
  *
- * Schema is versioned in _meta (schema_version = 3). initSchema() is
+ * Schema is versioned in _meta (schema_version = 5). initSchema() is
  * idempotent and safe to call on every construction.
  */
 export class SQLiteScheduleStore implements ScheduleStore {
   private db: DatabaseSync;
   private dbPath: string;
+  private closed = false;
 
   constructor(dbPath: string) {
     this.dbPath = dbPath;
@@ -204,10 +207,15 @@ export class SQLiteScheduleStore implements ScheduleStore {
     return row ? rowToScheduleRecord(row) : null;
   }
 
-  async listByAgent(agentId: string, limit = 50, offset = 0): Promise<ScheduleRecord[]> {
+  async listByAgent(agentId: string, limit = 50, offset = 0, status?: string): Promise<ScheduleRecord[]> {
+    const safeLimit = clampLimit(limit);
+    const safeOffset = clampOffset(offset);
+    const where = status === undefined ? "WHERE agent_id = ?" : "WHERE agent_id = ? AND status = ?";
+    const params =
+      status === undefined ? [agentId, safeLimit, safeOffset] : [agentId, status, safeLimit, safeOffset];
     const rows = this.db
-      .prepare("SELECT * FROM schedules WHERE agent_id = ? ORDER BY next_run_at ASC LIMIT ? OFFSET ?")
-      .all(agentId, clampLimit(limit), clampOffset(offset)) as unknown as ScheduleRow[];
+      .prepare(`SELECT * FROM schedules ${where} ORDER BY next_run_at ASC LIMIT ? OFFSET ?`)
+      .all(...params) as unknown as ScheduleRow[];
     return rows.map((r) => rowToScheduleRecord(r));
   }
 
@@ -339,6 +347,8 @@ export class SQLiteScheduleStore implements ScheduleStore {
   }
 
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     closeSharedConnection(this.dbPath);
   }
 }

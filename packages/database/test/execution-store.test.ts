@@ -314,7 +314,26 @@ for (const harness of harnesses) {
       failed: 0,
       dead_letter: 1,
       cancelled: 0,
+      requires_approval: 0,
     });
+  });
+
+  test(`${harness.name}: records and reads execution with approvalId via getByApprovalId`, async () => {
+    const store = harness.create();
+    const rec = makeRecord({
+      approvalId: "approval-test-123",
+      status: "requires_approval",
+    });
+    await store.record(rec);
+
+    const got = await store.getByApprovalId("approval-test-123");
+    assert.ok(got);
+    assert.equal(got.id, rec.id);
+    assert.equal(got.approvalId, "approval-test-123");
+    assert.equal(got.status, "requires_approval");
+
+    const notFound = await store.getByApprovalId("approval-non-existent");
+    assert.equal(notFound, null);
   });
 
   test(`${harness.name}: records and reads cancelled execution`, async () => {
@@ -349,6 +368,7 @@ for (const harness of harnesses) {
       "failed",
       "dead_letter",
       "cancelled",
+      "requires_approval",
     ];
     for (const s of statuses) {
       await store.record(makeRecord({ id: `exec-${s}`, status: s, ownerId: "owner-count" }));
@@ -365,6 +385,7 @@ for (const harness of harnesses) {
       failed: 1,
       dead_letter: 1,
       cancelled: 1,
+      requires_approval: 1,
     });
 
     const otherCounts = await store.countByOwner("owner-other");

@@ -32,7 +32,7 @@
  */
 
 import { createApiServer, API_VERSION } from "./index.js";
-import { TestnetLocalSigner, TESTNET_HORIZON_URL } from "@4evergent/stellar";
+import { TestnetLocalSigner, TESTNET_HORIZON_URL, TESTNET_SOROBAN_RPC_URL } from "@4evergent/stellar";
 import { DevAuthProvider, ProductionApiKeyAuthProvider } from "@4evergent/shared";
 import { getSharedConnection, getSchemaVersion } from "@4evergent/database";
 import { createAuthModule } from "./auth.js";
@@ -259,6 +259,7 @@ export function registerShutdownHandlers(
 
 async function main() {
   const horizonUrl = process.env.STELLAR_HORIZON_URL || TESTNET_HORIZON_URL;
+  const sorobanRpcUrl = process.env.SOROBAN_RPC_URL || TESTNET_SOROBAN_RPC_URL;
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || "127.0.0.1";
   const dbPath = process.env.DATABASE_PATH || undefined;
@@ -291,6 +292,16 @@ async function main() {
       `FATAL: STELLAR_HORIZON_URL must point to Testnet (got: ${horizonUrl}). Mainnet execution is not supported.`
     );
     // Fatal configuration error during startup before server or workers are initialized; no worker shutdown required.
+    process.exit(1);
+  }
+
+  if (
+    sorobanRpcUrl.includes("mainnet") ||
+    (!sorobanRpcUrl.includes("testnet") && !sorobanRpcUrl.includes("127.0.0.1") && !sorobanRpcUrl.includes("localhost"))
+  ) {
+    console.error(
+      `FATAL: SOROBAN_RPC_URL must point to Testnet (got: ${sorobanRpcUrl}). Mainnet execution is not supported.`
+    );
     process.exit(1);
   }
 
@@ -372,6 +383,7 @@ async function main() {
   console.log(`[4evergent] Starting API server on ${host}:${port}`);
   console.log(`[4evergent] Version: ${API_VERSION}`);
   console.log(`[4evergent] Horizon: ${horizonUrl}`);
+  console.log(`[4evergent] Soroban RPC: ${sorobanRpcUrl}`);
   console.log(`[4evergent] Network: Testnet`);
   console.log(`[4evergent] Signer: ${signer.getAccountId().slice(0, 12)}...`);
   console.log(`[4evergent] Database: ${dbPath ?? "in-memory"}`);
@@ -383,6 +395,7 @@ async function main() {
     server = await createApiServer({
       port,
       horizonUrl,
+      sorobanRpcUrl,
       signer,
       dbPath,
       scheduler: {
@@ -392,6 +405,8 @@ async function main() {
           ? Number(process.env.SCHEDULER_MAX_LATENESS_MS)
           : 5 * 60_000,
       },
+      // #109: Idempotency-Key replay window, in seconds (default 86400 = 24h).
+      idempotencyKeyWindowMs: (envPositiveInt(process.env.IDEMPOTENCY_KEY_WINDOW_SECONDS) ?? 86_400) * 1000,
       retention: {
         enabled: process.env.DATA_RETENTION_ENABLED !== "0",
         intervalMs: parseRetentionInterval(process.env.DATA_RETENTION_INTERVAL_MS, 24 * 60 * 60_000),
@@ -402,6 +417,14 @@ async function main() {
       reconciliation: { enabled: true, intervalMs: workerIntervals.reconciliationIntervalMs, maxAgeMs: workerIntervals.reconciliationMaxAgeMs },
       authProvider,
       authModule,
+      // #261: per-owner rate limiting for intent submission and approve /
+      // reject (API_RATE_LIMIT_* env vars; defaults 60 attempts / 60s /
+      // 10000 keys, see DEFAULT_API_RATE_LIMIT_* in index.ts).
+      rateLimit: {
+        maxAttempts: envPositiveInt(process.env.API_RATE_LIMIT_MAX),
+        windowSeconds: envPositiveInt(process.env.API_RATE_LIMIT_WINDOW_SECONDS),
+        maxKeys: envPositiveInt(process.env.API_RATE_LIMIT_MAX_KEYS),
+      },
       corsOrigin: webOrigin,
     });
 

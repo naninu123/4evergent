@@ -1,9 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
-import { describeApiError } from '../apiErrors';
+import { useAgentNames } from '../agentNames';
 import type { ExecutionRecord, QueueSummary, ExecutionStatus } from '../types';
-import { EmptyState, PaginationFooter, Skeleton } from '../components';
+import { AgentName, EmptyState, PaginationFooter, Skeleton } from '../components';
 
 type StatusFilter = 'all' | ExecutionStatus;
 
@@ -29,6 +29,7 @@ function statusLabel(status: ExecutionStatus): string {
     case 'failed': return 'Failed';
     case 'dead_letter': return 'Dead Letter';
     case 'cancelled': return 'Cancelled';
+    case 'requires_approval': return 'Requires Approval';
   }
 }
 
@@ -41,6 +42,7 @@ function statusClass(status: ExecutionStatus): string {
     case 'failed': return 'badge-err';
     case 'dead_letter': return 'badge-err';
     case 'cancelled': return 'badge-neutral';
+    case 'requires_approval': return 'badge-warn';
   }
 }
 
@@ -56,7 +58,9 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
   const [queue, setQueue] = useState<QueueSummary | null>(null);
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [error, setError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const agentNames = useAgentNames();
 
   const loadPage = useCallback(async (offset: number, replace: boolean) => {
     try {
@@ -64,8 +68,10 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
       setExecutions(replace ? r.executions : (prev) => (prev ?? []).concat(r.executions));
       setHasMore(r.hasMore);
       setNextOffset(offset + r.executions.length);
+      if (!replace) setLoadMoreError(null);
     } catch (e: any) {
-      setError(describeApiError(e, 'Failed to load executions'));
+      if (replace) setError(e.message ?? 'Failed to load executions');
+      else setLoadMoreError(e.message ?? 'Failed to load more executions');
     }
   }, []);
 
@@ -88,6 +94,12 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
   }, []);
 
   const loadMore = () => {
+    setLoadingMore(true);
+    loadPage(nextOffset, false).finally(() => setLoadingMore(false));
+  };
+
+  const retryLoadMore = () => {
+    setLoadMoreError(null);
     setLoadingMore(true);
     loadPage(nextOffset, false).finally(() => setLoadingMore(false));
   };
@@ -175,7 +187,7 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
                         <code>{e.id.slice(0, 8)}</code>
                       )}
                     </td>
-                    <td><code>{e.agentId.slice(0, 8)}</code></td>
+                    <td><AgentName agentId={e.agentId} agentNames={agentNames} /></td>
                     <td>{e.intent.type}</td>
                     <td>{e.intent.type === 'payment' ? `${e.intent.amount} ${(e.intent.assetDetails as { code?: string } | undefined)?.code ?? e.intent.asset}` : '-'}</td>
                     <td>
@@ -196,6 +208,7 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
       )}
 
       <PaginationFooter hasMore={hasMore} loadingMore={loadingMore} onLoadMore={loadMore} itemCount={executions.length} />
+      {loadMoreError && <div className="error" role="alert">{loadMoreError} <button className="btn btn-secondary btn-sm" onClick={retryLoadMore}>Retry</button></div>}
     </section>
   );
 }

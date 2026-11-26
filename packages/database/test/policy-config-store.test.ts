@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import {
   SQLitePolicyConfigStore,
   InMemoryPolicyConfigStore,
+  CorruptPolicyConfigError,
 } from "../src/index.js";
 import type { PolicyRules } from "@4evergent/shared";
 
@@ -30,6 +32,24 @@ test("POLICY STORE (SQLite): initial get returns null for unknown agent", async 
   try {
     const result = await store.get("unknown-agent");
     assert.equal(result, null);
+  } finally {
+    store.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("POLICY STORE (SQLite): corrupt persisted JSON fails closed", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "policy-test-"));
+  const dbPath = join(tmp, "test.db");
+  const store = new SQLitePolicyConfigStore(dbPath);
+  try {
+    await store.upsert("agent-corrupt", "owner-a", makePolicy());
+    const raw = new DatabaseSync(dbPath);
+    raw.prepare("UPDATE policy_configs SET rules_json = ? WHERE agent_id = ?").run("{not-json", "agent-corrupt");
+    raw.close();
+
+    await assert.rejects(store.get("agent-corrupt"), CorruptPolicyConfigError);
+    await assert.rejects(store.getWithMetadata("agent-corrupt"), CorruptPolicyConfigError);
   } finally {
     store.close();
     rmSync(tmp, { recursive: true, force: true });

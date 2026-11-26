@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ApiError, createClient } from "../src/index.ts";
+import { ApiError, createClient, type HealthReady, type ReadinessStatus } from "../src/index.ts";
 
 interface CapturedRequest {
   url: string;
@@ -52,6 +52,7 @@ test("every documented client route uses the expected method and path", async ()
 
   const routes: Array<{ call: () => Promise<unknown>; method: string; path: string }> = [
     { call: () => client.health(), method: "GET", path: "/health" },
+    { call: () => client.healthReady(), method: "GET", path: "/health/ready" },
     { call: () => client.createAgent({ displayName: "bot" }), method: "POST", path: "/agents" },
     { call: () => client.listAgents({ limit: 10, offset: 2 }), method: "GET", path: "/agents?limit=10&offset=2" },
     { call: () => client.getAgent("agent id"), method: "GET", path: "/agents/agent%20id" },
@@ -96,16 +97,16 @@ test("every documented client route uses the expected method and path", async ()
     assert.equal(actual.headers.get("Authorization"), "Bearer test-token");
   });
 
-  assert.equal(calls[1]!.headers.get("Content-Type"), "application/json");
-  assert.deepEqual(calls[1]!.body, { displayName: "bot" });
-  assert.deepEqual(calls[4]!.body, { status: "paused" });
-  assert.equal(calls[5]!.headers.get("Idempotency-Key"), "key-1");
-  assert.deepEqual(calls[5]!.body, intent);
-  assert.deepEqual(calls[15]!.body, policy);
-  assert.deepEqual(calls[16]!.body, { intent, scheduleExpression: "0 * * * *" });
-  assert.deepEqual(calls[19]!.body, { scheduleExpression: "0 1 * * *" });
-  assert.equal(calls[20]!.headers.get("Content-Type"), null);
-  assert.deepEqual(calls[21]!.body, {});
+  assert.equal(calls[2]!.headers.get("Content-Type"), "application/json");
+  assert.deepEqual(calls[2]!.body, { displayName: "bot" });
+  assert.deepEqual(calls[5]!.body, { status: "paused" });
+  assert.equal(calls[6]!.headers.get("Idempotency-Key"), "key-1");
+  assert.deepEqual(calls[6]!.body, intent);
+  assert.deepEqual(calls[16]!.body, policy);
+  assert.deepEqual(calls[17]!.body, { intent, scheduleExpression: "0 * * * *" });
+  assert.deepEqual(calls[20]!.body, { scheduleExpression: "0 1 * * *" });
+  assert.equal(calls[21]!.headers.get("Content-Type"), null);
+  assert.deepEqual(calls[22]!.body, {});
 });
 
 test("non-2xx responses throw ApiError with status and parsed payload", async () => {
@@ -154,4 +155,28 @@ test("listAgents() exposes pagination fields from the response", async () => {
   assert.equal(result.hasMore, true);
   assert.equal(result.truncated, true);
   assert.equal(result.total, 3);
+});
+
+test("healthReady() issues GET /health/ready and returns typed readiness status", async () => {
+  const readinessPayload: ReadinessStatus = {
+    status: "ok",
+    checks: {
+      horizon: "ok",
+      database: "ok",
+      executionQueue: "disabled",
+      scheduler: "disabled",
+    },
+  };
+  const { client, calls } = setup(200, readinessPayload);
+  const result: ReadinessStatus = await client.healthReady();
+  const aliasResult: HealthReady = result;
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.url, "https://api.example.test/health/ready");
+  assert.equal(calls[0]!.method, "GET");
+  assert.deepEqual(result, readinessPayload);
+  assert.equal(aliasResult.status, "ok");
+  assert.equal(aliasResult.checks.horizon, "ok");
+  assert.equal(aliasResult.checks.database, "ok");
+  assert.equal(aliasResult.checks.executionQueue, "disabled");
+  assert.equal(aliasResult.checks.scheduler, "disabled");
 });

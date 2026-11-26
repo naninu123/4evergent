@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
+import { useAgentNames, resolveAgentName } from '../agentNames';
 import { describeApiError } from '../apiErrors';
 import type { ExecutionRecord, ExecutionStatus } from '../types';
-import { Skeleton, EmptyState, DetailCard, IntentAmount } from '../components';
+import { AgentName, Skeleton, EmptyState, DetailCard, IntentAmount } from '../components';
 
 function statusLabel(status: ExecutionStatus): string {
   switch (status) {
@@ -14,6 +15,7 @@ function statusLabel(status: ExecutionStatus): string {
     case 'failed': return 'Failed';
     case 'dead_letter': return 'Dead Letter';
     case 'cancelled': return 'Cancelled';
+    case 'requires_approval': return 'Requires Approval';
   }
 }
 
@@ -26,6 +28,7 @@ function statusClass(status: ExecutionStatus): string {
     case 'failed': return 'badge-err';
     case 'dead_letter': return 'badge-err';
     case 'cancelled': return 'badge-neutral';
+    case 'requires_approval': return 'badge-warn';
   }
 }
 
@@ -38,6 +41,7 @@ function statusDescription(status: ExecutionStatus): string | null {
     case 'failed': return 'Transaction failed on-chain.';
     case 'dead_letter': return 'Execution failed and will not be retried automatically.';
     case 'cancelled': return 'Execution was cancelled by operator and will not be retried.';
+    case 'requires_approval': return 'Execution is waiting for human approval before proceeding.';
   }
 }
 
@@ -49,6 +53,7 @@ export default function ExecutionDetail() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const agentNames = useAgentNames();
 
   useEffect(() => {
     if (!executionId) return;
@@ -122,8 +127,8 @@ export default function ExecutionDetail() {
       <div className="page-header">
         <div>
           <h1>Execution <code>{execution.id.slice(0, 8)}</code></h1>
-          <p className="muted">
-            Agent: {execution.agentId.slice(0, 8)} · {execution.intent.type}
+          <p className="muted" title={execution.agentId}>
+            Agent: {resolveAgentName(execution.agentId, agentNames)} · {execution.intent.type}
           </p>
         </div>
         <Link to="/executions" className="btn btn-ghost btn-sm">← Executions</Link>
@@ -136,7 +141,7 @@ export default function ExecutionDetail() {
             {desc && <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>{desc}</span>}
           </div>
         </DetailCard>
-        <DetailCard title="Agent"><code>{execution.agentId.slice(0, 8)}</code></DetailCard>
+        <DetailCard title="Agent"><AgentName agentId={execution.agentId} agentNames={agentNames} showId /></DetailCard>
         <DetailCard title="Intent">{execution.intent.type}</DetailCard>
         <DetailCard title="Amount"><IntentAmount intent={execution.intent} /></DetailCard>
         <DetailCard title="Transaction Hash">
@@ -165,6 +170,19 @@ export default function ExecutionDetail() {
           {' '}
           <Link to={`/agents/${execution.agentId}/activity/${execution.activityId}`} className="btn btn-ghost btn-sm">
             View Activity
+          </Link>
+        </div>
+      )}
+
+      {/* Cross-link to linked approval */}
+      {execution.approvalId && (
+        <div style={{ marginTop: 'var(--space-sm)', padding: 'var(--space-sm)', background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
+          <span className="muted" style={{ fontSize: 'var(--text-sm)' }}>
+            Approval: <code>{execution.approvalId.slice(0, 8)}</code>
+          </span>
+          {' '}
+          <Link to={`/approvals/${execution.approvalId}`} className="btn btn-ghost btn-sm">
+            View Approval
           </Link>
         </div>
       )}

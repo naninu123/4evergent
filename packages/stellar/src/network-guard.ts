@@ -10,6 +10,7 @@
 
 /** Known Testnet configuration (only supported execution network) */
 export const TESTNET_HORIZON_URL = "https://horizon-testnet.stellar.org";
+export const TESTNET_SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
 export const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 
 /** Known Mainnet configuration (rejected for execution) */

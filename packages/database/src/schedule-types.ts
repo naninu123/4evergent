@@ -18,7 +18,9 @@ export interface ScheduleRecord {
 export interface ScheduleStore {
   create(record: ScheduleRecord): Promise<ScheduleRecord>;
   get(id: string): Promise<ScheduleRecord | null>;
-  listByAgent(agentId: string, limit?: number, offset?: number): Promise<ScheduleRecord[]>;
+  /** List schedules for an agent. `status` filters at the store level so that
+   *  `offset`/`limit` page over the FILTERED set, not the unfiltered one. */
+  listByAgent(agentId: string, limit?: number, offset?: number, status?: string): Promise<ScheduleRecord[]>;
   listByOwner(ownerId: string, limit?: number, offset?: number): Promise<ScheduleRecord[]>;
   listDue(before: string, limit?: number): Promise<ScheduleRecord[]>;
   listInterrupted(limit?: number, offset?: number): Promise<ScheduleRecord[]>;
@@ -29,4 +31,5 @@ export interface ScheduleStore {
     patch: Partial<ScheduleRecord>
   ): Promise<ScheduleRecord | null>;
   delete(id: string): Promise<boolean>;
+  close?(): void;
 }

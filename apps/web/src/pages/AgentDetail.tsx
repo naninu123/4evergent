@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../api';
+import { buildAgentNameMap } from '../agentNames';
 import { describeApiError } from '../apiErrors';
 import type { AgentRecord, ActivityRecord, PolicyRules } from '../types';
 import { ScheduleManagement } from './ScheduleManagement';
 import { ExecutionList } from './ExecutionList';
-import { StatusBadge, Skeleton, EmptyState } from '../components';
+import { AgentName, StatusBadge, Skeleton, EmptyState } from '../components';
+import { validateStellarAddressField, validateAssetCodeField } from '../validation';
 
 type SpendingData = Record<string, { used: number; limit: string; remaining: number }>;
 
@@ -174,7 +176,8 @@ function PolicySummary({ agentId }: { agentId: string }) {
         ))}
         <div className="policy-summary-item">
           <span className="policy-summary-label">Approval Threshold</span>
-          <span className="policy-summary-value">{policy.approvalThreshold}</span>
+          {/* Engine enforces requireHumanApprovalForAmountAbove (packages/policy/src/engine.ts:173). */}
+          <span className="policy-summary-value">{policy.requireHumanApprovalForAmountAbove}</span>
         </div>
         {assets.map(([asset, limit]) => (
           <div key={`daily-${asset}`} className="policy-summary-item">
@@ -206,6 +209,8 @@ function PolicySettings({ agentId }: { agentId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [form, setForm] = useState<PolicyRules | null>(null);
+  const [destinationChipError, setDestinationChipError] = useState<string | null>(null);
+  const [assetChipError, setAssetChipError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -249,13 +254,31 @@ function PolicySettings({ agentId }: { agentId: string }) {
     });
   };
 
-  const addListItem = (field: 'allowedAssets' | 'allowedDestinations' | 'allowedContractIds', value: string) => {
-    if (!value.trim()) return;
+  const addListItem = (field: 'allowedAssets' | 'allowedDestinations' | 'allowedContractIds', value: string): boolean => {
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    if (field === 'allowedDestinations') {
+      const addrErr = validateStellarAddressField(trimmed, 'Destination address');
+      if (addrErr) {
+        setDestinationChipError(addrErr);
+        return false;
+      }
+      setDestinationChipError(null);
+    }
+    if (field === 'allowedAssets') {
+      const assetErr = validateAssetCodeField(trimmed, 'Allowed asset code');
+      if (assetErr) {
+        setAssetChipError(assetErr);
+        return false;
+      }
+      setAssetChipError(null);
+    }
     setForm((prev) => {
       if (!prev) return prev;
-      if (prev[field].includes(value.trim())) return prev;
-      return { ...prev, [field]: [...prev[field], value.trim()] };
+      if (prev[field].includes(trimmed)) return prev;
+      return { ...prev, [field]: [...prev[field], trimmed] };
     });
+    return true;
   };
 
   const removeListItem = (field: 'allowedAssets' | 'allowedDestinations' | 'allowedContractIds', value: string) => {
@@ -272,7 +295,16 @@ function PolicySettings({ agentId }: { agentId: string }) {
     setError(null);
     setSuccess(null);
     try {
-      const res = await api.updatePolicy(agentId, form);
+      // #326: the policy engine only reads `requireHumanApprovalForAmountAbove`
+      // (packages/policy/src/engine.ts:173). Send both fields with the same
+      // value so a saved policy cannot carry two diverging thresholds.
+      const enforced = form.requireHumanApprovalForAmountAbove;
+      const payload: PolicyRules = {
+        ...form,
+        approvalThreshold: enforced,
+        requireHumanApprovalForAmountAbove: enforced,
+      };
+      const res = await api.updatePolicy(agentId, payload);
       setPolicy(deepClonePolicy(res.policy));
       setForm(deepClonePolicy(res.policy));
       setVersion(res.version);
@@ -327,19 +359,6 @@ function PolicySettings({ agentId }: { agentId: string }) {
             <small>Aggregate daily spending limit enforced by backend. Once reached, further intents are denied until the next day.</small>
           </label>
           <label>
-            <span>Approval Threshold (XLM)</span>
-            <input
-              id="policy-approval-threshold"
-              type="number"
-              step="0.0000001"
-              min="0"
-              value={form.approvalThreshold}
-              onChange={(e) => updateForm({ approvalThreshold: e.target.value })}
-              placeholder="50"
-            />
-            <small>Intents above this amount require human approval before execution.</small>
-          </label>
-          <label>
             <span>Require Human Approval Above (XLM)</span>
             <input
               id="policy-require-human-approval-above"
@@ -347,10 +366,17 @@ function PolicySettings({ agentId }: { agentId: string }) {
               step="0.0000001"
               min="0"
               value={form.requireHumanApprovalForAmountAbove}
-              onChange={(e) => updateForm({ requireHumanApprovalForAmountAbove: e.target.value })}
+              onChange={(e) => {
+                const v = e.target.value;
+                // Keep both fields in lockstep; only requireHumanApprovalForAmountAbove is enforced.
+                updateForm({
+                  approvalThreshold: v,
+                  requireHumanApprovalForAmountAbove: v,
+                });
+              }}
               placeholder="50"
             />
-            <small>Amount above which human approval is required. Should match approval threshold.</small>
+            <small>Intents at or above this amount require human approval before execution.</small>
           </label>
         </div>
       </div>
@@ -361,7 +387,7 @@ function PolicySettings({ agentId }: { agentId: string }) {
           {form.allowedAssets.map((asset) => (
             <span key={asset} className="chip">
               {asset}
-              <button type="button" className="chip-remove" aria-label={`Remove allowed asset ${asset}`} onClick={() => removeListItem('allowedAssets', asset)}>×</button>
+              <button type="button" className="chip-remove" aria-label={`Remove allowed asset ${asset}`} onClick={() => removeListItem('allowedAssets', asset)}>&times;</button>
             </span>
           ))}
         </div>
@@ -373,12 +399,14 @@ function PolicySettings({ agentId }: { agentId: string }) {
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
-                addListItem('allowedAssets', (e.target as HTMLInputElement).value);
-                (e.target as HTMLInputElement).value = '';
+                if (addListItem('allowedAssets', (e.target as HTMLInputElement).value)) {
+                  (e.target as HTMLInputElement).value = '';
+                }
               }
             }}
           />
         </div>
+        {assetChipError && <div className="field-error error" role="alert" data-testid="policy-asset-chip-error">{assetChipError}</div>}
         <small>Assets the agent is allowed to transact with.</small>
       </div>
 
@@ -389,7 +417,7 @@ function PolicySettings({ agentId }: { agentId: string }) {
           {form.allowedDestinations.map((dest) => (
             <span key={dest} className="chip">
               {dest}
-              <button type="button" className="chip-remove" aria-label={`Remove allowed destination ${dest}`} onClick={() => removeListItem('allowedDestinations', dest)}>×</button>
+              <button type="button" className="chip-remove" aria-label={`Remove allowed destination ${dest}`} onClick={() => removeListItem('allowedDestinations', dest)}>&times;</button>
             </span>
           ))}
         </div>
@@ -401,12 +429,14 @@ function PolicySettings({ agentId }: { agentId: string }) {
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
-                addListItem('allowedDestinations', (e.target as HTMLInputElement).value);
-                (e.target as HTMLInputElement).value = '';
+                if (addListItem('allowedDestinations', (e.target as HTMLInputElement).value)) {
+                  (e.target as HTMLInputElement).value = '';
+                }
               }
             }}
           />
         </div>
+        {destinationChipError && <div className="field-error error" role="alert" data-testid="policy-destination-chip-error">{destinationChipError}</div>}
         <small>Optional whitelist of allowed destination addresses. Empty means any destination is allowed.</small>
       </div>
 
@@ -531,6 +561,7 @@ export default function AgentDetail() {
   const handleStatusChange = (newStatus: string) => {
     setAgent((prev) => prev ? { ...prev, status: newStatus as typeof prev.status } : prev);
   };
+  const agentNames = buildAgentNameMap([agent]);
 
   return (
     <section>
@@ -562,12 +593,13 @@ export default function AgentDetail() {
         ) : (
           <table>
             <thead>
-              <tr><th>ID</th><th>Type</th><th>Amount</th><th>Status</th><th>Time</th></tr>
+              <tr><th>ID</th><th>Agent</th><th>Type</th><th>Amount</th><th>Status</th><th>Time</th></tr>
             </thead>
             <tbody>
               {activity.map((r) => (
                 <tr key={r.id}>
                   <td><code>{r.id.slice(0, 8)}</code></td>
+                  <td><AgentName agentId={r.agentId} agentNames={agentNames} /></td>
                   <td>{r.intent.type}</td>
                   <td>{r.intent.amount || '-'} {r.intent.asset || ''}</td>
                   <td><StatusBadge status={r.status} /></td>

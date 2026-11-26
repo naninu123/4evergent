@@ -254,18 +254,22 @@ test("API accepts trustline intent and routes to policy/approval", async () => {
   }
 });
 
-test("API rejects unsupported intent type (contract_call)", async () => {
+test("API accepts contract_call intent (no longer 'not yet supported')", async () => {
   const { baseUrl, close } = await startServer();
   try {
     const res = await post(baseUrl, "/agents/test-agent/intents", {
       type: "contract_call",
-      contractId: "some-contract",
+      contractId: "CA3D5KRYMCMCZWHJQJHDAJGUSNO5OQIC2U2OLOT5PIRMWAMOQ6AKAU6Z",
       function: "do_thing",
       args: [],
       reason: "test",
     });
-    assert.equal(res.status, 400);
-    assert.ok(res.body.error.includes("not yet supported"));
+    // parseIntent now accepts contract_call — the intent reaches policy
+    // evaluation (may be denied by default policy, but NOT by "not yet supported")
+    assert.ok(
+      !res.body.error?.includes("not yet supported"),
+      `contract_call should not be rejected as 'not yet supported', got: ${res.body.error}`
+    );
   } finally {
     await close();
   }

@@ -27,6 +27,11 @@ const intent: AgentIntent = {
 
 class TestSigner implements Signer {
   calls = 0;
+  private signImpl?: () => Promise<any>;
+
+  constructor(signImpl?: () => Promise<any>) {
+    this.signImpl = signImpl;
+  }
 
   getAccountId(): string {
     return intent.destination;
@@ -38,6 +43,9 @@ class TestSigner implements Signer {
 
   async sign(): Promise<any> {
     this.calls++;
+    if (this.signImpl) {
+      return this.signImpl();
+    }
     return { hash: () => Buffer.from("pre-submit-hash") };
   }
 }
@@ -48,7 +56,11 @@ async function createFixture(options: {
   maxTxAmount?: string;
   intentAmount?: string;
   policyResolver?: (agentId: string) => Promise<PolicyRules>;
+  buildPayment?: () => Promise<object>;
+  simulate?: () => Promise<object>;
+  sign?: () => Promise<any>;
   submit?: () => Promise<{ hash: string; ledger: number }>;
+  recordActivity?: boolean;
 } = {}) {
   const activityStore = new InMemoryActivityStore();
   const approvalStore = new InMemoryApprovalStore();
@@ -64,7 +76,9 @@ async function createFixture(options: {
   const activity = createActivity("agent-1", "owner-1", fixtureIntent, decision);
   activity.status = "requires_approval";
   activity.authorizationStatus = "pending_approval";
-  await activityStore.record(activity);
+  if (options.recordActivity !== false) {
+    await activityStore.record(activity);
+  }
 
   const approval = createApproval(
     activity.id,
@@ -77,7 +91,7 @@ async function createFixture(options: {
   approval.status = options.status ?? "approved";
   await approvalStore.record(approval);
 
-  const signer = new TestSigner();
+  const signer = new TestSigner(options.sign);
   const pipeline = new TransactionPipeline({
     horizonUrl: HORIZON_URL,
     networkPassphrase: PASSPHRASE,
@@ -93,6 +107,7 @@ async function createFixture(options: {
       txTypeRestrictions: { payment: true },
     },
     policyResolver: options.policyResolver,
+    agentResolver: options.agentResolver,
   });
 
   const internals = pipeline as unknown as {
@@ -100,9 +115,11 @@ async function createFixture(options: {
     simulator: { simulate: () => Promise<object> };
     submitter: { submit: () => Promise<{ hash: string; ledger: number }> };
   };
-  internals.builder = { buildPayment: async () => ({ fakeTransaction: true }) };
+  internals.builder = {
+    buildPayment: options.buildPayment ?? (async () => ({ fakeTransaction: true })),
+  };
   internals.simulator = {
-    simulate: async () => ({ success: true, fee: "100", operations: 1, warnings: [] }),
+    simulate: options.simulate ?? (async () => ({ success: true, fee: "100", operations: 1, warnings: [] })),
   };
   internals.submitter = {
     submit: options.submit ?? (async () => ({ hash: TX_HASH, ledger: 123 })),
@@ -287,5 +304,162 @@ test("executeApproved invokes onBeforeSubmit before submitting (#275)", async ()
 
     assert.equal(result.status, "submitted");
     assert.equal(beforeSubmitCalls, 1);
+  });
+});
+
+test("executeApproved updates linked activity on account-load failure (#291)", async () => {
+  const originalGetAccount = StellarAdapter.prototype.getAccount;
+  StellarAdapter.prototype.getAccount = async () => {
+    throw new Error("horizon account lookup failed");
+  };
+  try {
+    const fixture = await createFixture();
+    const result = await fixture.pipeline.executeApproved(fixture.approval.id);
+
+    assert.equal(result.status, "rejected");
+    assert.match(result.message, /Cannot load source account: horizon account lookup failed/);
+    assert.equal(result.activityId, fixture.activity.id);
+
+    const savedApproval = await fixture.approvalStore.get(fixture.approval.id);
+    assert.equal(savedApproval?.status, "failed");
+    assert.equal(savedApproval?.error, "horizon account lookup failed");
+
+    const savedActivity = await fixture.activityStore.get(fixture.activity.id);
+    assert.equal(savedActivity?.status, "failed");
+    assert.equal(savedActivity?.error, "horizon account lookup failed");
+    assert.equal(savedActivity?.txHash, null);
+  } finally {
+    StellarAdapter.prototype.getAccount = originalGetAccount;
+  }
+});
+
+test("executeApproved updates linked activity on construction failure (#291)", async () => {
+  await withOfflineAccount(async () => {
+    const fixture = await createFixture({
+      buildPayment: async () => {
+        throw new Error("invalid destination address");
+      },
+    });
+    const result = await fixture.pipeline.executeApproved(fixture.approval.id);
+
+    assert.equal(result.status, "rejected");
+    assert.match(result.message, /Construction failed: invalid destination address/);
+    assert.equal(result.activityId, fixture.activity.id);
+
+    const savedApproval = await fixture.approvalStore.get(fixture.approval.id);
+    assert.equal(savedApproval?.status, "failed");
+    assert.equal(savedApproval?.error, "invalid destination address");
+
+    const savedActivity = await fixture.activityStore.get(fixture.activity.id);
+    assert.equal(savedActivity?.status, "failed");
+    assert.equal(savedActivity?.error, "invalid destination address");
+    assert.equal(savedActivity?.txHash, null);
+  });
+});
+
+test("executeApproved updates linked activity on simulation failure (#291)", async () => {
+  await withOfflineAccount(async () => {
+    const fixture = await createFixture({
+      simulate: async () => ({
+        success: false,
+        fee: "100",
+        operations: 1,
+        warnings: [],
+        error: "insufficient balance",
+      }),
+    });
+    const result = await fixture.pipeline.executeApproved(fixture.approval.id);
+
+    assert.equal(result.status, "simulation_failed");
+    assert.equal(result.message, "insufficient balance");
+    assert.equal(result.activityId, fixture.activity.id);
+
+    const savedApproval = await fixture.approvalStore.get(fixture.approval.id);
+    assert.equal(savedApproval?.status, "failed");
+    assert.equal(savedApproval?.error, "insufficient balance");
+
+    const savedActivity = await fixture.activityStore.get(fixture.activity.id);
+    assert.equal(savedActivity?.status, "failed");
+    assert.equal(savedActivity?.authorizationStatus, "denied_by_simulation");
+    assert.equal(savedActivity?.error, "insufficient balance");
+    assert.equal(savedActivity?.txHash, null);
+  });
+});
+
+test("executeApproved updates linked activity on signing failure (#291)", async () => {
+  await withOfflineAccount(async () => {
+    const fixture = await createFixture({
+      sign: async () => {
+        throw new Error("hardware signer unavailable");
+      },
+    });
+    const result = await fixture.pipeline.executeApproved(fixture.approval.id);
+
+    assert.equal(result.status, "rejected");
+    assert.match(result.message, /Signing failed: hardware signer unavailable/);
+    assert.equal(result.activityId, fixture.activity.id);
+
+    const savedApproval = await fixture.approvalStore.get(fixture.approval.id);
+    assert.equal(savedApproval?.status, "failed");
+    assert.equal(savedApproval?.error, "hardware signer unavailable");
+
+    const savedActivity = await fixture.activityStore.get(fixture.activity.id);
+    assert.equal(savedActivity?.status, "failed");
+    assert.equal(savedActivity?.error, "hardware signer unavailable");
+    assert.equal(savedActivity?.txHash, null);
+  });
+});
+
+test("executeApproved updates linked activity with preSubmitHash on submission failure (#291)", async () => {
+  await withOfflineAccount(async () => {
+    const expectedHash = Buffer.from("pre-submit-hash").toString("hex");
+    const fixture = await createFixture({
+      submit: async () => {
+        throw new Error("horizon timeout");
+      },
+    });
+    const result = await fixture.pipeline.executeApproved(fixture.approval.id);
+
+    assert.equal(result.status, "rejected");
+    assert.match(result.message, /Submission failed: horizon timeout/);
+    assert.equal(result.txHash, expectedHash);
+    assert.equal(result.activityId, fixture.activity.id);
+
+    const savedApproval = await fixture.approvalStore.get(fixture.approval.id);
+    assert.equal(savedApproval?.status, "failed");
+    assert.equal(savedApproval?.error, "horizon timeout");
+    assert.equal(savedApproval?.txHash, expectedHash);
+
+    const savedActivity = await fixture.activityStore.get(fixture.activity.id);
+    assert.equal(savedActivity?.status, "failed");
+    assert.equal(savedActivity?.error, "horizon timeout");
+    assert.equal(savedActivity?.txHash, expectedHash);
+  });
+});
+
+test("executeApproved does not throw when linked activity record is missing on failure (#291)", async () => {
+  await withOfflineAccount(async () => {
+    const expectedHash = Buffer.from("pre-submit-hash").toString("hex");
+    const fixture = await createFixture({
+      recordActivity: false,
+      submit: async () => {
+        throw new Error("network unreachable");
+      },
+    });
+
+    const result = await fixture.pipeline.executeApproved(fixture.approval.id);
+
+    assert.equal(result.status, "rejected");
+    assert.match(result.message, /Submission failed: network unreachable/);
+    assert.equal(result.txHash, expectedHash);
+    assert.equal(result.activityId, fixture.activity.id);
+
+    const savedApproval = await fixture.approvalStore.get(fixture.approval.id);
+    assert.equal(savedApproval?.status, "failed");
+    assert.equal(savedApproval?.error, "network unreachable");
+    assert.equal(savedApproval?.txHash, expectedHash);
+
+    const savedActivity = await fixture.activityStore.get(fixture.activity.id);
+    assert.equal(savedActivity, null);
   });
 });

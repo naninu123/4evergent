@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import { StellarAdapter } from "@4evergent/agent-core";
 import { StellarSimulator, StellarSubmitter } from "@4evergent/stellar";
 import type { PolicyRules } from "@4evergent/shared";
+import { toStroops } from "@4evergent/shared";
 import { Keypair } from "@stellar/stellar-sdk";
 import { startServer, apiFetch, sleep } from "./helpers.js";
 import type { Signer } from "@4evergent/stellar";
@@ -145,7 +146,7 @@ test("#371 API: two concurrent same-key ALLOW intents submit exactly once", asyn
     assert.equal(records[0].txHash, SUBMIT_HASH);
 
     // Exactly one daily-spending reservation (#353: one intent = one).
-    assert.equal(await activityStore.getDailySpending("test-agent", "XLM"), 10);
+    assert.equal(await activityStore.getDailySpending("test-agent", "XLM"), toStroops("10"));
   } finally {
     stubs.restore();
     await close();
@@ -175,7 +176,7 @@ test("#371 API: two concurrent same-key requires_approval intents create exactly
     assert.equal(pending[0].activityId, first.body.activityId);
 
     // Exactly one daily-spending reservation for the single intent.
-    assert.equal(await activityStore.getDailySpending("test-agent", "XLM"), 100);
+    assert.equal(await activityStore.getDailySpending("test-agent", "XLM"), toStroops("100"));
   } finally {
     await close();
   }
@@ -196,7 +197,7 @@ test("#371 API: sequential duplicate after submit returns the first activity (20
 
     assert.equal(stubs.getSubmitCalls(), 1);
     assert.equal((await activityStore.listByAgent("test-agent", 50)).length, 1);
-    assert.equal(await activityStore.getDailySpending("test-agent", "XLM"), 10);
+    assert.equal(await activityStore.getDailySpending("test-agent", "XLM"), toStroops("10"));
   } finally {
     stubs.restore();
     await close();
@@ -215,7 +216,7 @@ test("#371 API: same key + different intent is still a 409 and submits nothing n
 
     assert.equal(stubs.getSubmitCalls(), 1);
     assert.equal((await activityStore.listByAgent("test-agent", 50)).length, 1);
-    assert.equal(await activityStore.getDailySpending("test-agent", "XLM"), 10);
+    assert.equal(await activityStore.getDailySpending("test-agent", "XLM"), toStroops("10"));
   } finally {
     stubs.restore();
     await close();

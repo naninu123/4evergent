@@ -81,7 +81,7 @@ export interface ApprovalRecord {
   updatedAt: string;
 }
 
-export type ExecutionStatus = "queued" | "executing" | "submitted" | "confirmed" | "failed" | "dead_letter";
+export type ExecutionStatus = "queued" | "executing" | "submitted" | "confirmed" | "failed" | "dead_letter" | "cancelled" | "requires_approval";
 
 export interface ExecutionRecord {
   id: string;
@@ -154,6 +154,24 @@ export interface AgentSpending {
   agentId: string;
   spending: Record<string, { used: number; limit: string; remaining: number }>;
 }
+
+export type ReadinessOverallStatus = "ok" | "degraded" | "unavailable";
+export type ReadinessCheckStatus = "ok" | "fail";
+export type WorkerCheckStatus = "ok" | "fail" | "disabled";
+
+export interface ReadinessChecks {
+  horizon: ReadinessCheckStatus;
+  database: ReadinessCheckStatus;
+  executionQueue: WorkerCheckStatus;
+  scheduler: WorkerCheckStatus;
+}
+
+export interface ReadinessStatus {
+  status: ReadinessOverallStatus;
+  checks: ReadinessChecks;
+}
+
+export type HealthReady = ReadinessStatus;
 
 export interface ApiErrorBody {
   error?: string;
@@ -238,6 +256,10 @@ export class Client {
 
   health(): Promise<{ status: string; signerAccountId: string }> {
     return this.request<{ status: string; signerAccountId: string }>("/health");
+  }
+
+  healthReady(): Promise<ReadinessStatus> {
+    return this.request<ReadinessStatus>("/health/ready");
   }
 
   createAgent(body: CreateAgentBody): Promise<{ agent: Agent }> {

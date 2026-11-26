@@ -1,7 +1,10 @@
 import type { ExecutionStore } from "@4evergent/database";
+// #379: the recovery service shares the queue's pre-check types so there is
+// one definition of the pre-check verdict (and the underlying mapping is
+// shared too — see index.ts), not a duplicated collapse.
+import type { PreCheckFn, PreCheckResult } from "./execution-queue.js";
 
-export type PreCheckResult = "found" | "not_found" | "network_error";
-export type PreCheckFn = (txHash: string) => Promise<PreCheckResult>;
+export type { PreCheckFn, PreCheckResult };
 
 export interface RecoveryOptions {
   /** Override clock for deterministic testing. */
@@ -102,12 +105,29 @@ export class ExecutionRecoveryService {
                 continue;
               }
 
-              if (preCheckResult === "found") {
-                // Transaction exists on-chain! Move to "submitted" so reconciler can confirm/fail it
+              if (preCheckResult === "confirmed") {
+                // Transaction CONFIRMED on-chain! Move to "submitted" so the
+                // reconciler confirms it — never re-submit a confirmed tx.
                 await this.store.update(record.id, {
                   status: "submitted",
                   txHash: candidateHash,
                   error: null,
+                  startedAt: null,
+                  updatedAt: now.toISOString(),
+                });
+                result.recovered++;
+                result.recoveredIds.push(record.id);
+                continue;
+              }
+
+              if (preCheckResult === "failed") {
+                // Transaction FAILED on-chain — definitively dead. Safe to
+                // move to "failed" so the queue retries it with a NEW
+                // transaction (#379), instead of bouncing it to "submitted"
+                // for reconciliation where it would loop forever.
+                await this.store.update(record.id, {
+                  status: "failed",
+                  nextRetryAt: now.toISOString(),
                   startedAt: null,
                   updatedAt: now.toISOString(),
                 });

@@ -107,6 +107,34 @@ describe('api.request headers (via api.me / api.updateAgentStatus)', () => {
   });
 });
 
+describe('dashboard request timeout', () => {
+  it.each(['headers', 'body'])('aborts a stalled response while waiting for %s', async (phase) => {
+    vi.stubEnv('VITE_API_TIMEOUT_MS', '20');
+    sessionStorage.setItem('4evergent.auth.token', 'keep-me');
+    try {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+        const signal = init!.signal!;
+        const stalled = () => new Promise<never>((_, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+        if (phase === 'headers') return stalled();
+        const response = new Response();
+        vi.spyOn(response, 'json').mockImplementation(stalled);
+        return response;
+      });
+      const { api } = await import('../api');
+      await expect(api.health()).rejects.toMatchObject({
+        name: 'ApiError', code: 'TIMEOUT', message: 'Request timed out.',
+      });
+      expect(auth.getStoredToken()).toBe('keep-me');
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      sessionStorage.clear();
+    }
+  }, 1000);
+});
+
 describe('api.request 401 handling (skipAuthClear)', () => {
   beforeEach(() => {
     vi.restoreAllMocks();

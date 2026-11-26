@@ -29,6 +29,10 @@ export interface ScheduleExecutionDeps {
     incrementSequenceNumber: () => void;
   }>;
   pipelineExecutor: (input: PipelineExecuteInput) => Promise<PipelineOutcome>;
+  sequenceCoordinator: {
+    runExclusive<T>(accountId: string, task: () => Promise<T>): Promise<T>;
+  };
+  sequenceAccountId: string;
   now?: () => Date;
 }
 
@@ -47,32 +51,38 @@ export class ScheduleExecutionService {
   async executeSchedule(schedule: ScheduleRecord): Promise<ScheduleExecutionResult> {
     const intent = schedule.intent;
 
-    let sourceAccount: PipelineExecuteInput["sourceAccount"];
-    try {
-      const raw = await this.deps.getSourceAccount();
-      sourceAccount = {
-        agentId: schedule.agentId,
-        ownerId: schedule.ownerId,
-        accountId: raw.accountId,
-        sequenceNumber: raw.sequenceNumber,
-        incrementSequenceNumber: raw.incrementSequenceNumber,
-      };
-    } catch (e: any) {
-      return {
-        status: "rejected",
-        message: `Cannot load source account: ${e.message}`,
-        intent,
-        policyDecision: {
-          result: "deny",
-          reason: "source account load failed",
-          rule: "schedule",
+    const execute = async (): Promise<ScheduleExecutionResult> => {
+      let sourceAccount: PipelineExecuteInput["sourceAccount"];
+      try {
+        const raw = await this.deps.getSourceAccount();
+        sourceAccount = {
+          agentId: schedule.agentId,
+          ownerId: schedule.ownerId,
+          accountId: raw.accountId,
+          sequenceNumber: raw.sequenceNumber,
+          incrementSequenceNumber: raw.incrementSequenceNumber,
+        };
+      } catch (e: any) {
+        return {
+          status: "rejected",
+          message: `Cannot load source account: ${e.message}`,
           intent,
-        },
-        simulationResult: null,
-      };
-    }
+          policyDecision: {
+            result: "deny",
+            reason: "source account load failed",
+            rule: "schedule",
+            intent,
+          },
+          simulationResult: null,
+        };
+      }
 
-    const outcome = await this.deps.pipelineExecutor({ intent, sourceAccount });
-    return outcome;
+      const outcome = await this.deps.pipelineExecutor({ intent, sourceAccount });
+      return outcome;
+    };
+
+    // Keep the account load inside the lock: it obtains the Horizon sequence
+    // used to build and submit this transaction.
+    return this.deps.sequenceCoordinator.runExclusive(this.deps.sequenceAccountId, execute);
   }
 }

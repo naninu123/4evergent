@@ -115,6 +115,7 @@ test("SCHEDULE OUTCOME LINKAGE 1: policy-denied schedule updates pre-created act
       assert.equal(preActivities.length, 1, "scheduler must pre-create exactly one activity record");
       const preActivityId = preActivities[0]!.id;
       assert.equal(preActivities[0]!.status, "pending");
+      assert.equal(preActivities[0]!.policyDecision, null, "pre-created activity must not have fabricated decision");
 
       // Process the queued execution through the pipeline
       const started = await server.executionQueue!.processDue(nowIso);
@@ -130,6 +131,10 @@ test("SCHEDULE OUTCOME LINKAGE 1: policy-denied schedule updates pre-created act
       assert.equal(activity.id, preActivityId, "pipeline must update the pre-created activity record in place");
       assert.equal(activity.status, "rejected");
       assert.equal(activity.authorizationStatus, "denied_by_policy");
+      assert.ok(activity.policyDecision);
+      assert.equal(activity.policyDecision!.result, "deny");
+      assert.equal(activity.policyDecision!.rule, "maxTxAmount");
+      assert.notEqual(activity.policyDecision!.rule, "scheduler");
 
       const executions = await executionStore.listByAgent(schedule.agentId);
       assert.equal(executions.length, 1);

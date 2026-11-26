@@ -7,6 +7,7 @@ import ApprovalDetail from '../ApprovalDetail';
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     approvalDetail: vi.fn(),
+    approve: vi.fn(),
     reject: vi.fn(),
   },
 }));
@@ -104,5 +105,21 @@ describe('ApprovalDetail', () => {
     });
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+  });
+
+  it('surfaces rejection error when approving for a paused or disabled agent', async () => {
+    const approval = makeApproval();
+    mockApi.approvalDetail.mockResolvedValue({ approval });
+    mockApi.approve.mockRejectedValue({
+      status: 409,
+      code: 'AGENT_NOT_ACTIVE',
+      message: 'agent is paused; cannot approve intent',
+    });
+    renderDetail();
+    const trigger = await screen.findByRole('button', { name: 'Approve' });
+    fireEvent.click(trigger);
+    await waitFor(() => {
+      expect(screen.getByText('agent is paused; cannot approve intent')).toBeInTheDocument();
+    });
   });
 });

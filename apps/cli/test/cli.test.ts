@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { COMMAND_TREE, COMMANDS_HELP, INTENT_TYPES } from "../src/commands.js";
 
 // Resolve the tsx CLI entry point directly so we can spawn `node tsx/cli`
 // instead of `npx tsx`, which goes through a .ps1 wrapper that fails under
@@ -202,7 +203,55 @@ test("CLI: agent list → prints agents", () => {
   assert.match(r.stdout, /agent-1/);
   assert.match(r.stdout, /Test Agent/);
   assert.match(r.stdout, /active/);
+  // No flags: the request stays exactly the same as before filtering existed.
+  assert.equal(r.requests.length, 1);
+  assert.equal(r.requests[0].path, "/agents");
 });
+
+test("CLI: agent list --capability sends the exact capability query parameter", () => {
+  const r = run(["agent", "list", "--capability", "payment"], {
+    responses: [
+      { match: "/agents?capability=payment", status: 200, body: { agents: [{ id: "agent-1", displayName: "Test Agent", status: "active" }] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /agent-1/);
+  assert.equal(r.requests.length, 1);
+  assert.equal(r.requests[0].method, "GET");
+  assert.equal(r.requests[0].path, "/agents?capability=payment");
+});
+
+test("CLI: agent list --capability does not normalize case", () => {
+  const r = run(["agent", "list", "--capability", "Payment"], {
+    responses: [
+      { match: "/agents?capability=Payment", status: 200, body: { agents: [] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /No agents found/);
+  assert.equal(r.requests[0].path, "/agents?capability=Payment");
+});
+
+test("CLI: agent list --limit sends the limit query parameter", () => {
+  const r = run(["agent", "list", "--limit", "10"], {
+    responses: [
+      { match: "/agents?limit=10", status: 200, body: { agents: [{ id: "agent-1", displayName: "Test Agent", status: "active" }] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /agent-1/);
+  assert.equal(r.requests[0].path, "/agents?limit=10");
+});
+
+for (const invalidLimit of ["0", "201", "abc"]) {
+  test(`CLI: agent list --limit ${invalidLimit} exits 1 without calling the API`, () => {
+    const r = run(["agent", "list", "--limit", invalidLimit], { responses: [] });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /Invalid --limit/);
+    assert.match(r.stderr, /Usage: 4evergent agent list/);
+    assert.equal(r.requests.length, 0);
+  });
+}
 
 test("CLI: agent get → prints details", () => {
   const r = run(["agent", "get", "agent-1"], {
@@ -261,8 +310,33 @@ test("CLI: approval list → prints approvals", () => {
     ],
   });
   assert.equal(r.code, 0);
+  assert.equal(r.requests[0]?.path, "/approvals");
   assert.match(r.stdout, /ap-123/);
   assert.match(r.stdout, /pending_approval/);
+});
+
+test("CLI: approval list sends status and either form of limit", () => {
+  for (const [args, path] of [
+    [["--status", "pending_approval"], "/approvals?status=pending_approval"],
+    [["--limit", "200", "--status", "approved"], "/approvals?status=approved&limit=200"],
+    [["10"], "/approvals?limit=10"],
+  ] as const) {
+    const r = run(["approval", "list", ...args], {
+      responses: [{ match: path, status: 200, body: { approvals: [] } }],
+    });
+    assert.equal(r.code, 0);
+    assert.equal(r.requests[0]?.method, "GET");
+    assert.equal(r.requests[0]?.path, path);
+  }
+});
+
+test("CLI: approval list rejects invalid filters before making a request", () => {
+  for (const args of [["--status", "unknown"], ["--status"], ["--limit", "201"], ["0"], ["1.5"], ["2", "--limit", "3"]]) {
+    const r = run(["approval", "list", ...args]);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /Usage: 4evergent approval list/);
+    assert.equal(r.requests.length, 0);
+  }
 });
 
 test("CLI: approval approve → exit 0", () => {
@@ -357,13 +431,48 @@ test("CLI: execution list → empty result", () => {
   assert.match(r.stdout, /No executions found/);
 });
 
-test("CLI: execution list → limit passed as query param", () => {
+test("CLI: execution list → default limit 100 passed as query param", () => {
   const r = run(["execution", "list"], {
     responses: [
       { match: "/executions?limit=100", status: 200, body: { executions: [] } },
     ],
   });
   assert.equal(r.code, 0);
+  assert.equal(r.requests.length, 1);
+  assert.equal(r.requests[0]!.path, "/executions?limit=100");
+});
+
+test("CLI: execution list with positional limit → passes query param", () => {
+  const r = run(["execution", "list", "10"], {
+    responses: [
+      { match: "/executions?limit=10", status: 200, body: { executions: [] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.requests.length, 1);
+  assert.equal(r.requests[0]!.path, "/executions?limit=10");
+});
+
+test("CLI: execution list with invalid limit string → exits 1 with usage", () => {
+  const r = run(["execution", "list", "abc"]);
+  assert.equal(r.code, 1);
+  assert.equal(r.requests.length, 0);
+  assert.match(r.stderr, /Usage: 4evergent execution list/);
+  assert.match(r.stderr, /limit must be an integer between 1 and 100/);
+});
+
+test("CLI: execution list out-of-bounds limit (0 and 101) → exits 1 with usage", () => {
+  const r0 = run(["execution", "list", "0"]);
+  assert.equal(r0.code, 1);
+  assert.equal(r0.requests.length, 0);
+  assert.match(r0.stderr, /Usage: 4evergent execution list/);
+  assert.match(r0.stderr, /limit must be an integer between 1 and 100/);
+
+  const r101 = run(["execution", "list", "101"]);
+  assert.equal(r101.code, 1);
+  assert.equal(r101.requests.length, 0);
+  assert.match(r101.stderr, /Usage: 4evergent execution list/);
+  assert.match(r101.stderr, /limit must be an integer between 1 and 100/);
 });
 
 test("CLI: execution list → API error → exit 1", () => {
@@ -746,10 +855,83 @@ test("CLI v2: intent submit 409 conflict", () => {
   assert.match(r.stderr, /409/);
 });
 
-test("CLI v2: intent submit account_settings rejected locally", () => {
-  const r = run(["intent", "submit", "agent-1", "account_settings", "setting", "value", "reason"]);
+test("CLI v2: intent submit account_settings plain string value → 202", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "some_setting", "enabled", "User requested this change"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 202, body: { activityId: "act-12", agentId: "agent-1", status: "requires_approval", approvalId: "ap-12" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /act-12/);
+  assert.equal(r.requests[0]?.body.type, "account_settings");
+  assert.equal(r.requests[0]?.body.setting, "some_setting");
+  assert.equal(r.requests[0]?.body.value, "enabled");
+  assert.equal(r.requests[0]?.body.reason, "User requested this change");
+});
+
+test("CLI v2: intent submit account_settings JSON object value → 202 with parsed object", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "thresholds", '{"low":1,"medium":2}', "Update thresholds"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 202, body: { activityId: "act-13", agentId: "agent-1", status: "requires_approval", approvalId: "ap-13" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /act-13/);
+  assert.equal(r.requests[0]?.body.type, "account_settings");
+  assert.equal(r.requests[0]?.body.setting, "thresholds");
+  assert.deepEqual(r.requests[0]?.body.value, { low: 1, medium: 2 });
+  assert.equal(r.requests[0]?.body.reason, "Update thresholds");
+});
+
+test("CLI v2: intent submit account_settings JSON number value → 202 with parsed number", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "max_limit", "42", "Set limit"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 202, body: { activityId: "act-14", agentId: "agent-1", status: "requires_approval" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.requests[0]?.body.value, 42);
+});
+
+test("CLI v2: intent submit account_settings JSON boolean value → 202 with parsed boolean", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "enabled", "true", "Enable feature"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 202, body: { activityId: "act-15", agentId: "agent-1", status: "requires_approval" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.requests[0]?.body.value, true);
+});
+
+test("CLI v2: intent submit account_settings missing setting → usage error", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings"]);
   assert.equal(r.code, 1);
-  assert.match(r.stderr, /not supported/);
+  assert.match(r.stderr, /account_settings requires/);
+});
+
+test("CLI v2: intent submit account_settings missing value → usage error", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "some_setting"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /account_settings requires/);
+});
+
+test("CLI v2: intent submit account_settings missing reason → usage error", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "some_setting", "value"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /account_settings requires/);
+});
+
+test("CLI v2: INTENT_TYPES includes account_settings", () => {
+  assert.ok(INTENT_TYPES.includes("account_settings" as any));
+  assert.equal(INTENT_TYPES.length, 4);
+  assert.deepEqual([...INTENT_TYPES], ["payment", "trustline", "contract_call", "account_settings"]);
+});
+
+test("CLI v2: intent submit help includes account_settings in types", () => {
+  const r = run(["intent", "submit", "--help"]);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /account_settings/);
+  assert.match(r.stdout, /payment.*trustline.*contract_call.*account_settings/s);
 });
 
 test("CLI v2: intent submit missing args → usage", () => {
@@ -1195,6 +1377,7 @@ interface CliHandlersModule {
   cmdScheduleDisable: (agentId: string, scheduleId: string) => Promise<number>;
   cmdScheduleDelete: (agentId: string, scheduleId: string, force?: boolean) => Promise<number>;
   cmdApprovalGet: (id: string) => Promise<number>;
+  cmdExecutionList: (limit?: string) => Promise<number>;
   confirmDestructiveAction: (
     target: string,
     consequence: string,
@@ -1225,6 +1408,7 @@ function loadCliHandlers(): Promise<CliHandlersModule> {
   cmdScheduleDisable,
   cmdScheduleDelete,
   cmdApprovalGet,
+  cmdExecutionList,
   confirmDestructiveAction,
 };\n`
       );
@@ -1442,12 +1626,61 @@ test("buildIntentArgs: contract_call valid JSON array, invalid JSON error, and n
   assert.match(missingContractArgs.error ?? "", /contract_call requires/);
 });
 
-test("buildIntentArgs: account_settings rejection and unknown/missing type errors", async () => {
+test("buildIntentArgs: account_settings with string and JSON values, unknown/missing type errors", async () => {
   const { buildIntentArgs } = await loadCliHandlers();
 
-  const accountSettings = buildIntentArgs(["account_settings", "set", "value", "reason"]);
-  assert.equal(accountSettings.intent, null);
-  assert.match(accountSettings.error ?? "", /account_settings is not supported/);
+  // String value
+  const stringValue = buildIntentArgs(["account_settings", "some_setting", "enabled", "User requested this change"]);
+  assert.equal(stringValue.error, undefined);
+  assert.deepEqual(stringValue.intent, {
+    type: "account_settings",
+    setting: "some_setting",
+    value: "enabled",
+    reason: "User requested this change",
+  });
+
+  // JSON object value
+  const jsonObjectValue = buildIntentArgs(["account_settings", "thresholds", '{"low":1,"medium":2}', "Update thresholds"]);
+  assert.equal(jsonObjectValue.error, undefined);
+  assert.deepEqual(jsonObjectValue.intent, {
+    type: "account_settings",
+    setting: "thresholds",
+    value: { low: 1, medium: 2 },
+    reason: "Update thresholds",
+  });
+
+  // JSON number value
+  const jsonNumberValue = buildIntentArgs(["account_settings", "max_limit", "42", "Set limit"]);
+  assert.equal(jsonNumberValue.error, undefined);
+  assert.deepEqual(jsonNumberValue.intent, {
+    type: "account_settings",
+    setting: "max_limit",
+    value: 42,
+    reason: "Set limit",
+  });
+
+  // JSON boolean value
+  const jsonBooleanValue = buildIntentArgs(["account_settings", "enabled", "true", "Enable feature"]);
+  assert.equal(jsonBooleanValue.error, undefined);
+  assert.deepEqual(jsonBooleanValue.intent, {
+    type: "account_settings",
+    setting: "enabled",
+    value: true,
+    reason: "Enable feature",
+  });
+
+  // Missing arguments
+  const missingSetting = buildIntentArgs(["account_settings"]);
+  assert.equal(missingSetting.intent, null);
+  assert.match(missingSetting.error ?? "", /account_settings requires/);
+
+  const missingValue = buildIntentArgs(["account_settings", "some_setting"]);
+  assert.equal(missingValue.intent, null);
+  assert.match(missingValue.error ?? "", /account_settings requires/);
+
+  const missingReason = buildIntentArgs(["account_settings", "some_setting", "value"]);
+  assert.equal(missingReason.intent, null);
+  assert.match(missingReason.error ?? "", /account_settings requires/);
 
   const unknownType = buildIntentArgs(["swap", "XLM", "USDC"]);
   assert.equal(unknownType.intent, null);
@@ -1524,6 +1757,40 @@ test("cmdActivityList: GET /agents/:id/activity?limit= with default and explicit
   const invalidLimit = await runHandlerWithMockFetch([], (m) => m.cmdActivityList("agent-1", "101"));
   assert.equal(invalidLimit.code, 1);
   assert.equal(invalidLimit.requests.length, 0);
+});
+
+test("cmdExecutionList: GET /executions?limit= with default and explicit limit, validates input", async () => {
+  const defaultLimit = await runHandlerWithMockFetch(
+    [{ match: "/executions?limit=100", status: 200, body: { executions: [] } }],
+    (m) => m.cmdExecutionList()
+  );
+  assert.equal(defaultLimit.code, 0);
+  assert.equal(defaultLimit.requests.length, 1);
+  assert.equal(defaultLimit.requests[0]!.method, "GET");
+  assert.equal(defaultLimit.requests[0]!.path, "/executions?limit=100");
+
+  const customLimit = await runHandlerWithMockFetch(
+    [{ match: "/executions?limit=10", status: 200, body: { executions: [] } }],
+    (m) => m.cmdExecutionList("10")
+  );
+  assert.equal(customLimit.code, 0);
+  assert.equal(customLimit.requests.length, 1);
+  assert.equal(customLimit.requests[0]!.method, "GET");
+  assert.equal(customLimit.requests[0]!.path, "/executions?limit=10");
+
+  const invalidAlpha = await runHandlerWithMockFetch([], (m) => m.cmdExecutionList("abc"));
+  assert.equal(invalidAlpha.code, 1);
+  assert.equal(invalidAlpha.requests.length, 0);
+  assert.match(invalidAlpha.stderr, /Usage: 4evergent execution list/);
+  assert.match(invalidAlpha.stderr, /limit must be an integer between 1 and 100/);
+
+  const invalidZero = await runHandlerWithMockFetch([], (m) => m.cmdExecutionList("0"));
+  assert.equal(invalidZero.code, 1);
+  assert.equal(invalidZero.requests.length, 0);
+
+  const invalidOver = await runHandlerWithMockFetch([], (m) => m.cmdExecutionList("101"));
+  assert.equal(invalidOver.code, 1);
+  assert.equal(invalidOver.requests.length, 0);
 });
 
 test("cmdAgentCreate: POST /agents with parsed displayName, description, capabilities, and stellarAddress", async () => {
@@ -1917,6 +2184,165 @@ test("CLI: --help documents --issuer option", () => {
   const r = run(["--help"]);
   assert.equal(r.code, 0);
   assert.match(r.stdout, /--issuer/);
+});
+
+test("CLI: policy update 400 VALIDATION_ERROR prints code and per-field details", () => {
+  const r = run(["policy", "update", "agent-1", "--rules", '{"maxTxAmount":{"XLM":0}}'], {
+    responses: [
+      {
+        match: "/agents/agent-1/policy",
+        status: 400,
+        body: {
+          code: "VALIDATION_ERROR",
+          error: "invalid policy",
+          details: [
+            "maxTxAmount.XLM must be a positive number, got 0",
+            "dailyLimit.XLM must be a positive number, got -5",
+          ],
+        },
+      },
+    ],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /HTTP 400 \[VALIDATION_ERROR\]: invalid policy/);
+  assert.match(r.stderr, /maxTxAmount\.XLM must be a positive number, got 0/);
+  assert.match(r.stderr, /dailyLimit\.XLM must be a positive number, got -5/);
+  assert.doesNotMatch(r.stderr, /\["maxTxAmount/);
+});
+
+test("CLI: agent status transition 409 prints code and current/requested status", () => {
+  const r = run(["agent", "resume", "agent-1"], {
+    responses: [
+      {
+        match: "/agents/agent-1/status",
+        status: 409,
+        body: {
+          code: "AGENT_STATUS_INVALID_TRANSITION",
+          error: "Agent status does not allow this transition",
+          details: {
+            currentStatus: "disabled",
+            requestedStatus: "active",
+          },
+        },
+      },
+    ],
+  });
+  assert.equal(r.code, 1);
+  assert.match(
+    r.stderr,
+    /HTTP 409 \[AGENT_STATUS_INVALID_TRANSITION\]: Agent status does not allow this transition/
+  );
+  assert.match(r.stderr, /currentStatus: disabled/);
+  assert.match(r.stderr, /requestedStatus: active/);
+  assert.doesNotMatch(r.stderr, /\{"currentStatus"/);
+});
+
+test("CLI: API error without server code does not invent one", () => {
+  const r = run(["agent", "get", "missing-agent"], {
+    responses: [
+      {
+        match: "/agents/missing-agent",
+        status: 404,
+        body: { error: "Agent not found" },
+      },
+    ],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /HTTP 404: Agent not found/);
+  assert.doesNotMatch(r.stderr, /HTTP 404 \[/);
+});
+
+test("CLI: API error timeout still exits with code 3", () => {
+  const r = run(["agent", "list"], {
+    hang: true,
+    env: { FOREGENT_API_TIMEOUT_MS: "100" },
+  });
+  assert.equal(r.code, 3);
+  assert.match(r.stderr, /Request timed out/);
+});
+
+// ===== Help paths (#349) =====
+
+test("CLI: --help lists every subcommand declared in the command tree", () => {
+  const r = run(["--help"]);
+  assert.equal(r.code, 0);
+  assert.equal(r.requests.length, 0);
+  for (const [cmdName, cmdDef] of Object.entries(COMMAND_TREE)) {
+    const line = COMMANDS_HELP.split("\n").find(
+      (candidate) => candidate === `  ${cmdName}` || candidate.startsWith(`  ${cmdName} `)
+    );
+    assert.ok(line, `top-level help is missing a line for '${cmdName}'`);
+    for (const subName of Object.keys(cmdDef.subcommands ?? {})) {
+      assert.ok(line.includes(subName), `help line for '${cmdName}' omits '${subName}': ${line}`);
+    }
+  }
+  assert.match(r.stdout, /approval list \| get <id> \| approve <id> \| reject <id>/);
+});
+
+test("CLI: every <command> --help prints its usage and exits 0", () => {
+  for (const cmdName of Object.keys(COMMAND_TREE)) {
+    const r = run([cmdName, "--help"]);
+    assert.equal(r.code, 0, `${cmdName} --help exited ${r.code}: ${r.stderr}`);
+    assert.equal(r.stderr, "", `${cmdName} --help wrote to stderr: ${r.stderr}`);
+    assert.equal(r.requests.length, 0, `${cmdName} --help sent a request`);
+    assert.ok(
+      r.stdout.startsWith(`4evergent ${cmdName}`),
+      `${cmdName} --help did not start with the command heading: ${r.stdout}`
+    );
+    assert.match(r.stdout, new RegExp(`Usage: 4evergent ${cmdName}`));
+    assert.doesNotMatch(r.stdout, /Unknown/);
+  }
+});
+
+test("CLI: agent --help lists its subcommands with descriptions", () => {
+  const r = run(["agent", "--help"]);
+  assert.equal(r.code, 0);
+  assert.equal(r.requests.length, 0);
+  assert.match(r.stdout, /Subcommands:/);
+  for (const [subName, subDef] of Object.entries(COMMAND_TREE.agent!.subcommands!)) {
+    assert.ok(r.stdout.includes(subName), `agent --help omits subcommand '${subName}'`);
+    assert.ok(r.stdout.includes(subDef.description), `agent --help omits the description of '${subName}'`);
+  }
+  assert.match(r.stdout, /Run '4evergent agent <subcommand> --help'/);
+});
+
+test("CLI: approval get --help documents the approval id argument and exits 0", () => {
+  const r = run(["approval", "get", "--help"]);
+  assert.equal(r.code, 0);
+  assert.equal(r.stderr, "");
+  assert.equal(r.requests.length, 0);
+  assert.match(r.stdout, /Usage: 4evergent approval get/);
+  assert.match(r.stdout, /<id>/);
+  assert.match(r.stdout, /Approval ID/);
+});
+
+test("CLI: intent submit --help prints the argument order for all three intent types", () => {
+  const r = run(["intent", "submit", "--help"]);
+  assert.equal(r.code, 0);
+  assert.equal(r.stderr, "");
+  assert.equal(r.requests.length, 0);
+  assert.match(r.stdout, /Usage: 4evergent intent submit <agent-id> <type>/);
+  assert.match(r.stdout, /payment <asset> <amount> <destination> <reason> \[memo\] \[--issuer <G\.\.\.>\]/);
+  assert.match(r.stdout, /trustline <assetCode> <issuer> <reason> \[limit\]/);
+  assert.match(r.stdout, /contract_call <contractId> <function> <args-json> <reason>/);
+  assert.match(r.stdout, /--idempotency-key/);
+  assert.doesNotMatch(r.stdout, /intent type required/);
+});
+
+test("CLI: --help/-h anywhere short-circuits and is never read as a positional", () => {
+  const argvs = [
+    ["intent", "submit", "payment", "--help"],
+    ["intent", "submit", "--help", "payment"],
+    ["schedule", "create", "-h"],
+    ["agent", "get", "--help"],
+  ];
+  for (const args of argvs) {
+    const r = run(args);
+    assert.equal(r.code, 0, `${args.join(" ")} exited ${r.code}: ${r.stderr}`);
+    assert.equal(r.stderr, "", `${args.join(" ")} wrote to stderr: ${r.stderr}`);
+    assert.equal(r.requests.length, 0, `${args.join(" ")} sent a request`);
+    assert.match(r.stdout, /^4evergent /);
+  }
 });
 
 

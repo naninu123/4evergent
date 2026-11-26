@@ -132,7 +132,7 @@
 - **Shared types** (`packages/shared/src/types.ts`): `CreateAgentInput`, `CreateAgentRequest` matching API request shape.
 - **Backward compatibility**: existing `registerAgent()` now syncs to both in-memory Map and persistent store. All test helpers using `registerAgent()` continue to work.
 - **ADR-013** in `docs/architecture.md`
-- 18 new tests (10 API agent-create, 8 DB agent-store)
+- Added API agent-creation and database agent-store test coverage.
 
 ## Phase 8 Details (Shipped)
 
@@ -142,7 +142,7 @@
 - **ScheduleExecutionService** (`apps/api/src/schedule-execution.ts`): runs a scheduled intent through the SAME `TransactionPipeline.execute()` as manual intents; rebuilds `sourceAccount` from signer via `StellarAdapter`
 - **API server wiring** (`apps/api/src/index.ts`): scheduler opt-in via `options.scheduler.enabled`, integrated into server lifecycle (start/stop), typed callback returns `ScheduleExecutionResult`
 - **ScheduleExecutionResult** (`apps/api/src/schedule-execution.ts`): result type merging PipelineOutcome with scheduler-specific fields
-- 10 scheduler tests + 4 integration tests
+- Added scheduler and integration test coverage.
 
 ## Phase 9 Details (Shipped)
 
@@ -153,7 +153,7 @@
 - **Error classification** (`packages/database/src/execution-policy.ts`): transient (network/Horizon/submission) vs permanent (policy deny, validation, auth). Bounded retry (max 3, configurable) with exponential backoff capped at maxDelayMs. Permanent failures short-circuit to dead_letter
 - **API server integration** (`apps/api/src/index.ts`): approve enqueues `ExecutionRecord` (preserving `approvalId`) instead of fire-and-forget; scheduler enqueues with `activityId`; owner-scoped read endpoints `GET /agents/:id/executions`, `GET /executions/:id`, `GET /agent-queue`; `createApiServer` returns `executionStore`, `executionQueue`
 - **ADR-012** in `docs/architecture.md`
-- 20 new tests (enqueue+process, retry→dead_letter, transient→retry, permanent→no retry, crash recovery, duplicate safety, error classification, backoff formula, owner isolation, approval boundary, scheduler+manual regression)
+- Added tests for enqueue/process, retry→dead_letter, transient→retry, permanent→no retry, crash recovery, duplicate safety, error classification, backoff formula, owner isolation, approval boundary, and scheduler/manual regression.
 
 ## Phase 10 Details (Shipped)
 
@@ -167,7 +167,7 @@
 - **ScheduleRecoveryService** (`apps/api/src/schedule-recovery.ts`): startup recovery service with `recover()` method — scans interrupted schedules, re-fetches each for idempotency guard, sets `lastRunAt` to `lastStartedAt`, clears `lastStartedAt` to `null`, advances `nextRunAt` to the next future occurrence (or pauses if unadvanceable), preventing duplicate payment execution
 - **Startup lifecycle** (`apps/api/src/index.ts`): `createApiServer()` is now `async`; queue recovery runs BEFORE queue worker starts, and schedule recovery runs BEFORE scheduler starts ticking; `recoveryService` and `scheduleRecoveryService` exposed via return value
 - **ADR-012** updated in `docs/architecture.md` with execution queue and scheduler crash recovery details
-- 10 new tests (executing→failed, retry count preserved, terminal states untouched, no duplicates, idempotent second call, queue reprocesses recovered record, owner isolation, queue disabled no worker, nextRetryAt immediately eligible, startedAt cleared)
+- Added tests for executing→failed, retry count preservation, untouched terminal states, duplicate prevention, idempotent recovery, queue reprocessing, owner isolation, disabled-queue behavior, immediate retry eligibility, and clearing startedAt.
 
 ## Phase 2 Details (Shipped)
 
@@ -175,14 +175,14 @@
 
 - **Signer interface** (`packages/stellar/src/signer.ts`): abstraction with `getAccountId()`, `getNetworkPassphrase()`, `sign()`. No key-exposing methods.
 - **TestnetLocalSigner** (`packages/stellar/src/testnet-local-signer.ts`): testnet-only development signer. Loads from env, never exposes secrets, never committed.
-- **StellarTransactionBuilder** (`packages/stellar/src/transaction-builder.ts`): constructs unsigned Stellar transactions from validated `PaymentIntent` only. Does NOT accept raw XDR or arbitrary operation arrays. MVP supports XLM payments only.
+- **StellarTransactionBuilder** (`packages/stellar/src/transaction-builder.ts`): constructs unsigned Stellar transactions for validated payment, trustline, and account-settings intents, including native XLM and issued-asset payments. Does NOT accept raw XDR or arbitrary operation arrays.
 - **StellarSimulator** (`packages/stellar/src/simulator.ts`): mandatory simulation gate. Calls real Horizon API (`fetchBaseFee`, `accounts().accountId()`). No fake results. A failed simulation prevents signing.
 - **StellarSubmitter** (`packages/stellar/src/submitter.ts`): submits signed transactions. Rejects unsigned transactions (no signatures).
 - **TransactionPipeline** (`packages/stellar/src/pipeline.ts`): orchestrates the ordered gate chain — validate → policy → authorize → construct → simulate → sign → submit → record. The only public entry point.
 - **Activity storage** (`packages/database/src/index.ts`): in-memory activity log with `assertNoSecrets()` guard. Records intent, policy decision, authorization status, simulation result, tx hash, status, timestamps.
 - **API server** (`apps/api/src/index.ts`): `POST /agents/:id/intents` endpoint implementing the full pipeline. Returns 400 for malformed/raw input, 403 for policy DENY, 202 for requires_approval, 200 for submitted. `GET /health` endpoint.
-- **Security tests** (15 tests): verify DENY prevents construction, failed simulation prevents signing, amount above limit never reaches signer, unauthorized asset/destination never reach signer, approval-required never reaches signer before approval, signer interface has no key-exposing methods.
-- **Integration tests** (10 tests): verify API rejects raw XDR, returns 403 for denied intents, 202 for approval-required, 400 for unsupported intent types, records activity for all outcomes, never leaks secrets in responses.
+- **Security tests**: verify DENY prevents construction, failed simulation prevents signing, amount above limit never reaches signer, unauthorized asset/destination never reach signer, approval-required never reaches signer before approval, signer interface has no key-exposing methods.
+- **Integration tests**: verify API rejects raw XDR, returns 403 for denied intents, 202 for approval-required, 400 for unsupported intent types, records activity for all outcomes, never leaks secrets in responses.
 
 ### Phase 3 Details (Shipped)
 
@@ -193,8 +193,8 @@
 - **Daily spending limit enforcement** (`packages/policy/src/engine.ts`): `PolicyEngine.evaluate()` is now `async` and accepts an `ActivityStore`. `getDailySpent()` reads the current UTC day's `submitted` activities for the agent and deducts from the daily limit. Read-then-write; no transactional lock.
 - **Pipeline integration** (`packages/stellar/src/pipeline.ts`): `TransactionPipeline` accepts optional `activityStore`/`approvalStore` in constructor. `execute()` records every outcome (denied/submitted/failed/simulation_failed). New `executeApproved(approvalId, approver)` method reconstructs the intent from the stored approval, re-runs construction+simulation+signing+submission, and updates the approval status to `submitted`/`failed`/`expired`/`executing`.
 - **API server auto-selects store** (`apps/api/src/index.ts`): if `dbPath` provided → SQLite stores; else → in-memory. `assertNoSecrets()` invoked on every record returned through the API.
-- **Security tests** (15 tests): all pass. Tests prove daily limit deny when cumulative exceeded, daily limit allow when under cap, executeApproved rejects nonexistent/pending/expired, double-approval is blocked, raw XDR injection is rejected at approve/reject endpoints.
-- **API approval integration tests** (10 tests): all pass. Approve/reject lifecycle, 404 for unknown approval, 409 for double-approve and approve-then-reject, XDR injection rejected, no secret leakage in responses.
+- **Security tests**: all pass. Tests prove daily limit deny when cumulative exceeded, daily limit allow when under cap, executeApproved rejects nonexistent/pending/expired, double-approval is blocked, raw XDR injection is rejected at approve/reject endpoints.
+- **API approval integration tests**: all pass. Approve/reject lifecycle, 404 for unknown approval, 409 for double-approve and approve-then-reject, XDR injection rejected, no secret leakage in responses.
 
 ### Known Limitations
 
@@ -208,7 +208,7 @@
 - **Simulation**: For classic (non-Soroban) transactions, Horizon has no dry-run API. Simulation checks sequence, fee, balance, and envelope validity — but signature correctness is only checked at submission time. For Soroban contract calls, the Soroban-RPC `simulateTransaction` endpoint should be used (not yet implemented).
 - **Transaction types**: XLM payments, issued assets, and trustline operations are supported (Phase 12). Account settings are supported. Contract invocation remains denied by default.
 - **Mainnet**: Not tested. The pipeline asserts the network passphrase of the signer matches the signer passphrase, and `TestnetLocalSigner` is wired to the testnet passphrase in the pipeline constructor.
-- **Soroban contracts**: `agent-registry` is compiled, tested (15 unit tests) and deployed to Stellar Testnet — see `docs/testnet.md`. `permissions` is intentionally **not** deployed: it is excluded from the contracts workspace, is not compiled or tested, lacks authorization checks, and needs its own DESIGN pass before any work resumes (`contracts/permissions/README.md`).
+- **Soroban contracts**: `agent-registry` is compiled, tested and deployed to Stellar Testnet — see `docs/testnet.md`. `permissions` is intentionally **not** deployed: it is excluded from the contracts workspace, is not compiled or tested, lacks authorization checks, and needs its own DESIGN pass before any work resumes (`contracts/permissions/README.md`).
 - **No KMS/HSM or user-custodied signer**: Production wallet implementations are deferred.
 - **Live testnet submission**: Gated behind `LIVE_SUBMIT=1` and network configuration validation (Phase 21).
 
@@ -233,8 +233,8 @@ No live Stellar testnet calls were executed during Phase 2 and Phase 3 implement
   - `GET /agents/:id/activity?limit=N` — persisted activity per agent (limit clamped 1–100).
   - `GET /approvals?status=<status>` — approval list, optional status filter.
 - **Store interface** (`packages/database/src/index.ts`): added `listAll(limit?)` to `ActivityStore` and `ApprovalStore`, implemented in all 4 store variants (in-memory + SQLite).
-- **Frontend tests** (`apps/web/src/pages/__tests__/Approvals.test.tsx`): 6 vitest + RTL tests covering loading, empty state, approval row rendering, approve action, reject confirmation, reject cancel.
-- **API tests** (`apps/api/test/read-endpoints.test.ts`): 9 tests covering agents list, empty list, activity retrieval, limit param, approvals list, status filtering, secret/XDR leak checks.
+- **Frontend tests** (`apps/web/src/pages/__tests__/Approvals.test.tsx`): Vitest + RTL coverage for loading, empty state, approval row rendering, approve action, reject confirmation, and reject cancel.
+- **API tests** (`apps/api/test/read-endpoints.test.ts`): cover agents list, empty list, activity retrieval, limit param, approvals list, status filtering, secret/XDR leak checks.
 
 ### Known Limitations (Phase 4 additions)
 

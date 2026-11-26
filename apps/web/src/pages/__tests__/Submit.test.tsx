@@ -55,7 +55,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Monthly payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -83,7 +83,7 @@ describe('Submit', () => {
 
     fireEvent.change(screen.getByLabelText('Intent Type'), { target: { value: 'trustline' } });
     fireEvent.change(screen.getByLabelText('Asset Code'), { target: { value: 'USDC' } });
-    fireEvent.change(screen.getByLabelText('Issuer (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRS' } });
+    fireEvent.change(screen.getByLabelText('Issuer (Stellar G...)'), { target: { value: 'GDI73WJ4SX7LOG3XZDJC3KCK6ED6E5NBYK2JUBQSPBCNNWEG3ZN7T75U' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Add trustline' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -110,7 +110,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQSS' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Monthly payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -131,7 +131,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRS' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GDI73WJ4SX7LOG3XZDJC3KCK6ED6E5NBYK2JUBQSPBCNNWEG3ZN7T75U' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Monthly payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -175,7 +175,7 @@ describe('Submit', () => {
 
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Monthly payment' } });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -218,7 +218,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Large payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -258,7 +258,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -289,7 +289,7 @@ describe('Submit', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' } });
+    fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), { target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Payment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit Intent' }));
 
@@ -328,7 +328,7 @@ describe('Submit', () => {
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '25' } });
     fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), {
-      target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' },
+      target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' },
     });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Invoice 42' } });
 
@@ -386,7 +386,7 @@ describe('Submit', () => {
     fireEvent.change(screen.getByLabelText('Intent Type'), { target: { value: 'trustline' } });
     fireEvent.change(screen.getByLabelText('Asset Code'), { target: { value: 'USDC' } });
     fireEvent.change(screen.getByLabelText('Issuer (Stellar G...)'), {
-      target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRS' },
+      target: { value: 'GDI73WJ4SX7LOG3XZDJC3KCK6ED6E5NBYK2JUBQSPBCNNWEG3ZN7T75U' },
     });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Enable USDC' } });
 
@@ -425,7 +425,7 @@ describe('Submit', () => {
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
     fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), {
-      target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' },
+      target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' },
     });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Recurring payment' } });
 
@@ -466,7 +466,7 @@ describe('Submit', () => {
 
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10' } });
     fireEvent.change(screen.getByLabelText('Destination (Stellar G...)'), {
-      target: { value: 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQ' },
+      target: { value: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA' },
     });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Payment' } });
 

@@ -3,6 +3,11 @@ import { Link } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import { describeApiError } from '../apiErrors';
 import type { SubmitPaymentIntent } from '../types';
+import {
+  isValidStellarAddress,
+  validateAssetCodeField,
+  validateStellarAddressField,
+} from '../validation';
 
 interface SubmitResult {
   agentId: string;
@@ -22,6 +27,14 @@ interface SubmitFailure {
   };
 }
 
+interface SubmitFieldErrors {
+  assetCode?: string;
+  issuer?: string;
+  destination?: string;
+  trustlineAssetCode?: string;
+  trustlineIssuer?: string;
+}
+
 export default function Submit() {
   const [agents, setAgents] = useState<{ id: string; displayName: string }[]>([]);
   const [selectedAgent, setSelectedAgent] = useState('');
@@ -37,6 +50,7 @@ export default function Submit() {
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<SubmitFieldErrors>({});
   const [failure, setFailure] = useState<SubmitFailure | null>(null);
   const [result, setResult] = useState<SubmitResult | null>(null);
   const attemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
@@ -52,8 +66,6 @@ export default function Submit() {
   };
 
   useEffect(() => {
-    // Page through GET /agents so the dropdown lists every agent, not just
-    // the first 200.
     api.listAllAgents()
       .then((a) => {
         setAgents(a.agents.map((x) => ({ id: x.id, displayName: x.displayName })));
@@ -82,22 +94,41 @@ export default function Submit() {
     e.preventDefault();
     if (loading) return;
     setError(null);
+    setFieldErrors({});
     setFailure(null);
     setResult(null);
     if (!selectedAgent) return setError('Select an agent');
     if (!reason || reason.length < 3) return setError('Reason must be at least 3 characters');
 
-    setLoading(true);
     if (intentType === 'payment') {
-      if (!amount || parseFloat(amount) <= 0) { setLoading(false); return setError('Amount must be positive'); }
-      if (!destination || !destination.startsWith('G')) { setLoading(false); return setError('Destination must be a valid Stellar account (G...)'); }
+      if (!amount || parseFloat(amount) <= 0) {
+        return setError('Amount must be positive');
+      }
+      const nextErrors: SubmitFieldErrors = {};
+      if (assetCode === 'other') {
+        const assetErr = validateAssetCodeField(otherAssetCode, 'Custom asset code');
+        if (assetErr) nextErrors.assetCode = assetErr;
+      }
+      if (assetCode !== 'XLM' && issuer.trim() !== '' && !isValidStellarAddress(issuer)) {
+        nextErrors.issuer = 'Issuer must be a 56-character Stellar G... public key (base32 A-Z, 2-7)';
+      }
+      const destErr = validateStellarAddressField(destination, 'Destination');
+      if (destErr) nextErrors.destination = destErr;
+
+      if (Object.keys(nextErrors).length > 0) {
+        setFieldErrors(nextErrors);
+        return;
+      }
+
+      setLoading(true);
       const isNativeXLM = assetCode === 'XLM';
-      const actualAssetCode = assetCode === 'other' ? otherAssetCode : assetCode;
+      const actualAssetCode = assetCode === 'other' ? otherAssetCode.trim() : assetCode;
+      const trimmedIssuer = issuer.trim();
       const intent: SubmitPaymentIntent = {
         type: 'payment',
         asset: actualAssetCode === 'XLM' ? 'XLM' : actualAssetCode,
-        ...((!isNativeXLM && issuer) ? { assetDetails: { code: actualAssetCode, issuer } } : {}),
-        destination,
+        ...((!isNativeXLM && trimmedIssuer) ? { assetDetails: { code: actualAssetCode, issuer: trimmedIssuer } } : {}),
+        destination: destination.trim(),
         amount,
         reason,
       };
@@ -110,13 +141,26 @@ export default function Submit() {
         .catch((e: any) => handleFailure(selectedAgent, e))
         .finally(() => setLoading(false));
     } else {
-      if (!trustlineAssetCode || trustlineAssetCode.length < 1) { setLoading(false); return setError('Asset code is required'); }
-      if (trustlineAssetCode === 'XLM') { setLoading(false); return setError('XLM is native — use payment instead'); }
-      if (!trustlineIssuer || !trustlineIssuer.startsWith('G')) { setLoading(false); return setError('Issuer must be a valid Stellar account (G...)'); }
+      const nextErrors: SubmitFieldErrors = {};
+      const tlCodeErr = validateAssetCodeField(trustlineAssetCode, 'Trustline asset code');
+      if (tlCodeErr) {
+        nextErrors.trustlineAssetCode = tlCodeErr;
+      } else if (trustlineAssetCode.trim() === 'XLM') {
+        nextErrors.trustlineAssetCode = 'XLM is native — use payment instead';
+      }
+      const tlIssuerErr = validateStellarAddressField(trustlineIssuer, 'Trustline issuer');
+      if (tlIssuerErr) nextErrors.trustlineIssuer = tlIssuerErr;
+
+      if (Object.keys(nextErrors).length > 0) {
+        setFieldErrors(nextErrors);
+        return;
+      }
+
+      setLoading(true);
       const intent = {
         type: 'trustline' as const,
-        assetCode: trustlineAssetCode,
-        issuer: trustlineIssuer,
+        assetCode: trustlineAssetCode.trim(),
+        issuer: trustlineIssuer.trim(),
         limit: trustlineLimit || undefined,
         reason,
       };
@@ -196,10 +240,10 @@ export default function Submit() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} onReset={() => { attemptRef.current = null; }} className="surface" style={{ maxWidth: '500px' }}>
+      <form onSubmit={handleSubmit} onReset={() => { attemptRef.current = null; setFieldErrors({}); }} className="surface" style={{ maxWidth: '500px' }}>
         <div className="field">
           <label htmlFor="intent-type">Intent Type</label>
-          <select id="intent-type" value={intentType} onChange={(e) => setIntentType(e.target.value as any)} className="select">
+          <select id="intent-type" value={intentType} onChange={(e) => { setIntentType(e.target.value as any); setFieldErrors({}); }} className="select">
             <option value="payment">Payment</option>
             <option value="trustline">Trustline</option>
           </select>
@@ -216,7 +260,7 @@ export default function Submit() {
           <>
             <div className="field">
               <label htmlFor="asset">Asset</label>
-              <select id="asset" value={assetCode} onChange={(e) => setAssetCode(e.target.value as "XLM" | "USDC" | "BTC" | "other")} className="select">
+              <select id="asset" value={assetCode} onChange={(e) => { setAssetCode(e.target.value as "XLM" | "USDC" | "BTC" | "other"); setFieldErrors((p) => ({ ...p, assetCode: undefined, issuer: undefined })); }} className="select">
                 <option value="XLM">XLM (native)</option>
                 <option value="USDC">USDC</option>
                 <option value="BTC">BTC</option>
@@ -226,14 +270,16 @@ export default function Submit() {
             {assetCode === 'other' && (
               <div className="field">
                 <label htmlFor="asset-code">Asset Code</label>
-                <input id="asset-code" type="text" value={otherAssetCode} onChange={(e) => setOtherAssetCode(e.target.value)} placeholder="e.g. USDC" className="input" aria-describedby="asset-code-hint" />
-                <div id="asset-code-hint" className="field-hint">Enter the asset code, e.g. USDC.</div>
+                <input id="asset-code" type="text" value={otherAssetCode} onChange={(e) => setOtherAssetCode(e.target.value)} placeholder="e.g. USDC" className="input" aria-describedby="asset-code-hint" aria-invalid={Boolean(fieldErrors.assetCode)} />
+                <div id="asset-code-hint" className="field-hint">Enter the asset code (1-12 characters), e.g. USDC.</div>
+                {fieldErrors.assetCode && <div className="field-error error" role="alert" data-testid="asset-code-error">{fieldErrors.assetCode}</div>}
               </div>
             )}
             {assetCode !== 'XLM' && (
               <div className="field">
                 <label htmlFor="issuer">Issuer (Stellar G...)</label>
-                <input id="issuer" type="text" value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="G..." className="input" />
+                <input id="issuer" type="text" value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="G..." className="input" aria-invalid={Boolean(fieldErrors.issuer)} />
+                {fieldErrors.issuer && <div className="field-error error" role="alert" data-testid="issuer-error">{fieldErrors.issuer}</div>}
               </div>
             )}
             <div className="field">
@@ -242,18 +288,21 @@ export default function Submit() {
             </div>
             <div className="field">
               <label htmlFor="destination">Destination (Stellar G...)</label>
-              <input id="destination" type="text" value={destination} onChange={(e) => setDestination(e.target.value)} className="input" />
+              <input id="destination" type="text" value={destination} onChange={(e) => setDestination(e.target.value)} className="input" aria-invalid={Boolean(fieldErrors.destination)} />
+              {fieldErrors.destination && <div className="field-error error" role="alert" data-testid="destination-error">{fieldErrors.destination}</div>}
             </div>
           </>
         ) : (
           <>
             <div className="field">
               <label htmlFor="tl-asset-code">Asset Code</label>
-              <input id="tl-asset-code" type="text" value={trustlineAssetCode} onChange={(e) => setTrustlineAssetCode(e.target.value)} placeholder="e.g. USDC" className="input" />
+              <input id="tl-asset-code" type="text" value={trustlineAssetCode} onChange={(e) => setTrustlineAssetCode(e.target.value)} placeholder="e.g. USDC" className="input" aria-invalid={Boolean(fieldErrors.trustlineAssetCode)} />
+              {fieldErrors.trustlineAssetCode && <div className="field-error error" role="alert" data-testid="tl-asset-code-error">{fieldErrors.trustlineAssetCode}</div>}
             </div>
             <div className="field">
               <label htmlFor="tl-issuer">Issuer (Stellar G...)</label>
-              <input id="tl-issuer" type="text" value={trustlineIssuer} onChange={(e) => setTrustlineIssuer(e.target.value)} placeholder="G..." className="input" />
+              <input id="tl-issuer" type="text" value={trustlineIssuer} onChange={(e) => setTrustlineIssuer(e.target.value)} placeholder="G..." className="input" aria-invalid={Boolean(fieldErrors.trustlineIssuer)} />
+              {fieldErrors.trustlineIssuer && <div className="field-error error" role="alert" data-testid="tl-issuer-error">{fieldErrors.trustlineIssuer}</div>}
             </div>
             <div className="field">
               <label htmlFor="tl-limit">Trustline Limit (optional)</label>

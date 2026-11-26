@@ -37,6 +37,10 @@ vi.mock('../../api', () => ({
   },
 }));
 
+// Fixture is intentionally divergent: the legacy `approvalThreshold` ('25') is
+// NOT what the engine enforces; `requireHumanApprovalForAmountAbove` ('75') is
+// (packages/policy/src/engine.ts:173). Tests below pin the fix to the enforced
+// value and forbid the dead value from surviving a save.
 const defaultPolicyResponse = {
   agentId: 'agent-1',
   policy: {
@@ -82,8 +86,9 @@ describe('AgentDetail Policy Section', () => {
     });
 
     expect(screen.getByDisplayValue('500')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('25')).toBeInTheDocument();
+    // Enforced threshold (75) is rendered; the dead approvalThreshold (25) is not.
     expect(screen.getByDisplayValue('75')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('25')).not.toBeInTheDocument();
   });
 
   test('editing values updates form state', async () => {
@@ -109,6 +114,9 @@ describe('AgentDetail Policy Section', () => {
       policy: {
         ...defaultPolicyResponse.policy,
         maxTxAmount: { XLM: '200' },
+        // Real backend now echoes back both fields in sync.
+        approvalThreshold: '75',
+        requireHumanApprovalForAmountAbove: '75',
       },
       version: 2,
     });
@@ -136,6 +144,8 @@ describe('AgentDetail Policy Section', () => {
       policy: {
         ...defaultPolicyResponse.policy,
         maxTxAmount: { XLM: '200' },
+        approvalThreshold: '75',
+        requireHumanApprovalForAmountAbove: '75',
       },
       version: 2,
     });
@@ -190,6 +200,121 @@ describe('AgentDetail Policy Section', () => {
     await waitFor(() => {
       expect(screen.getByText('Save Policy')).toBeInTheDocument();
     });
+  });
+
+  // #326: there must be exactly one approval-threshold control, and it must
+  // be the one the engine enforces (requireHumanApprovalForAmountAbove).
+  test('editor renders exactly one approval-threshold field', async () => {
+    mockGetPolicy.mockResolvedValue(defaultPolicyResponse);
+
+    const { container } = render(
+      <MemoryRouter initialEntries={['/agents/agent-1']}>
+        <Routes><Route path="/agents/:agentId" element={<AgentDetail />} /></Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByDisplayValue('100');
+
+    const enforcedInputs = container.querySelectorAll('#policy-require-human-approval-above');
+    expect(enforcedInputs).toHaveLength(1);
+
+    // The dead control is gone from the editor DOM.
+    expect(container.querySelector('#policy-approval-threshold')).toBeNull();
+
+    // And the old label text is not rendered anywhere.
+    expect(screen.queryByText(/Approval Threshold \(XLM\)/)).not.toBeInTheDocument();
+  });
+
+  // #326: if the stored policy had two diverging thresholds, saving from the
+  // editor must persist the enforced value into BOTH fields.
+  test('save normalizes divergent stored thresholds to the enforced value', async () => {
+    mockGetPolicy.mockResolvedValue(defaultPolicyResponse);
+
+    mockUpdatePolicy.mockResolvedValue({
+      agentId: 'agent-1',
+      policy: {
+        ...defaultPolicyResponse.policy,
+        maxTxAmount: { XLM: '200' },
+        approvalThreshold: '75',
+        requireHumanApprovalForAmountAbove: '75',
+      },
+      version: 2,
+    });
+
+    render(<MemoryRouter initialEntries={['/agents/agent-1']}><Routes><Route path="/agents/:agentId" element={<AgentDetail />} /></Routes></MemoryRouter>);
+
+    // Make the form dirty by editing an unrelated field.
+    const maxTxInput = await screen.findByDisplayValue('100');
+    fireEvent.change(maxTxInput, { target: { value: '200' } });
+
+    const saveButton = await screen.findByText('Save Policy');
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(mockUpdatePolicy).toHaveBeenCalledTimes(1);
+    });
+
+    // CI fix (#326): under `noUncheckedIndexedAccess` (apps/web/tsconfig.json),
+    // `mock.calls[0]` is typed `any[] | undefined`, and destructuring a
+    // possibly-undefined value is TS2488. The `toHaveBeenCalledTimes(1)`
+    // guard immediately above proves the call exists at runtime; this read +
+    // `expect(...).toBeDefined()` is only there to narrow for TypeScript so
+    // the destructure below is a pure type operation.
+    const updateCall = mockUpdatePolicy.mock.calls[0];
+    expect(updateCall).toBeDefined();
+    const [, payload] = updateCall!;
+    expect(payload.maxTxAmount).toEqual({ XLM: '200' });
+    // Enforced value (75) is what the editor loaded; both fields must match.
+    expect(payload.approvalThreshold).toBe('75');
+    expect(payload.requireHumanApprovalForAmountAbove).toBe('75');
+  });
+
+  // #326: editing the single visible threshold control must write BOTH fields.
+  test('editing the threshold field writes the value to both fields on save', async () => {
+    mockGetPolicy.mockResolvedValue(defaultPolicyResponse);
+
+    mockUpdatePolicy.mockResolvedValue({
+      agentId: 'agent-1',
+      policy: {
+        ...defaultPolicyResponse.policy,
+        approvalThreshold: '80',
+        requireHumanApprovalForAmountAbove: '80',
+      },
+      version: 2,
+    });
+
+    const { container } = render(
+      <MemoryRouter initialEntries={['/agents/agent-1']}>
+        <Routes><Route path="/agents/:agentId" element={<AgentDetail />} /></Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByDisplayValue('100');
+
+    const thresholdInput = container.querySelector('#policy-require-human-approval-above') as HTMLInputElement;
+    expect(thresholdInput).not.toBeNull();
+    expect(thresholdInput.value).toBe('75');
+
+    fireEvent.change(thresholdInput, { target: { value: '80' } });
+
+    const saveButton = await screen.findByText('Save Policy');
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(mockUpdatePolicy).toHaveBeenCalledTimes(1);
+    });
+
+    // CI fix (#326): under `noUncheckedIndexedAccess` (apps/web/tsconfig.json),
+    // `mock.calls[0]` is typed `any[] | undefined`, and destructuring a
+    // possibly-undefined value is TS2488. The `toHaveBeenCalledTimes(1)`
+    // guard immediately above proves the call exists at runtime; this read +
+    // `expect(...).toBeDefined()` is only there to narrow for TypeScript so
+    // the destructure below is a pure type operation.
+    const updateCall = mockUpdatePolicy.mock.calls[0];
+    expect(updateCall).toBeDefined();
+    const [, payload] = updateCall!;
+    expect(payload.approvalThreshold).toBe('80');
+    expect(payload.requireHumanApprovalForAmountAbove).toBe('80');
   });
 });
 
@@ -501,7 +626,9 @@ describe('AgentDetail Policy Summary', () => {
       expect(screen.getByText('Max Tx (XLM)')).toBeInTheDocument();
       expect(screen.getByText('100')).toBeInTheDocument();
       expect(screen.getByText('Approval Threshold')).toBeInTheDocument();
-      expect(screen.getByText('25')).toBeInTheDocument();
+      // Summary shows the ENFORCED value (75), not the dead approvalThreshold (25).
+      expect(screen.getByText('75')).toBeInTheDocument();
+      expect(screen.queryByText('25')).not.toBeInTheDocument();
     });
   });
 

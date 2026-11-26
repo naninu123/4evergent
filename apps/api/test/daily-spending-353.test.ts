@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Keypair } from "@stellar/stellar-sdk";
 import type { PolicyRules } from "@4evergent/shared";
+import { toStroops } from "@4evergent/shared";
 import { startServer, apiFetch } from "./helpers.js";
 
 // #353 end-to-end through the real intent handler:
@@ -48,7 +49,7 @@ test("#353 API: one requires_approval intent reserves exactly 300, not 600", asy
     assert.equal(res.body.status, "requires_approval");
     assert.ok(res.body.approvalId);
 
-    assert.equal((await activityStore.getDailySpending("test-agent", "XLM")) ?? 0, 300);
+    assert.equal((await activityStore.getDailySpending("test-agent", "XLM")) ?? 0, toStroops("300"));
 
     const spending = await getSpending(baseUrl);
     assert.equal(spending.spending.XLM.used, 300);
@@ -63,7 +64,7 @@ test("#353 API: rejecting the approval releases the reservation; a new intent ca
   try {
     const first = await post(baseUrl, "/agents/test-agent/intents", payment("300"));
     assert.equal(first.status, 202);
-    assert.equal((await activityStore.getDailySpending("test-agent", "XLM")) ?? 0, 300);
+    assert.equal((await activityStore.getDailySpending("test-agent", "XLM")) ?? 0, toStroops("300"));
 
     const reject = await post(baseUrl, `/approvals/${first.body.approvalId}/reject`, {});
     assert.equal(reject.status, 200);
@@ -75,7 +76,7 @@ test("#353 API: rejecting the approval releases the reservation; a new intent ca
     // The freed limit is usable again by a fresh intent.
     const second = await post(baseUrl, "/agents/test-agent/intents", payment("300"));
     assert.equal(second.status, 202);
-    assert.equal((await activityStore.getDailySpending("test-agent", "XLM")) ?? 0, 300);
+    assert.equal((await activityStore.getDailySpending("test-agent", "XLM")) ?? 0, toStroops("300"));
   } finally {
     await close();
   }
@@ -109,7 +110,7 @@ test("#353 API: over-limit first intent does not brick the asset", async () => {
     // An in-limit intent for the same asset still works.
     const ok = await post(baseUrl, "/agents/test-agent/intents", payment("300"));
     assert.equal(ok.status, 202);
-    assert.equal((await activityStore.getDailySpending("test-agent", "XLM")) ?? 0, 300);
+    assert.equal((await activityStore.getDailySpending("test-agent", "XLM")) ?? 0, toStroops("300"));
   } finally {
     await close();
   }
@@ -123,7 +124,7 @@ test("#353 API: second intent after a 300 reservation is denied when it would ex
     // 300 already reserved; another 300 would total 600 > 500.
     const second = await post(baseUrl, "/agents/test-agent/intents", payment("300"));
     assert.equal(second.status, 403);
-    assert.equal((await activityStore.getDailySpending("test-agent", "XLM")) ?? 0, 300);
+    assert.equal((await activityStore.getDailySpending("test-agent", "XLM")) ?? 0, toStroops("300"));
   } finally {
     await close();
   }

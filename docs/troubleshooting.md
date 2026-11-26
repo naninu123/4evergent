@@ -12,6 +12,7 @@ This page documents observable behavior of the current implementation. Error mes
 - [Startup exits and logs](#startup-exits-and-logs)
 - [Fresh-checkout build ordering](#fresh-checkout-build-ordering)
 - [Dashboard cannot reach the API](#dashboard-cannot-reach-the-api)
+- [Database backup or volume migration missing data (WAL mode)](#database-backup-or-volume-migration-missing-data-wal-mode)
 - [Source mapping](#source-mapping)
 - [Local verification evidence](#local-verification-evidence)
 
@@ -131,6 +132,16 @@ If `pnpm typecheck` reports `TS2307: Cannot find module '@4evergent/shared'` on 
 The web client uses `VITE_API_BASE?.trim() || 'http://localhost:3000'`. If `VITE_API_BASE` is unset or blank, a browser therefore calls `http://localhost:3000`, which is useful only when the API is reachable from that browser at that address. For a deployed or otherwise separate API, set `VITE_API_BASE` to the API's correct public base URL when building the web app; Vite inlines it at build time. See [environment configuration](../.env.example) and [frontend integration](api.md#frontend-integration).
 
 A failed browser request is not automatically a CORS problem. First check that the URL is correct and the API is running and reachable. If the browser reports a CORS policy failure, configure the API's allowed origin (`CORS_ORIGIN`; the server's `WEB_ORIGIN` value is used as its fallback) to match the frontend origin exactly. The API implementation handles this in [apps/api/src/index.ts](../apps/api/src/index.ts#L511); the API entry point supplies `WEB_ORIGIN`, defaulting to `http://localhost:5173`, in [apps/api/src/server.ts](../apps/api/src/server.ts#L158).
+
+## Database backup or volume migration missing data (WAL mode)
+
+- **Message or symptom:** Restoring a database copy results in missing recent rows, or queries fail on startup with `no such table: activities` / `no such table: agents`.
+- **Cause:** SQLite runs in Write-Ahead Logging (`WAL`) mode (`PRAGMA journal_mode = WAL;`). Uncheckpointed commits live in `<DATABASE_PATH>-wal` until flushed into `<DATABASE_PATH>`. Copying or moving only the `.db` file while the database has active or uncheckpointed WAL frames leaves those commits behind.
+- **Fix:**
+  - **Graceful shutdown (Recommended):** Send `SIGTERM` or `SIGINT` to the running server. Graceful shutdown drains in-flight work and executes `PRAGMA wal_checkpoint(TRUNCATE)` before closing connection handles. A `.db` copy taken after clean shutdown contains all committed data.
+  - **Copy all SQLite files:** When taking a backup while stopped without a graceful shutdown, always copy `<DATABASE_PATH>`, `<DATABASE_PATH>-wal`, and `<DATABASE_PATH>-shm` together.
+  - **Online checkpoint:** If taking a snapshot while the server is running, execute `PRAGMA wal_checkpoint(TRUNCATE)` prior to copying the `.db` file.
+  - **Further reading:** [SQLite WAL mode and backup procedure](api.md#sqlite-wal-mode-and-backup-procedure).
 
 ## Source mapping
 

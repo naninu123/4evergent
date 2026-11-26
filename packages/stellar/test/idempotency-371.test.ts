@@ -20,6 +20,7 @@ import {
   type ApprovalStore,
 } from "@4evergent/database";
 import type { AgentIntent } from "@4evergent/shared";
+import { toStroops } from "@4evergent/shared";
 import { TransactionPipeline } from "../src/pipeline.js";
 import type { Signer } from "../src/signer.js";
 
@@ -161,7 +162,7 @@ for (const backend of BACKENDS) {
       assert.equal(records[0].txHash, "371-tx-hash-1");
       // One reservation: the replay's evaluation reserved again, then the
       // duplicate path released it.
-      assert.equal(await activityStore.getDailySpending("agent-1", "XLM"), 10);
+      assert.equal(await activityStore.getDailySpending("agent-1", "XLM"), toStroops("10"));
     } finally {
       cleanup();
     }
@@ -241,7 +242,7 @@ for (const backend of BACKENDS) {
       assert.equal(pending.length, 1);
       const records = await activityStore.listByAgent("agent-1", 50);
       assert.equal(records.length, 1);
-      assert.equal(await activityStore.getDailySpending("agent-1", "XLM"), 300);
+      assert.equal(await activityStore.getDailySpending("agent-1", "XLM"), toStroops("300"));
     } finally {
       cleanup();
     }

@@ -4,6 +4,7 @@ import { api } from '../api';
 import { describeApiError } from '../apiErrors';
 import { ConfirmationModal, Skeleton } from '../components';
 import type { ScheduleRecord, SubmitPaymentIntent } from '../types';
+import { validateStellarAddressField, validateCronExpressionShape } from '../validation';
 
 interface ScheduleManagementProps {
   agentId: string;
@@ -102,6 +103,23 @@ export function ScheduleManagement({ agentId, onError }: ScheduleManagementProps
     if (!trimmedExpr) {
       setEditError('Schedule expression is required.');
       return;
+    }
+    const cronCheck = validateCronExpressionShape(trimmedExpr);
+    if (!cronCheck.valid) {
+      setEditError(`Invalid cron expression: ${cronCheck.error ?? 'must be 5 fields'}`);
+      return;
+    }
+    const destErr = validateStellarAddressField(editDestination, 'Destination');
+    if (destErr) {
+      setEditError(destErr);
+      return;
+    }
+    if (editAsset !== 'XLM') {
+      const issuerErr = validateStellarAddressField(editIssuer, 'Asset issuer');
+      if (issuerErr) {
+        setEditError(issuerErr);
+        return;
+      }
     }
 
     const patch: {
@@ -404,14 +422,30 @@ function CreateScheduleForm({ agentId, onSuccess, onError }: {
   const [timezone, setTimezone] = useState('UTC');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ destination?: string; issuer?: string; expression?: string }>({});
   const cronHelpId = useId();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (saving) return;
 
-    setSaving(true);
     setError(null);
+    const nextFieldErrors: { destination?: string; issuer?: string; expression?: string } = {};
+    const destErr = validateStellarAddressField(destination, 'Destination');
+    if (destErr) nextFieldErrors.destination = destErr;
+    if (asset !== 'XLM') {
+      const issuerErr = validateStellarAddressField(issuer, 'Asset issuer');
+      if (issuerErr) nextFieldErrors.issuer = issuerErr;
+    }
+    const cronCheck = validateCronExpressionShape(scheduleExpression);
+    if (!cronCheck.valid) nextFieldErrors.expression = cronCheck.error;
+
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
+      return;
+    }
+    setFieldErrors({});
+    setSaving(true);
 
     const intent: SubmitPaymentIntent = {
       type: 'payment',
@@ -467,7 +501,9 @@ function CreateScheduleForm({ agentId, onSuccess, onError }: {
               placeholder="G... (asset issuer)"
               required
               aria-label="Asset Issuer (G...)"
+              aria-invalid={Boolean(fieldErrors.issuer)}
             />
+            {fieldErrors.issuer && <div className="field-error error" role="alert" data-testid="schedule-issuer-error">{fieldErrors.issuer}</div>}
           </label>
         )}
         <label>
@@ -494,7 +530,9 @@ function CreateScheduleForm({ agentId, onSuccess, onError }: {
             placeholder="G..."
             required
             aria-label="Destination (G...)"
+            aria-invalid={Boolean(fieldErrors.destination)}
           />
+          {fieldErrors.destination && <div className="field-error error" role="alert" data-testid="schedule-destination-error">{fieldErrors.destination}</div>}
         </label>
         <label>
           <span>Reason</span>
@@ -521,8 +559,10 @@ function CreateScheduleForm({ agentId, onSuccess, onError }: {
           placeholder="0 0 * * * (minute hour day-of-month month day-of-week)"
           required
           aria-describedby={cronHelpId}
+          aria-invalid={Boolean(fieldErrors.expression)}
         />
         <small id={cronHelpId}>5-field cron expression: minute (0-59), hour (0-23), day-of-month (1-31), month (1-12), day-of-week (0-6, 0=Sunday)</small>
+        {fieldErrors.expression && <div className="field-error error" role="alert" data-testid="schedule-expression-error">{fieldErrors.expression}</div>}
       </label>
 
       <div className="cron-presets">

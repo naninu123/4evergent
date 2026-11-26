@@ -48,6 +48,21 @@
 //! | each capability | at most [`MAX_CAPABILITY_LEN`] (32) bytes | `Error::CapabilityTooLong` |
 //! | each capability | distinct from every other entry | `Error::CapabilityDuplicate` |
 //!
+//! # Off-chain alignment
+//!
+//! The HTTP API (`POST /agents` and `PATCH /agents/:id` in
+//! `apps/api/src/index.ts`) applies the same numeric caps as this contract:
+//! at most `MAX_CAPABILITIES` (32) entries and at most `MAX_CAPABILITY_LEN`
+//! (32) characters per entry, each non-empty and duplicate-free. Three
+//! deliberate differences remain: the API trims each entry before checking
+//! length and uniqueness, while this contract compares exact bytes untrimmed
+//! (so an entry rejected on one side can be eligible on the other); the API
+//! caps `display_name` at 100 characters against this contract's 128-byte
+//! limit; and `description` has no on-chain counterpart. Lengths also differ
+//! in unit: the API counts UTF-16 code units while the contract counts UTF-8
+//! bytes, so a capability of multi-byte characters can pass off-chain and
+//! still be rejected here.
+//!
 //! Decisions stated explicitly (each is a deliberate choice, not an accident):
 //!
 //! - **Duplicate capabilities are rejected**, and the comparison is **exact

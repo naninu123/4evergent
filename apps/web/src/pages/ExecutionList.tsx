@@ -22,6 +22,7 @@ function statusLabel(status: ExecutionStatus): string {
     case 'failed': return 'Failed';
     case 'dead_letter': return 'Dead Letter';
     case 'cancelled': return 'Cancelled';
+    case 'requires_approval': return 'Requires Approval';
   }
 }
 
@@ -34,6 +35,7 @@ function statusClass(status: ExecutionStatus): string {
     case 'failed': return 'badge-err';
     case 'dead_letter': return 'badge-err';
     case 'cancelled': return 'badge-neutral';
+    case 'requires_approval': return 'badge-warn';
   }
 }
 
@@ -45,6 +47,7 @@ export function ExecutionList({ agentId: propAgentId, onError, onExecutionClick 
   const [nextOffset, setNextOffset] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
 
   const loadPage = useCallback(async (offset: number, replace: boolean) => {
     if (!agentId) return;
@@ -53,10 +56,16 @@ export function ExecutionList({ agentId: propAgentId, onError, onExecutionClick 
       setExecutions(replace ? r.executions : (prev) => (prev ?? []).concat(r.executions));
       setHasMore(r.hasMore);
       setNextOffset(offset + r.executions.length);
+      if (replace) setError(null);
+      else setLoadMoreError(null);
     } catch (e: any) {
-      const msg = describeApiError(e, 'Failed to load executions');
-      setError(msg);
-      onError?.(msg);
+      const message = e.message ?? 'Failed to load executions';
+      if (replace) {
+        setError(message);
+        onError?.(message);
+      } else {
+        setLoadMoreError(message);
+      }
     }
   }, [agentId, onError]);
 
@@ -71,7 +80,7 @@ export function ExecutionList({ agentId: propAgentId, onError, onExecutionClick 
   }, [agentId, loadPage]);
 
   if (!agentId) return <div className="empty-state"><p>No agent specified.</p></div>;
-  if (error) return <div className="error">{error}</div>;
+  if (error) return <div className="error" role="alert">{error} <button className="btn btn-secondary btn-sm" onClick={() => { setError(null); loadPage(0, true).catch(() => {}); }}>Retry</button></div>;
   if (executions === null) return <Skeleton label="Loading executions..." />;
   if (executions.length === 0) {
     return (
@@ -105,6 +114,7 @@ export function ExecutionList({ agentId: propAgentId, onError, onExecutionClick 
           })}
         </tbody>
       </table>
+      {loadMoreError && <div className="error" role="alert">{loadMoreError} <button className="btn btn-secondary btn-sm" onClick={() => { setLoadMoreError(null); setLoadingMore(true); loadPage(nextOffset, false).finally(() => setLoadingMore(false)); }}>Retry</button></div>}
       <PaginationFooter hasMore={hasMore} loadingMore={loadingMore} onLoadMore={loadMore} itemCount={executions.length} />
     </>
   );

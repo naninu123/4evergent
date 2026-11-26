@@ -169,6 +169,8 @@ test("payment with non-native assetDetails and valid issuer passes", () => {
   assert.equal(r.valid, true);
 });
 
+const VALID_CONTRACT = "CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QX7";
+
 test("contract_call requires contractId and function", () => {
   const r = IntentValidator.validate({
     type: "contract_call",
@@ -179,6 +181,49 @@ test("contract_call requires contractId and function", () => {
   });
   assert.equal(r.valid, false);
   assert.match(r.error!, /contractId/);
+});
+
+test("contract_call with invalid contract address format fails", () => {
+  const shortResult = IntentValidator.validate({
+    type: "contract_call",
+    contractId: "C123",
+    function: "hello",
+    args: [],
+    reason: "test short contract ID",
+  });
+  assert.equal(shortResult.valid, false);
+  assert.match(shortResult.error!, /contractId/);
+
+  const accountResult = IntentValidator.validate({
+    type: "contract_call",
+    contractId: VALID_ACCOUNT, // G... address is not a contract address
+    function: "hello",
+    args: [],
+    reason: "test account instead of contract",
+  });
+  assert.equal(accountResult.valid, false);
+  assert.match(accountResult.error!, /contractId/);
+
+  const corruptResult = IntentValidator.validate({
+    type: "contract_call",
+    contractId: "CDXQRPVGMPJB5UXQHKFAPBLK6G37DSVKDW2BKRAF76RO5ENCCB4W3QXX", // Bad checksum
+    function: "hello",
+    args: [],
+    reason: "test invalid checksum",
+  });
+  assert.equal(corruptResult.valid, false);
+  assert.match(corruptResult.error!, /contractId/);
+});
+
+test("contract_call with valid contract address passes", () => {
+  const r = IntentValidator.validate({
+    type: "contract_call",
+    contractId: VALID_CONTRACT,
+    function: "hello",
+    args: ["world"],
+    reason: "test valid contract call",
+  });
+  assert.equal(r.valid, true);
 });
 
 test("unknown intent type fails", () => {

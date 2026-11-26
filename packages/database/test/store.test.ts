@@ -17,6 +17,7 @@ import {
   type ApprovalStatus,
 } from "../src/index.js";
 import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
+import { toStroops } from "@4evergent/shared";
 
 function makeIntent(amount: string, _agentId = "agent-a"): AgentIntent {
   return {
@@ -96,6 +97,62 @@ function runStoreTests(name: string, makeStores: () => { activity: ActivityStore
       const submitted = await activity.listByStatus("agent-a", "submitted");
       assert.equal(submitted.length, 1);
       assert.equal(submitted[0]!.status, "submitted");
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: listByAgent with status filters at the store level`, async () => {
+    const { activity, cleanup } = makeStores();
+    try {
+      const mk = (status: string) => {
+        const rec = createActivity("agent-a", "owner-a", makeIntent("1"), makeDecision());
+        rec.status = status as typeof rec.status;
+        return rec;
+      };
+      const other = createActivity("agent-b", "owner-b", makeIntent("1"), makeDecision());
+      other.status = "submitted";
+      await activity.record(mk("submitted"));
+      await activity.record(mk("submitted"));
+      await activity.record(mk("rejected"));
+      await activity.record(other);
+
+      const filtered = await activity.listByAgent("agent-a", 50, 0, "submitted");
+      assert.equal(filtered.length, 2);
+      assert.ok(filtered.every((r) => r.agentId === "agent-a" && r.status === "submitted"));
+
+      const unfiltered = await activity.listByAgent("agent-a");
+      assert.equal(unfiltered.length, 3, "no status must return every record for the agent");
+
+      const none = await activity.listByAgent("agent-a", 50, 0, "failed");
+      assert.equal(none.length, 0);
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: listByOwner with status filters at the store level and pages the filtered set`, async () => {
+    const { activity, cleanup } = makeStores();
+    try {
+      const mk = (ownerId: string, status: string) => {
+        const rec = createActivity("agent-a", ownerId, makeIntent("1"), makeDecision());
+        rec.status = status as typeof rec.status;
+        return rec;
+      };
+      await activity.record(mk("owner-a", "submitted"));
+      await activity.record(mk("owner-a", "submitted"));
+      await activity.record(mk("owner-a", "failed"));
+      await activity.record(mk("owner-b", "submitted"));
+
+      const filtered = await activity.listByOwner("owner-a", 50, 0, "submitted");
+      assert.equal(filtered.length, 2);
+      assert.ok(filtered.every((r) => r.ownerId === "owner-a" && r.status === "submitted"));
+
+      const page1 = await activity.listByOwner("owner-a", 1, 0, "submitted");
+      const page2 = await activity.listByOwner("owner-a", 1, 1, "submitted");
+      assert.equal(page1.length, 1);
+      assert.equal(page2.length, 1);
+      assert.notEqual(page1[0]!.id, page2[0]!.id, "limit/offset must page over the filtered set");
     } finally {
       cleanup?.();
     }
@@ -236,10 +293,16 @@ runStoreTests("InMemory", () => ({
 runStoreTests("SQLite", () => {
   const dir = mkdtempSync(join(tmpdir(), "4evergent-test-"));
   const path = join(dir, "test.db");
+  const activity = new SQLiteActivityStore(path);
+  const approval = new SQLiteApprovalStore(path);
   return {
-    activity: new SQLiteActivityStore(path),
-    approval: new SQLiteApprovalStore(path),
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    activity,
+    approval,
+    cleanup: () => {
+      activity.close();
+      approval.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
   };
 });
 
@@ -261,7 +324,8 @@ for (const kind of ["InMemory", "SQLite"] as const) {
 
       assert.equal(await store.sweepDailySpending("2025-01-03"), 2);
       assert.equal(await store.getDailySpending("agent-a", "XLM", asDate("2025-01-02")), null);
-      assert.equal(await store.getDailySpending("agent-a", "XLM", asDate("2025-01-03")), 3);
+      // #374: totals are stored as integer stroops ("3" XLM = 30_000_000 stroops).
+      assert.equal(await store.getDailySpending("agent-a", "XLM", asDate("2025-01-03")), toStroops("3"));
       assert.equal(await store.sweepDailySpending("2025-01-03"), 0);
     } finally {
       if (store instanceof SQLiteActivityStore) store.close();

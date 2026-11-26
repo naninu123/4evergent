@@ -52,6 +52,9 @@ test("POST /agents/:id/schedules — USDC without issuer returns 400 naming the 
 test("POST /agents/:id/schedules — USDC with a valid issuer returns 201", async () => {
   const { baseUrl, close } = await startServer({
     scheduleStore: new InMemoryScheduleStore(),
+    policyRules: {
+      allowedAssets: ["XLM", `USDC:${VALID_ISSUER}`],
+    },
     deferExecution: true,
   });
 

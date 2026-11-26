@@ -110,7 +110,7 @@ test("PRE-CHECK TEST 2: submit fails before network submission → no submittedH
   assert.equal(retryResult.status, "queued");
 });
 
-test("PRE-CHECK TEST 3: submit timeout, pre-check finds transaction → NO second submission", async () => {
+test("PRE-CHECK TEST 3: submit timeout, pre-check finds confirmed transaction → NO second submission", async () => {
   const store = new InMemoryExecutionStore();
   let submitCount = 0;
   const pipelineExecutor = async (record: ExecutionRecord): Promise<ExecutionResult> => {
@@ -143,19 +143,19 @@ test("PRE-CHECK TEST 3: submit timeout, pre-check finds transaction → NO secon
     sequenceNumber: () => "1",
     incrementSequenceNumber: () => {},
   }), {
-    preCheck: await makePreCheck("found"),
+    preCheck: await makePreCheck("confirmed"),
   });
 
   const execution = makeExecution({ status: "failed", submittedHash: "tx-ambiguous-3", attempt: 1, errorClass: "transient" });
   await store.record(execution);
 
-  // Manual retry should detect transaction and NOT resubmit
+  // Manual retry should detect confirmed transaction and NOT resubmit
   const retryResult = await queue.retry(execution.id, 3);
   assert.equal(retryResult.status, "submitted");
   assert.equal(submitCount, 0); // No pipeline call — pre-check prevented resubmission
 });
 
-test("PRE-CHECK TEST 4: pre-check finds transaction as submitted/pending → NO retry", async () => {
+test("PRE-CHECK TEST 4: pre-check finds confirmed transaction as submitted/pending → NO retry", async () => {
   const store = new InMemoryExecutionStore();
   let submitCount = 0;
   const pipelineExecutor = async (record: ExecutionRecord): Promise<ExecutionResult> => {
@@ -175,7 +175,7 @@ test("PRE-CHECK TEST 4: pre-check finds transaction as submitted/pending → NO 
     sequenceNumber: () => "1",
     incrementSequenceNumber: () => {},
   }), {
-    preCheck: await makePreCheck("found"),
+    preCheck: await makePreCheck("confirmed"),
   });
 
   const execution = makeExecution({ status: "failed", submittedHash: "tx-pending-4", attempt: 1, errorClass: "transient" });
@@ -198,7 +198,7 @@ test("PRE-CHECK TEST 5: pre-check finds confirmed transaction → NO retry", asy
     sequenceNumber: () => "1",
     incrementSequenceNumber: () => {},
   }), {
-    preCheck: await makePreCheck("found"),
+    preCheck: await makePreCheck("confirmed"),
   });
 
   const execution = makeExecution({ status: "failed", submittedHash: "tx-confirmed-5", attempt: 1, errorClass: "transient" });
@@ -209,26 +209,41 @@ test("PRE-CHECK TEST 5: pre-check finds confirmed transaction → NO retry", asy
   assert.equal(submitCount, 0);
 });
 
-test("PRE-CHECK TEST 6: pre-check finds on-chain failed transaction → NO retry", async () => {
+test("PRE-CHECK TEST 6: pre-check finds on-chain failed transaction → retry allowed with new transaction (#379)", async () => {
   const store = new InMemoryExecutionStore();
   let submitCount = 0;
-  const pipelineExecutor = async (_record: ExecutionRecord): Promise<ExecutionResult> => {
+  const pipelineExecutor = async (record: ExecutionRecord): Promise<ExecutionResult> => {
     submitCount++;
-    throw new Error("Should not be called");
+    return {
+      record,
+      success: false,
+      status: "failed",
+      error: "transient error",
+      errorClass: "transient",
+    };
   };
   const queue = new ExecutionQueue(store, pipelineExecutor, async () => ({
     accountId: () => "GACCOUNT",
     sequenceNumber: () => "1",
     incrementSequenceNumber: () => {},
   }), {
-    preCheck: await makePreCheck("found"),
+    preCheck: await makePreCheck("failed"),
+    retryPolicy: { maxRetries: 3, baseDelayMs: 10, maxDelayMs: 50 },
   });
 
+  // A transaction that failed on-chain — the previous tx is definitively dead,
+  // so the queue must offer a fresh retry rather than blocking it (#379).
   const execution = makeExecution({ status: "failed", submittedHash: "tx-failed-6", attempt: 1, errorClass: "transient" });
   await store.record(execution);
 
   const retryResult = await queue.retry(execution.id, 3);
-  assert.equal(retryResult.status, "submitted");
+  // "failed" on-chain is definitively dead — a NEW transaction is safe, so
+  // retry() must re-queue instead of blocking with "submitted".
+  assert.equal(retryResult.status, "queued");
+  // submittedHash is cleared so the next attempt builds a fresh transaction
+  const updated = await store.get(execution.id);
+  assert.equal(updated?.submittedHash, null);
+  // The pipeline must not have been called by retry() itself — it only re-queues.
   assert.equal(submitCount, 0);
 });
 
@@ -310,7 +325,7 @@ test("PRE-CHECK TEST 9: pre-check returns definitive not_found → retry allowed
   assert.equal(submitCount, 1);
 });
 
-test("PRE-CHECK TEST 10: manual retry of ambiguous execution → cannot bypass safety check", async () => {
+test("PRE-CHECK TEST 10: manual retry of confirmed execution → cannot bypass safety check", async () => {
   const store = new InMemoryExecutionStore();
   let submitCount = 0;
   const pipelineExecutor = async (_record: ExecutionRecord): Promise<ExecutionResult> => {
@@ -322,10 +337,10 @@ test("PRE-CHECK TEST 10: manual retry of ambiguous execution → cannot bypass s
     sequenceNumber: () => "1",
     incrementSequenceNumber: () => {},
   }), {
-    preCheck: await makePreCheck("found"),
+    preCheck: await makePreCheck("confirmed"),
   });
 
-  // Execution with submittedHash + found on-chain → must NOT retry
+  // Execution with submittedHash + confirmed on-chain → must NOT retry
   const execution = makeExecution({ status: "dead_letter", submittedHash: "tx-found-10", attempt: 1, errorClass: "transient" });
   await store.record(execution);
 
@@ -346,7 +361,12 @@ test("PRE-CHECK TEST 11: startup recovery with transaction identity → no dupli
     sequenceNumber: () => "1",
     incrementSequenceNumber: () => {},
   }), {
-    preCheck: await makePreCheck("found"),
+    // #379: "found" (the old collapsed pre-check verdict) is no longer a valid
+    // PreCheckResult. The pre-check now carries the full on-chain status.
+    // This test only verifies that retry() rejects "executing" records before
+    // the pre-check is even consulted, so "confirmed" is used here as a
+    // representative valid value (the pre-check function is never reached).
+    preCheck: await makePreCheck("confirmed"),
   });
 
   // Stuck executing with submittedHash + txHash → recovery skips
@@ -592,7 +612,7 @@ test("PRE-CHECK TEST 18: first-attempt failure carrying a hash engages evaluateR
   }), {
     preCheck: async (hash: string) => {
       preCheckCalls.push(hash);
-      return "found";
+      return "confirmed";
     },
     retryPolicy: { maxRetries: 3, baseDelayMs: 10, maxDelayMs: 50 },
   });
@@ -604,7 +624,7 @@ test("PRE-CHECK TEST 18: first-attempt failure carrying a hash engages evaluateR
 
   // Pre-check must have been called with the first attempt's hash
   assert.deepEqual(preCheckCalls, ["tx-first-attempt-18"]);
-  // Because pre-check returned "found", fail() must NOT schedule a blind retry
+  // Because pre-check returned "confirmed", fail() must NOT schedule a blind retry
   const afterFail = await store.get(execution.id);
   assert.equal(afterFail?.status, "dead_letter");
   assert.equal(afterFail?.nextRetryAt, null);

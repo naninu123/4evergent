@@ -6,9 +6,15 @@ import type {
   PolicyDecision,
   SimulationResult,
 } from "@4evergent/shared";
-import { getSharedConnection } from "./shared-connection.js";
+import { toStroops } from "@4evergent/shared";
+import { getSharedConnection, closeSharedConnection } from "./shared-connection.js";
 import { clampOffset, clampLimit } from "./pagination.js";
 import { ensureTable, MigrationError } from "./migration.js";
+import {
+  idempotencyCutoff,
+  resolveIdempotencyWindowMs,
+  type ActivityStoreOptions,
+} from "./idempotency-window.js";
 import type {
   ActivityStore,
   ApprovalStore,
@@ -23,13 +29,21 @@ import type {
  * database server required. Data persists across process restarts in a file
  * at the path provided to the constructor.
  *
- * Schema is versioned in _meta (schema_version = 3). initSchema() is
+ * Schema is versioned in _meta (schema_version = 5). initSchema() is
  * idempotent and safe to call on every construction.
  */
 export class SQLiteActivityStore implements ActivityStore {
   private db: DatabaseSync;
+  private dbPath: string;
+  private closed = false;
+  /** #109: Idempotency-Key replay window. */
+  readonly idempotencyWindowMs: number;
+  private readonly now: () => number;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options: ActivityStoreOptions = {}) {
+    this.dbPath = dbPath;
+    this.idempotencyWindowMs = resolveIdempotencyWindowMs(options.idempotencyWindowMs);
+    this.now = options.now ?? Date.now;
     this.db = getSharedConnection(dbPath);
     this.initSchema();
   }
@@ -63,6 +77,10 @@ export class SQLiteActivityStore implements ActivityStore {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_idempotency
         ON activities(owner_id, agent_id, idempotency_key)
         WHERE idempotency_key IS NOT NULL;
+      -- #109: bounded sweep of expired Idempotency-Key bindings.
+      CREATE INDEX IF NOT EXISTS idx_activities_idempotency_created
+        ON activities(created_at)
+        WHERE idempotency_key IS NOT NULL;
     `);
     } catch (err) {
       throw new MigrationError("activities", null, err);
@@ -72,6 +90,13 @@ export class SQLiteActivityStore implements ActivityStore {
     // so the server could start healthy on a database without this table.
     // CREATE TABLE IF NOT EXISTS never throws "already exists", so any
     // error here is real and must abort startup (MigrationError).
+    //
+    // #374: `total` is INTEGER stroops (1 XLM = 10^7 stroops), not REAL XLM.
+    // Binary floats cannot represent most decimal amounts exactly, so a REAL
+    // total drifted the ledger and falsely denied exact-limit intents
+    // (0.1 + 0.2 = 0.30000000000000004 > 0.3). Integer stroops compare
+    // exactly to the stroop. The migration below reinterprets any pre-#374
+    // REAL column as INTEGER stroops.
     ensureTable(
       this.db,
       "daily_spending",
@@ -80,12 +105,78 @@ export class SQLiteActivityStore implements ActivityStore {
           agent_id TEXT NOT NULL,
           asset TEXT NOT NULL,
           day TEXT NOT NULL,
-          total REAL NOT NULL DEFAULT 0,
+          total INTEGER NOT NULL DEFAULT 0,
           PRIMARY KEY (agent_id, asset, day)
         );
       CREATE INDEX IF NOT EXISTS idx_daily_spending_day ON daily_spending(day);
       `
     );
+    // #374: migrate a legacy REAL total column (decimal XLM) to INTEGER
+    // stroops in place, so existing reservations survive the upgrade and
+    // the integer comparison path works. No-op once the column is INTEGER.
+    this.migrateDailySpendingToStroops();
+  }
+
+  /**
+   * #374: convert a pre-#374 `daily_spending` table whose `total` column is
+   * REAL (decimal XLM) to the INTEGER-stroops representation.
+   *
+   * `CREATE TABLE IF NOT EXISTS` above is a no-op on an existing table, so a
+   * database created by an older release keeps its REAL column — and its rows
+   * hold decimal XLM totals. Storing integer stroops alongside those would
+   * mix units (0.3 XLM + 3000000 stroops = nonsense), so the column and its
+   * data are rebuilt together: `ROUND(total * 1e7)` converts each old XLM
+   * total to stroops (this is a one-time migration, not the enforcement path,
+   * so float arithmetic here is acceptable; the result is a clean integer).
+   *
+   * SQLite cannot ALTER a column type, so the table is recreated within a
+   * single transaction (atomic: a failure rolls back to the original REAL
+   * table and aborts startup via MigrationError, never leaving a half-migrated
+   * database). Idempotent: once the column is INTEGER the PRAGMA check skips
+   * this entirely.
+   */
+  private migrateDailySpendingToStroops(): void {
+    const cols = this.db.prepare("PRAGMA table_info(daily_spending)").all() as
+      | { name: string; type: string }[]
+      | undefined;
+    if (!cols) return;
+    const totalCol = cols.find((c) => c.name === "total");
+    if (!totalCol) return; // table absent — ensureTable would have created it
+    if (/integer/i.test(totalCol.type)) return; // already stroops
+
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      // Drop a stale rebuild table from any prior interrupted attempt so the
+      // CREATE below is clean (the transaction makes this safe).
+      this.db.exec("DROP TABLE IF EXISTS daily_spending_stroops");
+      this.db.exec(`
+        CREATE TABLE daily_spending_stroops (
+          agent_id TEXT NOT NULL,
+          asset TEXT NOT NULL,
+          day TEXT NOT NULL,
+          total INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (agent_id, asset, day)
+        )
+      `);
+      this.db
+        .prepare(
+          `INSERT INTO daily_spending_stroops (agent_id, asset, day, total)
+           SELECT agent_id, asset, day, CAST(ROUND(total * 10000000) AS INTEGER)
+           FROM daily_spending`
+        )
+        .run();
+      this.db.exec("DROP TABLE daily_spending");
+      this.db.exec("ALTER TABLE daily_spending_stroops RENAME TO daily_spending");
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_daily_spending_day ON daily_spending(day)");
+      this.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // Best-effort rollback; the MigrationError below carries the cause.
+      }
+      throw new MigrationError("daily_spending", "total", err);
+    }
   }
 
   async record(record: ActivityRecord): Promise<void> {
@@ -103,7 +194,7 @@ export class SQLiteActivityStore implements ActivityStore {
         owner_id: record.ownerId,
         idempotency_key: record.idempotencyKey ?? null,
         intent_json: JSON.stringify(record.intent),
-        policy_decision_json: JSON.stringify(record.policyDecision),
+        policy_decision_json: JSON.stringify(record.policyDecision ?? null),
         authorization_status: record.authorizationStatus,
         simulation_result_json: record.simulationResult
           ? JSON.stringify(record.simulationResult)
@@ -121,10 +212,15 @@ export class SQLiteActivityStore implements ActivityStore {
     return row ? rowToActivityRecord(row as unknown as ActivityRow) : null;
   }
 
-  async listByAgent(agentId: string, limit = 50, offset = 0): Promise<ActivityRecord[]> {
+  async listByAgent(agentId: string, limit = 50, offset = 0, status?: string): Promise<ActivityRecord[]> {
+    const safeLimit = clampLimit(limit);
+    const safeOffset = clampOffset(offset);
+    const where = status === undefined ? "WHERE agent_id = ?" : "WHERE agent_id = ? AND status = ?";
+    const params =
+      status === undefined ? [agentId, safeLimit, safeOffset] : [agentId, status, safeLimit, safeOffset];
     const rows = this.db
-      .prepare("SELECT * FROM activities WHERE agent_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?")
-      .all(agentId, clampLimit(limit), clampOffset(offset));
+      .prepare(`SELECT * FROM activities ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .all(...params);
     return rows.map((r) => rowToActivityRecord(r as unknown as ActivityRow));
   }
 
@@ -142,10 +238,15 @@ export class SQLiteActivityStore implements ActivityStore {
     return rows.map((r) => rowToActivityRecord(r as unknown as ActivityRow));
   }
 
-  async listByOwner(ownerId: string, limit = 50, offset = 0): Promise<ActivityRecord[]> {
+  async listByOwner(ownerId: string, limit = 50, offset = 0, status?: string): Promise<ActivityRecord[]> {
+    const safeLimit = clampLimit(limit);
+    const safeOffset = clampOffset(offset);
+    const where = status === undefined ? "WHERE owner_id = ?" : "WHERE owner_id = ? AND status = ?";
+    const params =
+      status === undefined ? [ownerId, safeLimit, safeOffset] : [ownerId, status, safeLimit, safeOffset];
     const rows = this.db
-      .prepare("SELECT * FROM activities WHERE owner_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?")
-      .all(ownerId, clampLimit(limit), clampOffset(offset));
+      .prepare(`SELECT * FROM activities ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .all(...params);
     return rows.map((r) => rowToActivityRecord(r as unknown as ActivityRow));
   }
 
@@ -156,11 +257,35 @@ export class SQLiteActivityStore implements ActivityStore {
     return row ? rowToActivityRecord(row as unknown as ActivityRow) : null;
   }
 
+  /**
+   * #109: only a key bound to an activity created inside the replay window
+   * is returned. An older binding no longer suppresses a new request.
+   */
   async getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null> {
+    const cutoff = idempotencyCutoff(this.now(), this.idempotencyWindowMs);
     const row = this.db
-      .prepare("SELECT * FROM activities WHERE owner_id = ? AND agent_id = ? AND idempotency_key = ?")
-      .get(ownerId, agentId, key);
+      .prepare(
+        "SELECT * FROM activities WHERE owner_id = ? AND agent_id = ? AND idempotency_key = ? AND created_at >= ?"
+      )
+      .get(ownerId, agentId, key, cutoff);
     return row ? rowToActivityRecord(row as unknown as ActivityRow) : null;
+  }
+
+  /**
+   * #109: clear the Idempotency-Key of at most `limit` activities created
+   * before `cutoff`. The activity row itself is kept: it is the audit trail.
+   */
+  async releaseExpiredIdempotencyKeys(cutoff: string, limit = 500): Promise<number> {
+    if (!Number.isInteger(limit) || limit <= 0) return 0;
+    const result = this.db.prepare(`
+      UPDATE activities SET idempotency_key = NULL
+      WHERE rowid IN (
+        SELECT rowid FROM activities
+        WHERE idempotency_key IS NOT NULL AND created_at < ?
+        ORDER BY created_at ASC LIMIT ?
+      )
+    `).run(cutoff, limit);
+    return Number(result.changes);
   }
 
   /**
@@ -175,6 +300,16 @@ export class SQLiteActivityStore implements ActivityStore {
     // Fast path: check if already exists (avoids INSERT overhead)
     const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
     if (existing) return { record: existing, created: false };
+
+    // #109: an expired binding of this key no longer suppresses the request,
+    // but it still occupies the UNIQUE index. Clear only its key (never the
+    // row) so the new activity can bind the key. Synchronous, so no other
+    // caller in this process interleaves between this and the INSERT.
+    this.db
+      .prepare(
+        "UPDATE activities SET idempotency_key = NULL WHERE owner_id = ? AND agent_id = ? AND idempotency_key = ? AND created_at < ?"
+      )
+      .run(record.ownerId, record.agentId, key, idempotencyCutoff(this.now(), this.idempotencyWindowMs));
 
     // Atomic INSERT — UNIQUE INDEX enforces single winner
     record.idempotencyKey = key;
@@ -227,9 +362,14 @@ export class SQLiteActivityStore implements ActivityStore {
    * (agent_id, asset, day) ensures one row per asset per day.
    */
   async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now = new Date()): Promise<boolean> {
-    const amountNum = parseFloat(amount);
-    const limitNum = parseFloat(limit);
-    if (isNaN(amountNum) || isNaN(limitNum)) return false;
+    // #374: compare integer stroops, not REAL XLM. parseFloat/float addition
+    // drifts the ledger and falsely denies exact-limit intents
+    // (0.1 + 0.2 stroops = 3_000_000 == 0.3 limit stroops, allowed). A
+    // non-canonical amount/limit returns null and is rejected, matching the
+    // strict parser (#264).
+    const amountStroops = toStroops(amount);
+    const limitStroops = toStroops(limit);
+    if (amountStroops === null || limitStroops === null) return false;
 
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
       .toISOString()
@@ -241,7 +381,7 @@ export class SQLiteActivityStore implements ActivityStore {
         `UPDATE daily_spending SET total = total + ?
          WHERE agent_id = ? AND asset = ? AND day = ? AND total + ? <= ?`
       )
-      .run(amountNum, agentId, asset, day, amountNum, limitNum);
+      .run(amountStroops, agentId, asset, day, amountStroops, limitStroops);
 
     if (updateResult.changes === 1) {
       return true; // Reservation succeeded
@@ -251,7 +391,7 @@ export class SQLiteActivityStore implements ActivityStore {
     // #353: check the limit BEFORE inserting. The old code inserted first
     // and returned false afterwards, persisting an over-limit row that
     // bricked the asset for the rest of the day.
-    if (amountNum > limitNum) {
+    if (amountStroops > limitStroops) {
       return false; // First reservation already over limit — persist nothing.
     }
 
@@ -261,7 +401,7 @@ export class SQLiteActivityStore implements ActivityStore {
         .prepare(
           `INSERT INTO daily_spending (agent_id, asset, day, total) VALUES (?, ?, ?, ?)`
         )
-        .run(agentId, asset, day, amountNum);
+        .run(agentId, asset, day, amountStroops);
       return true;
     } catch (_e: any) {
       // PRIMARY KEY conflict — row was created by concurrent caller between our UPDATE and INSERT,
@@ -272,7 +412,7 @@ export class SQLiteActivityStore implements ActivityStore {
           `UPDATE daily_spending SET total = total + ?
            WHERE agent_id = ? AND asset = ? AND day = ? AND total + ? <= ?`
         )
-        .run(amountNum, agentId, asset, day, amountNum, limitNum);
+        .run(amountStroops, agentId, asset, day, amountStroops, limitStroops);
       return retryResult.changes === 1;
     }
   }
@@ -283,8 +423,9 @@ export class SQLiteActivityStore implements ActivityStore {
    * release amounts proven reserved (PolicyDecision.reservedDailySpending).
    */
   async releaseDailySpending(agentId: string, asset: string, amount: string, now = new Date()): Promise<void> {
-    const amountNum = parseFloat(amount);
-    if (isNaN(amountNum) || amountNum <= 0) return;
+    // #374: release integer stroops, matching the reservation unit.
+    const amountStroops = toStroops(amount);
+    if (amountStroops === null || amountStroops <= 0) return;
 
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
       .toISOString()
@@ -295,7 +436,7 @@ export class SQLiteActivityStore implements ActivityStore {
         `UPDATE daily_spending SET total = MAX(total - ?, 0)
          WHERE agent_id = ? AND asset = ? AND day = ?`
       )
-      .run(amountNum, agentId, asset, day);
+      .run(amountStroops, agentId, asset, day);
     this.db
       .prepare(
         `DELETE FROM daily_spending
@@ -304,6 +445,13 @@ export class SQLiteActivityStore implements ActivityStore {
       .run(agentId, asset, day);
   }
 
+  /**
+   * #374: returns the current UTC day's reserved total in INTEGER STROOPS
+   * (1 XLM = 10^7 stroops), or null when nothing is reserved. Callers that
+   * need a decimal amount convert at the boundary via `fromStroops`; the
+   * enforcement path compares these integers directly against integer
+   * stroop limits.
+   */
   async getDailySpending(agentId: string, asset: string, now = new Date()): Promise<number | null> {
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
       .toISOString().slice(0, 10);
@@ -333,7 +481,9 @@ export class SQLiteActivityStore implements ActivityStore {
   }
 
   close(): void {
-    // Shared connection — managed by closeSharedConnection() / closeAllSharedConnections()
+    if (this.closed) return;
+    this.closed = true;
+    closeSharedConnection(this.dbPath);
   }
 }
 
@@ -355,8 +505,11 @@ export class SQLiteActivityStore implements ActivityStore {
  */
 export class SQLiteApprovalStore implements ApprovalStore {
   private db: DatabaseSync;
+  private dbPath: string;
+  private closed = false;
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     this.db = getSharedConnection(dbPath);
     this.initSchema();
   }
@@ -604,7 +757,9 @@ export class SQLiteApprovalStore implements ApprovalStore {
   }
 
   close(): void {
-    // Shared connection — managed by closeSharedConnection() / closeAllSharedConnections()
+    if (this.closed) return;
+    this.closed = true;
+    closeSharedConnection(this.dbPath);
   }
 }
 
@@ -666,7 +821,7 @@ interface ActivityRow {
   owner_id: string;
   idempotency_key: string | null;
   intent_json: string;
-  policy_decision_json: string;
+  policy_decision_json: string | null;
   authorization_status: string | null;
   simulation_result_json: string | null;
   tx_hash: string | null;
@@ -703,7 +858,9 @@ function rowToActivityRecord(row: ActivityRow): ActivityRecord {
     ownerId: row.owner_id,
     idempotencyKey: row.idempotency_key,
     intent: JSON.parse(row.intent_json) as AgentIntent,
-    policyDecision: JSON.parse(row.policy_decision_json) as PolicyDecision,
+    policyDecision: row.policy_decision_json && row.policy_decision_json !== "null"
+      ? (JSON.parse(row.policy_decision_json) as PolicyDecision)
+      : null,
     authorizationStatus: row.authorization_status as AuthorizationStatus | null,
     simulationResult: row.simulation_result_json
       ? (JSON.parse(row.simulation_result_json) as SimulationResult)

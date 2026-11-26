@@ -1,5 +1,11 @@
-import { Horizon, type Asset, type Transaction } from "@stellar/stellar-sdk";
+import { Horizon, rpc, type Asset, type Transaction } from "@stellar/stellar-sdk";
 import type { SimulationResult } from "@4evergent/shared";
+
+export const DEFAULT_SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
+
+export interface SimulationOutcome extends SimulationResult {
+  assembledTransaction?: Transaction;
+}
 
 /**
  * Minimum XLM a payment must carry to create a non-existent destination
@@ -37,18 +43,39 @@ const MIN_ACCOUNT_CREATION_XLM = 1;
  */
 export class StellarSimulator {
   private server: Horizon.Server;
+  private sorobanServer: rpc.Server;
 
   /**
    * @param horizonUrl Horizon endpoint (used when no server is injected).
    * @param server Optional `Horizon.Server` seam for tests — inject a fake to
    *        keep `simulate()` fully offline. Production callers omit this and
    *        the server is constructed from `horizonUrl`.
+   * @param sorobanRpcUrlOrServer Optional Soroban RPC endpoint URL or stubbed
+   *        `rpc.Server` seam for tests. Defaults to SOROBAN_RPC_URL env or
+   *        Testnet Soroban RPC.
    */
-  constructor(horizonUrl: string, server?: Horizon.Server) {
+  constructor(
+    horizonUrl: string,
+    server?: Horizon.Server,
+    sorobanRpcUrlOrServer?: string | rpc.Server
+  ) {
     this.server = server ?? new Horizon.Server(horizonUrl);
+    if (
+      sorobanRpcUrlOrServer &&
+      typeof sorobanRpcUrlOrServer === "object" &&
+      "simulateTransaction" in sorobanRpcUrlOrServer
+    ) {
+      this.sorobanServer = sorobanRpcUrlOrServer;
+    } else {
+      const url =
+        typeof sorobanRpcUrlOrServer === "string" && sorobanRpcUrlOrServer.length > 0
+          ? sorobanRpcUrlOrServer
+          : process.env.SOROBAN_RPC_URL || DEFAULT_SOROBAN_RPC_URL;
+      this.sorobanServer = new rpc.Server(url, { allowHttp: url.startsWith("http://") });
+    }
   }
 
-  async simulate(transaction: Transaction): Promise<SimulationResult> {
+  async simulate(transaction: Transaction): Promise<SimulationOutcome> {
     const ops = transaction.operations.length;
 
     try {
@@ -98,24 +125,61 @@ export class StellarSimulator {
       );
     }
 
-    // 6. Balance precondition for XLM payments.
+    // 6. Balance precondition for payments (native XLM and issued assets).
     const warnings: string[] = [];
-    const xlmBalance = (account.balances as { asset_type: string; balance: string }[]).find(
-      (b) => b.asset_type === "native"
-    );
-    if (xlmBalance) {
-      const payment = paymentAmount(transaction);
-      const totalCost = payment + Number(transaction.fee) / 1e7;
-      const available = Number(xlmBalance.balance) - reserveFor(account);
-      if (totalCost > available) {
+    const balances = (account.balances ?? []) as {
+      asset_type: string;
+      asset_code?: string;
+      asset_issuer?: string;
+      balance: string;
+    }[];
+    const xlmBalance = balances.find((b) => b.asset_type === "native");
+    const payment = paymentAmount(transaction);
+    const feeXlm = Number(transaction.fee) / 1e7;
+
+    if (payment.isNative) {
+      if (xlmBalance) {
+        const totalCost = payment.amount + feeXlm;
+        const available = Number(xlmBalance.balance) - reserveFor(account);
+        if (totalCost > available) {
+          return fail(
+            transaction.fee,
+            ops,
+            `Insufficient balance: payment ${payment.amount} XLM + fee exceeds available ${available.toFixed(7)} XLM`
+          );
+        }
+        if (available - totalCost < 1) {
+          warnings.push("Remaining balance after transaction is under 1 XLM");
+        }
+      }
+    } else {
+      // Non-native payment: XLM balance still covers transaction fee + minimum reserve.
+      const availableXlm = (xlmBalance ? Number(xlmBalance.balance) : 0) - reserveFor(account);
+      if (feeXlm > availableXlm) {
         return fail(
           transaction.fee,
           ops,
-          `Insufficient balance: payment ${payment} XLM + fee exceeds available ${available.toFixed(7)} XLM`
+          `Insufficient XLM balance for fee: fee ${feeXlm.toFixed(7)} XLM exceeds available ${availableXlm.toFixed(7)} XLM`
         );
       }
-      if (available - totalCost < 1) {
+      if (xlmBalance && availableXlm - feeXlm < 1) {
         warnings.push("Remaining balance after transaction is under 1 XLM");
+      }
+
+      // Check the payment asset's own trustline balance on the source account.
+      const assetBalance = balances.find(
+        (b) =>
+          (b.asset_type === "credit_alphanum4" || b.asset_type === "credit_alphanum12") &&
+          b.asset_code === payment.assetCode &&
+          b.asset_issuer === payment.assetIssuer
+      );
+      const availableAsset = assetBalance ? Number(assetBalance.balance) : 0;
+      if (!assetBalance || payment.amount > availableAsset) {
+        return fail(
+          transaction.fee,
+          ops,
+          `Insufficient balance: payment ${payment.amount} ${payment.assetCode} exceeds available ${availableAsset.toFixed(7)} ${payment.assetCode}`
+        );
       }
     }
 
@@ -126,6 +190,46 @@ export class StellarSimulator {
       if (op.type !== "payment") continue;
       const dest = await this.checkDestination(op);
       if (!dest.ok) return fail(transaction.fee, ops, dest.error);
+    }
+
+    // 8. Soroban RPC simulation & assembly for contract invocation transactions.
+    const isSoroban = transaction.operations.some(
+      (op) =>
+        op.type === "invokeHostFunction" ||
+        (op as any).type === "extendFootprintTtl" ||
+        (op as any).type === "restoreFootprint"
+    );
+
+    if (isSoroban) {
+      let simResponse: any;
+      try {
+        simResponse = await this.sorobanServer.simulateTransaction(transaction);
+      } catch (e: any) {
+        return fail(transaction.fee, ops, `Soroban simulation failed: ${e.message}`);
+      }
+
+      if (rpc.Api.isSimulationError(simResponse)) {
+        return fail(transaction.fee, ops, `Soroban simulation failed: ${simResponse.error}`);
+      }
+
+      if (!rpc.Api.isSimulationSuccess(simResponse)) {
+        return fail(transaction.fee, ops, "Soroban simulation failed: simulation was not successful");
+      }
+
+      let assembledTx: Transaction;
+      try {
+        assembledTx = rpc.assembleTransaction(transaction, simResponse).build();
+      } catch (e: any) {
+        return fail(transaction.fee, ops, `Soroban transaction assembly failed: ${e.message}`);
+      }
+
+      return {
+        success: true,
+        fee: assembledTx.fee,
+        operations: ops,
+        warnings,
+        assembledTransaction: assembledTx,
+      };
     }
 
     return {
@@ -200,13 +304,32 @@ function fail(fee: string, operations: number, error: string): SimulationResult 
   return { success: false, fee, operations, warnings: [], error };
 }
 
-function paymentAmount(transaction: Transaction): number {
+export interface PaymentAmountInfo {
+  amount: number;
+  isNative: boolean;
+  assetCode: string;
+  assetIssuer: string | null;
+}
+
+export function paymentAmount(transaction: Transaction): PaymentAmountInfo {
   for (const op of transaction.operations) {
     if (op.type === "payment") {
-      return Number(op.amount);
+      const asset = op.asset as Asset;
+      const isNative = typeof asset?.isNative === "function" ? asset.isNative() : true;
+      return {
+        amount: Number(op.amount),
+        isNative,
+        assetCode: isNative ? "XLM" : asset.code,
+        assetIssuer: isNative ? null : asset.issuer,
+      };
     }
   }
-  return 0;
+  return {
+    amount: 0,
+    isNative: true,
+    assetCode: "XLM",
+    assetIssuer: null,
+  };
 }
 
 function reserveFor(account: any): number {

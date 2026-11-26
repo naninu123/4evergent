@@ -8,11 +8,15 @@ import {
   SQLiteActivityStore,
   type ActivityStore,
 } from "../src/index.js";
+import { toStroops } from "@4evergent/shared";
 
 // #353: SQLite and InMemory MUST behave identically for daily spending.
 // - An over-limit FIRST reservation returns false and persists NO row, so a
 //   later in-limit reservation for the same asset still succeeds.
 // - releaseDailySpending decrements the day's total and floors at 0.
+// #374: totals are stored and compared as integer stroops (1 XLM = 10^7
+// stroops), so getDailySpending returns stroops; the assertions below compare
+// against toStroops("<decimal>") and stay exact at every boundary.
 
 function makeStore(name: "InMemory" | "SQLite"): { store: ActivityStore; cleanup: () => void } {
   if (name === "InMemory") {
@@ -40,7 +44,7 @@ for (const backend of BACKENDS) {
       assert.equal(await store.getDailySpending("a1", "XLM"), null);
       // The asset is NOT bricked: an in-limit reservation still succeeds.
       assert.equal(await store.reserveDailySpending("a1", "XLM", "300", "500"), true);
-      assert.equal(await store.getDailySpending("a1", "XLM"), 300);
+      assert.equal(await store.getDailySpending("a1", "XLM"), toStroops("300"));
     } finally {
       cleanup();
     }
@@ -52,7 +56,7 @@ for (const backend of BACKENDS) {
       assert.equal(await store.reserveDailySpending("a1", "XLM", "501", "500"), false);
       assert.equal(await store.getDailySpending("a1", "XLM"), null);
       assert.equal(await store.reserveDailySpending("a1", "XLM", "500", "500"), true);
-      assert.equal(await store.getDailySpending("a1", "XLM"), 500);
+      assert.equal(await store.getDailySpending("a1", "XLM"), toStroops("500"));
     } finally {
       cleanup();
     }
@@ -62,12 +66,12 @@ for (const backend of BACKENDS) {
     const { store, cleanup } = makeStore(backend);
     try {
       assert.equal(await store.reserveDailySpending("a1", "XLM", "300", "500"), true);
-      assert.equal(await store.getDailySpending("a1", "XLM"), 300);
+      assert.equal(await store.getDailySpending("a1", "XLM"), toStroops("300"));
       await store.releaseDailySpending("a1", "XLM", "300");
       assert.equal((await store.getDailySpending("a1", "XLM")) ?? 0, 0);
       // Freed amount can be reserved again.
       assert.equal(await store.reserveDailySpending("a1", "XLM", "500", "500"), true);
-      assert.equal(await store.getDailySpending("a1", "XLM"), 500);
+      assert.equal(await store.getDailySpending("a1", "XLM"), toStroops("500"));
     } finally {
       cleanup();
     }
@@ -78,7 +82,7 @@ for (const backend of BACKENDS) {
     try {
       assert.equal(await store.reserveDailySpending("a1", "XLM", "200", "500"), true);
       await store.releaseDailySpending("a1", "XLM", "50");
-      assert.equal(await store.getDailySpending("a1", "XLM"), 150);
+      assert.equal(await store.getDailySpending("a1", "XLM"), toStroops("150"));
       // Releasing more than reserved must not go negative.
       await store.releaseDailySpending("a1", "XLM", "999");
       assert.equal((await store.getDailySpending("a1", "XLM")) ?? 0, 0);
@@ -98,8 +102,8 @@ for (const backend of BACKENDS) {
       assert.equal(await store.reserveDailySpending("a2", "XLM", "100", "500"), true);
       await store.releaseDailySpending("a1", "XLM", "100");
       assert.equal((await store.getDailySpending("a1", "XLM")) ?? 0, 0);
-      assert.equal(await store.getDailySpending("a1", "USDC"), 100);
-      assert.equal(await store.getDailySpending("a2", "XLM"), 100);
+      assert.equal(await store.getDailySpending("a1", "USDC"), toStroops("100"));
+      assert.equal(await store.getDailySpending("a2", "XLM"), toStroops("100"));
     } finally {
       cleanup();
     }

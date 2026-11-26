@@ -35,6 +35,7 @@ the API's configured authentication. The client does not implement login.
 ```ts
 // Health
 const health = await client.health();
+const ready = await client.healthReady();
 
 // Agents
 const { agents } = await client.listAgents();

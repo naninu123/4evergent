@@ -5,10 +5,12 @@ All notable changes to this project are recorded in this file.
 ## [Unreleased]
 
 ### Security
+- Per-owner rate limiting on the authenticated intent and approval-action endpoints (`POST /agents/:id/intents`, approve, reject), reusing `SlidingWindowRateLimiter`; separate budget per endpoint, 429 with `Retry-After` and the `RATE_LIMITED` envelope, limits configurable via `API_RATE_LIMIT_*` (#261)
 - Stellar network safety guard validating Horizon URL + passphrase, rejecting mainnet execution (Phase 21)
 - Live submission gate requiring explicit `LIVE_SUBMIT=1` opt-in before real Testnet submission (Phase 21)
 - Atomic daily spending reservation via dedicated `daily_spending` table with conditional SQL updates (Phase 23)
 - Atomic idempotency reservation via unique database constraints and concurrent-map serialization (Phase 23)
+- `Idempotency-Key` replay window: keys are honoured for 24 hours by default (`IDEMPOTENCY_KEY_WINDOW_SECONDS`), with the same expiry in the in-memory and SQLite stores; expired keys are released by the retention worker without deleting activity records (#109, ADR-023)
 - Numeric amount validation in PolicyEngine rejecting negative, zero, and malformed inputs (Phase 23)
 - Per-account sequence serialization via `AccountSequenceCoordinator` preventing sequence collisions (Phase 25)
 - Sequence coordination wrap for direct ALLOW intents and synchronous approval fallback execution (Phase 26A)
@@ -22,6 +24,7 @@ All notable changes to this project are recorded in this file.
 - Horizon pre-check mitigation before blind retry — guards against duplicate submission when original transaction may have reached Horizon (Phase 18C)
 
 ### Added
+- `?status=` filtering on the schedule and activity list endpoints (`GET /agents/:id/schedules`, `GET /agents/:id/activity`, `GET /activity`), reusing the approval `parseStatusFilter` pattern with store-level filtering in both the in-memory and SQLite stores (#263)
 - Persistent agent policy configuration (`PolicyConfigStore`, `SQLitePolicyConfigStore`) with monotonic versioning (Phase 28A)
 - Policy resolver callback support in `PolicyEngine` and `TransactionPipeline` (Phase 28A, 28J)
 - `PolicyEngine.evaluateWithoutReservation()` for policy check re-evaluation on approved intents (Phase 28J)

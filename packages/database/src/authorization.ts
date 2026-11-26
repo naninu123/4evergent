@@ -29,9 +29,19 @@ export class ResourceAuthorizationService implements AuthorizationService {
     return this.canAccessAgent(ctx, agentId);
   }
 
-  async canAccessActivity(ctx: RequestContext, activityId: string): Promise<boolean> {
+  /**
+   * Activity access, optionally bound to a path agent (issue #385).
+   *
+   * Nested single-resource endpoints (/agents/:id/activity/:activityId) name an
+   * agent in the path. When `agentId` is provided, access is only granted if
+   * the activity's agentId equals it — a resource must never be served under
+   * an agent it does not belong to. Owner scoping is still enforced through
+   * the agent's ownerId, so cross-owner behaviour is unchanged.
+   */
+  async canAccessActivity(ctx: RequestContext, activityId: string, agentId?: string): Promise<boolean> {
     const activity = await this.ctx.activityStore.get(activityId);
     if (!activity) return false;
+    if (agentId !== undefined && activity.agentId !== agentId) return false;
     return this.canAccessAgent(ctx, activity.agentId);
   }
 
@@ -53,9 +63,18 @@ export class ResourceAuthorizationService implements AuthorizationService {
     return this.canAccessAgent(ctx, agentId);
   }
 
-  async canAccessSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
+  /**
+   * Schedule access, optionally bound to a path agent (issue #385).
+   *
+   * Nested single-resource endpoints (/agents/:id/schedules/:scheduleId) name
+   * an agent in the path. When `agentId` is provided, access is only granted
+   * if the schedule's agentId equals it. Owner scoping (schedule.ownerId) is
+   * unchanged, so cross-owner behaviour is identical to before.
+   */
+  async canAccessSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean> {
     const schedule = await this.ctx.scheduleStore.get(scheduleId);
     if (!schedule) return false;
+    if (agentId !== undefined && schedule.agentId !== agentId) return false;
     return schedule.ownerId === ctx.ownerId;
   }
 
@@ -63,24 +82,24 @@ export class ResourceAuthorizationService implements AuthorizationService {
     return this.canAccessAgent(ctx, agentId);
   }
 
-  async canUpdateSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
-    return this.canAccessSchedule(ctx, scheduleId);
+  async canUpdateSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean> {
+    return this.canAccessSchedule(ctx, scheduleId, agentId);
   }
 
-  async canDeleteSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
-    return this.canAccessSchedule(ctx, scheduleId);
+  async canDeleteSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean> {
+    return this.canAccessSchedule(ctx, scheduleId, agentId);
   }
 
-  async canPauseSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
-    return this.canAccessSchedule(ctx, scheduleId);
+  async canPauseSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean> {
+    return this.canAccessSchedule(ctx, scheduleId, agentId);
   }
 
-  async canResumeSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
-    return this.canAccessSchedule(ctx, scheduleId);
+  async canResumeSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean> {
+    return this.canAccessSchedule(ctx, scheduleId, agentId);
   }
 
-  async canDisableSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
-    return this.canAccessSchedule(ctx, scheduleId);
+  async canDisableSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean> {
+    return this.canAccessSchedule(ctx, scheduleId, agentId);
   }
 
   /**

@@ -154,6 +154,7 @@ test("login: 401s until limit, then 429; over-limit sheds requests before scrypt
     const blocked = await post(baseUrl, "/auth/login/email", { email: "rl@example.com", password: "wrong" });
     assert.equal(blocked.status, 429);
     assert.equal(blocked.body.error, "rate_limited");
+    assert.equal(blocked.body.code, "RATE_LIMITED", "429 body carries code: RATE_LIMITED");
     assert.notEqual(blocked.body.error, last401!.body.error, "429 is distinguishable from 401");
     const retryAfter = blocked.res.headers.get("retry-after");
     assert.ok(retryAfter && Number(retryAfter) >= 1, "Retry-After is a positive integer of seconds");
@@ -240,6 +241,27 @@ test("proxy trust: independent rate limit budgets per forwarded IP when trustPro
 
     // IP 2 is fresh and not blocked
     assert.equal((await post(baseUrl, "/auth/stellar/challenge", { publicKey: "BAD" }, ip2Header)).status, 400);
+  } finally {
+    await server.close();
+  }
+});
+
+test("429 response body matches the standard { code, error } envelope with Retry-After header", async () => {
+  const { server, baseUrl } = await createAuthTestServer({
+    rateLimit: { maxAttempts: 1, windowSeconds: 60 },
+  });
+  try {
+    // Exhaust the budget (1 attempt allowed)
+    await post(baseUrl, "/auth/login/email", { email: "shape@example.com", password: "any" });
+
+    // Next request is rate-limited
+    const res = await post(baseUrl, "/auth/login/email", { email: "shape@example.com", password: "any" });
+
+    assert.equal(res.status, 429);
+    assert.equal(res.body.code, "RATE_LIMITED", "body carries code: RATE_LIMITED");
+    assert.equal(res.body.error, "rate_limited", "body carries error: rate_limited");
+    const retryAfter = res.res.headers.get("retry-after");
+    assert.ok(retryAfter && Number(retryAfter) >= 1, "Retry-After header is a positive integer of seconds");
   } finally {
     await server.close();
   }

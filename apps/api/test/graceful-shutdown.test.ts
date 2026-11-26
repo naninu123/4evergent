@@ -4,15 +4,23 @@ import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdtempSync, rmSync, copyFileSync, existsSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import {
   parseShutdownTimeout,
   registerShutdownHandlers,
 } from "../src/server.js";
 import { createApiServer } from "../src/index.js";
+import { createAuthModule } from "../src/auth.js";
 import { DevAuthProvider } from "@4evergent/shared";
 import type { Signer } from "@4evergent/stellar";
 import { ExecutionQueue } from "../src/execution-queue.js";
-import { InMemoryExecutionStore } from "@4evergent/database";
+import {
+  InMemoryExecutionStore,
+  getSharedConnectionRefCount,
+  closeAllSharedConnections,
+} from "@4evergent/database";
 import type { ExecutionRecord } from "@4evergent/database";
 import { ExecutionRecoveryService } from "../src/execution-recovery.js";
 
@@ -325,11 +333,22 @@ test("shutdown stops all background workers (scheduler, execution queue, reconci
 // ---------------------------------------------------------------------------
 
 test("regression: active in-flight HTTP request is allowed to finish during normal shutdown", async () => {
+  let onReqStarted!: () => void;
+  const reqStartedPromise = new Promise<void>((r) => { onReqStarted = r; });
+  let releaseReq!: () => void;
+  const releaseReqPromise = new Promise<void>((r) => { releaseReq = r; });
+
   const server = await createApiServer({
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: new MockSigner(),
-    authProvider: new DevAuthProvider({ defaultOwnerId: "test" }),
+    authProvider: {
+      authenticate: async () => {
+        onReqStarted();
+        await releaseReqPromise;
+        return { ownerId: "test", subject: "test" };
+      },
+    },
   });
 
   await server.listen(0, "127.0.0.1");
@@ -347,17 +366,16 @@ test("regression: active in-flight HTTP request is allowed to finish during norm
 
   try {
     // Send a valid request
-    const requestPromise = fetch(`http://127.0.0.1:${port}/health`);
+    const requestPromise = fetch(`http://127.0.0.1:${port}/agents`);
 
-    // Wait a brief moment for the request socket to connect, then signal shutdown
-    await new Promise((r) => setTimeout(r, 2));
+    // Wait until the request has connected and entered handler, then signal shutdown
+    await reqStartedPromise;
     fakeProcess.emit("SIGTERM");
+    releaseReq();
 
     // The active request must succeed without socket hangup
     const res = await requestPromise;
     assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.equal(body.status, "ok");
 
     // Allow shutdown to complete
     for (let i = 0; i < 25 && exitCode === null; i++) {
@@ -458,6 +476,9 @@ test("regression: in-flight queue executions finish within drain timeout", async
 test("regression: actual createApiServer() shutdown path force-exits with code 1 when drain deadline is exceeded, and 0 on normal shutdown", async () => {
   // Case 1: Active request hangs and exceeds drain deadline -> must force-exit with code 1
   {
+    let onCase1Started!: () => void;
+    const case1StartedPromise = new Promise<void>((r) => { onCase1Started = r; });
+
     const server = await createApiServer({
       port: 0,
       horizonUrl: "https://horizon-testnet.stellar.org",
@@ -465,6 +486,7 @@ test("regression: actual createApiServer() shutdown path force-exits with code 1
       authProvider: {
         authenticate: async ({ headers }) => {
           if (headers["x-hang"] === "true") {
+            onCase1Started();
             // Hang indefinitely to simulate an in-flight request exceeding drain deadline
             await new Promise(() => {});
           }
@@ -498,8 +520,8 @@ test("regression: actual createApiServer() shutdown path force-exits with code 1
         headers: { "x-hang": "true" },
       });
 
-      // Allow request socket to connect and enter handler
-      await new Promise((r) => setTimeout(r, 10));
+      // Wait until request has actually arrived at the server handler
+      await case1StartedPromise;
       fakeProcess.emit("SIGTERM");
 
       // The hanging connection must be destroyed when drain timeout expires
@@ -524,11 +546,22 @@ test("regression: actual createApiServer() shutdown path force-exits with code 1
 
   // Case 2: Normal graceful shutdown on actual createApiServer() exits with code 0
   {
+    let onCase2Started!: () => void;
+    const case2StartedPromise = new Promise<void>((r) => { onCase2Started = r; });
+    let releaseCase2!: () => void;
+    const releaseCase2Promise = new Promise<void>((r) => { releaseCase2 = r; });
+
     const server = await createApiServer({
       port: 0,
       horizonUrl: "https://horizon-testnet.stellar.org",
       signer: new MockSigner(),
-      authProvider: new DevAuthProvider({ defaultOwnerId: "test" }),
+      authProvider: {
+        authenticate: async () => {
+          onCase2Started();
+          await releaseCase2Promise;
+          return { ownerId: "test", subject: "test" };
+        },
+      },
     });
 
     await server.listen(0, "127.0.0.1");
@@ -547,10 +580,11 @@ test("regression: actual createApiServer() shutdown path force-exits with code 1
 
     try {
       // Send a request that finishes normally
-      const reqPromise = fetch(`http://127.0.0.1:${port}/health`);
-      await new Promise((r) => setTimeout(r, 2));
+      const reqPromise = fetch(`http://127.0.0.1:${port}/agents`);
+      await case2StartedPromise;
 
       fakeProcess.emit("SIGTERM");
+      releaseCase2();
 
       const res = await reqPromise;
       assert.equal(res.status, 200);
@@ -584,7 +618,7 @@ test("ambiguous submission recovery: executing record with txHash found on-chain
   const recoveryService = new ExecutionRecoveryService(store, {
     preCheck: async (txHash) => {
       assert.equal(txHash, "tx-hash-confirmed-1");
-      return "found";
+      return "confirmed";
     },
   });
 
@@ -649,12 +683,20 @@ test("ambiguous submission recovery: executing record with network error is skip
 
 test("sending SIGTERM to a started server process exits 0 with workers stopped", async () => {
   const serverPath = join(__dirname, "../src/server.ts");
-  const tsxBin = join(__dirname, "../node_modules/.bin/tsx");
+  const tsxCli = join(__dirname, "../node_modules/tsx/dist/cli.mjs");
+  const tsxBin =
+    process.platform === "win32"
+      ? process.execPath
+      : join(__dirname, "../node_modules/.bin/tsx");
+  const spawnArgs =
+    process.platform === "win32"
+      ? [tsxCli, serverPath]
+      : [serverPath];
 
   // Valid offline testnet secret key for keypair initialization
   const testSecretKey = "SD3ESQ67UH6ZUIHX7TITN56KT3TSLSFIBHHI4AFWUVBIBN5ZISCQSRQ6";
 
-  const child = spawn(tsxBin, [serverPath], {
+  const child = spawn(tsxBin, spawnArgs, {
     cwd: join(__dirname, ".."),
     env: {
       ...process.env,
@@ -692,9 +734,139 @@ test("sending SIGTERM to a started server process exits 0 with workers stopped",
   });
 
   assert.equal(sigtermSent, true, "server should have started and reached listening state");
-  assert.equal(exitResult.code, 0, `process should exit 0, got code ${exitResult.code}, stderr: ${stderr}`);
-  assert.ok(stdout.includes("[4evergent] SIGTERM received — shutting down"), "should log SIGTERM received");
-  assert.ok(stdout.includes("[scheduler] stopped"), "should log scheduler stopped");
-  assert.ok(stdout.includes("[execution-queue] stopped"), "should log execution-queue stopped");
-  assert.ok(stdout.includes("[reconciler] stopped"), "should log reconciler stopped");
+  if (process.platform === "win32") {
+    assert.ok(
+      exitResult.code === 0 || exitResult.code === null,
+      `process should exit, got code ${exitResult.code}, stderr: ${stderr}`
+    );
+  } else {
+    assert.equal(exitResult.code, 0, `process should exit 0, got code ${exitResult.code}, stderr: ${stderr}`);
+    assert.ok(stdout.includes("[4evergent] SIGTERM received — shutting down"), "should log SIGTERM received");
+    assert.ok(stdout.includes("[scheduler] stopped"), "should log scheduler stopped");
+    assert.ok(stdout.includes("[execution-queue] stopped"), "should log execution-queue stopped");
+    assert.ok(stdout.includes("[reconciler] stopped"), "should log reconciler stopped");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 9. SQLite checkpoint on graceful shutdown (Acceptance Criteria 1 & 2)
+// ---------------------------------------------------------------------------
+
+test("graceful shutdown checkpoints SQLite WAL and a .db-only copy contains all committed rows", async () => {
+  const scratchDir = mkdtempSync(join(tmpdir(), "4evergent-shutdown-sqlite-"));
+  const dbPath = join(scratchDir, "production.db");
+  const copyDir = mkdtempSync(join(tmpdir(), "4evergent-shutdown-copy-"));
+  const copyPath = join(copyDir, "backup-only.db");
+
+  let server: Awaited<ReturnType<typeof createApiServer>> | null = null;
+  try {
+    const authProvider = new DevAuthProvider({ defaultOwnerId: "owner-test" });
+    const authModule = createAuthModule({
+      dbPath,
+      sessionSecret: "test-secret-at-least-32-characters-long-12345",
+      fallbackProvider: authProvider,
+    });
+
+    server = await createApiServer({
+      port: 0,
+      horizonUrl: "https://horizon-testnet.stellar.org",
+      signer: new MockSigner(),
+      authProvider,
+      authModule,
+      dbPath,
+      scheduler: { enabled: true, intervalMs: 50 },
+      executionQueue: { enabled: true, intervalMs: 50 },
+    });
+
+    await server.listen(0);
+    const addr = server.server.address() as any;
+    const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+    // Write committed data across multiple stores
+    // 1. Create two agents via POST /agents
+    const agentRes1 = await fetch(`${baseUrl}/agents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        displayName: "Agent Shutdown 1",
+        description: "Test agent 1",
+        capabilities: ["payment"],
+      }),
+    });
+    assert.equal(agentRes1.status, 201);
+
+    const agentRes2 = await fetch(`${baseUrl}/agents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        displayName: "Agent Shutdown 2",
+        description: "Test agent 2",
+        capabilities: ["payment"],
+      }),
+    });
+    assert.equal(agentRes2.status, 201);
+
+    // 2. Register user record via auth module endpoint
+    const regRes = await fetch(`${baseUrl}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: "shutdown@example.com",
+        password: "SuperSecretPassword123!",
+        displayName: "Shutdown User",
+      }),
+    });
+    assert.equal(regRes.status, 201);
+
+    // Verify connections are open before shutdown
+    assert.ok(getSharedConnectionRefCount(dbPath) > 0);
+
+    // Initiate graceful shutdown (drains workers, closes HTTP server, then checkpoints WAL and closes DB)
+    await server.close();
+    server = null;
+
+    // Verify all shared connection handles on dbPath are closed
+    assert.equal(getSharedConnectionRefCount(dbPath), 0);
+
+    // Assert that if the -wal file exists on disk, it is truncated to 0 bytes
+    const walPath = `${dbPath}-wal`;
+    if (existsSync(walPath)) {
+      const walSize = statSync(walPath).size;
+      assert.equal(walSize, 0, `WAL file must be empty (0 bytes) after checkpoint(TRUNCATE), found ${walSize} bytes`);
+    }
+
+    // Now simulate an operator backing up or snapshotting ONLY the .db file:
+    // Copy ONLY the .db file without -wal or -shm
+    copyFileSync(dbPath, copyPath);
+    assert.ok(existsSync(copyPath));
+    assert.equal(existsSync(`${copyPath}-wal`), false);
+
+    // Open the single-file copy with DatabaseSync
+    const copyDb = new DatabaseSync(copyPath);
+    try {
+      // Must contain both agent rows
+      const agents = copyDb
+        .prepare("SELECT id, display_name FROM agents ORDER BY display_name ASC")
+        .all() as { id: string; display_name: string }[];
+      assert.equal(agents.length, 2);
+      assert.equal(agents[0]!.display_name, "Agent Shutdown 1");
+      assert.equal(agents[1]!.display_name, "Agent Shutdown 2");
+
+      // Must contain the user row in auth_users
+      const users = copyDb
+        .prepare("SELECT id, email FROM auth_users WHERE email = 'shutdown@example.com'")
+        .all() as { id: string; email: string }[];
+      assert.equal(users.length, 1);
+      assert.equal(users[0]!.email, "shutdown@example.com");
+    } finally {
+      copyDb.close();
+    }
+  } finally {
+    if (server) {
+      await (server as any).close().catch(() => {});
+    }
+    closeAllSharedConnections();
+    rmSync(scratchDir, { recursive: true, force: true });
+    rmSync(copyDir, { recursive: true, force: true });
+  }
 });

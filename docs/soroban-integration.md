@@ -319,5 +319,4 @@ integration path until the pipeline consumes Soroban (see below).
   same spending limits, destination allowlists, and approval thresholds as
   classic payments.
 
-In short: call the contract directly via the SDK today; in a future phase the
-pipeline will route `contract_call` intents through it after policy evaluation.
+The transaction pipeline now invokes contracts when policy allows. The default policy still denies `contract_call`.

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { PolicyEngine } from "../src/engine.js";
 import type { AgentIntent } from "@4evergent/shared";
+import { fromStroops } from "@4evergent/shared";
 import {
   InMemoryActivityStore,
   SQLiteActivityStore,
@@ -50,20 +51,27 @@ function makeStrictPolicy() {
 // Valid 56-char Stellar public key
 const VALID_ISSUER = "GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA";
 
+// #374: the store now holds integer stroops; this helper reads the raw total
+// and converts it back to a decimal XLM number so the assertions below keep
+// their readable "300" form while still verifying exact round-trip storage.
+function stroopsToXlm(stroops: number): number {
+  return Number(fromStroops(stroops));
+}
+
 async function getDailySpent(store: ActivityStore, agentId: string, asset: string): Promise<number> {
   if (store instanceof InMemoryActivityStore) {
     const now = new Date();
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString().slice(0, 10);
     const mapKey = `${agentId}:${asset}:${day}`;
     const dailySpending = (store as any).dailySpending as Map<string, number>;
-    return dailySpending?.get(mapKey) ?? 0;
+    return stroopsToXlm(dailySpending?.get(mapKey) ?? 0);
   }
   if (store instanceof SQLiteActivityStore) {
     const now = new Date();
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString().slice(0, 10);
     const db = (store as any).db;
     const row = db.prepare("SELECT total FROM daily_spending WHERE agent_id = ? AND asset = ? AND day = ?").get(agentId, asset, day) as { total: number } | undefined;
-    return row?.total ?? 0;
+    return stroopsToXlm(row?.total ?? 0);
   }
   return 0;
 }

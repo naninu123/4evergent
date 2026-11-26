@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InMemoryScheduleStore, InMemoryActivityStore, InMemoryApprovalStore } from "@4evergent/database";
 import { ScheduleExecutionService } from "../src/schedule-execution.js";
+import { AccountSequenceCoordinator } from "../src/account-sequence-coordinator.js";
 import { AgentScheduler } from "../src/scheduler.js";
 import type { ScheduleRecord } from "@4evergent/database";
 import type { AgentIntent } from "@4evergent/shared";
@@ -61,6 +62,8 @@ test("ScheduleExecutionService: executes due schedule through pipeline", async (
   const service = new ScheduleExecutionService({
     activityStore,
     approvalStore,
+    sequenceCoordinator: new AccountSequenceCoordinator(),
+    sequenceAccountId: "GACCOUNT",
     getSourceAccount: async () => ({
       accountId: () => "GACCOUNT",
       sequenceNumber: () => "1",
@@ -88,6 +91,8 @@ test("ScheduleExecutionService: rejects when source account cannot be loaded", a
   const service = new ScheduleExecutionService({
     activityStore,
     approvalStore,
+    sequenceCoordinator: new AccountSequenceCoordinator(),
+    sequenceAccountId: "GACCOUNT",
     getSourceAccount: async () => {
       throw new Error("Horizon unavailable");
     },
@@ -98,6 +103,45 @@ test("ScheduleExecutionService: rejects when source account cannot be loaded", a
 
   assert.equal(outcome.status, "rejected");
   assert.match(outcome.message!, /Horizon unavailable/);
+});
+
+test("ScheduleExecutionService: serializes account load and execution with competing submit", async () => {
+  const coordinator = new AccountSequenceCoordinator();
+  let sequence = 1;
+  const submissions: string[] = [];
+  const service = new ScheduleExecutionService({
+    activityStore: new InMemoryActivityStore(),
+    approvalStore: new InMemoryApprovalStore(),
+    sequenceCoordinator: coordinator,
+    sequenceAccountId: "GACCOUNT",
+    getSourceAccount: async () => {
+      const loaded = sequence;
+      return {
+        accountId: () => "GACCOUNT",
+        sequenceNumber: () => String(loaded),
+        incrementSequenceNumber: () => {},
+      };
+    },
+    pipelineExecutor: async ({ sourceAccount }) => {
+      submissions.push(sourceAccount.sequenceNumber());
+      await Promise.resolve();
+      sequence++;
+      return { status: "submitted" };
+    },
+  });
+
+  const schedule = makeSchedule();
+  await Promise.all([
+    service.executeSchedule(schedule),
+    coordinator.runExclusive("GACCOUNT", async () => {
+      const loaded = sequence;
+      submissions.push(String(loaded));
+      await Promise.resolve();
+      sequence++;
+    }),
+  ]);
+
+  assert.deepEqual(submissions.sort(), ["1", "2"]);
 });
 
 test("AgentScheduler: executes due active schedule via callback", async () => {

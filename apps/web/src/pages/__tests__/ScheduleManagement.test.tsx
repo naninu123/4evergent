@@ -33,7 +33,7 @@ const defaultSchedule = {
     type: 'payment',
     asset: 'XLM',
     amount: '10',
-    destination: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    destination: 'GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA',
     reason: 'Test schedule',
   },
   scheduleExpression: '0 0 * * *',
@@ -171,7 +171,7 @@ describe('ScheduleManagement', () => {
     fireEvent.change(amountInput, { target: { value: '25' } });
 
     const destInput = screen.getByPlaceholderText('G...');
-    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
+    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
 
     const reasonInput = screen.getByPlaceholderText('Recurring payment');
     fireEvent.change(reasonInput, { target: { value: 'Monthly payment' } });
@@ -188,7 +188,7 @@ describe('ScheduleManagement', () => {
         intent: expect.objectContaining({
           type: 'payment',
           amount: '25',
-          destination: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
+          destination: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
           reason: 'Monthly payment',
         }),
         scheduleExpression: '0 0 1 * *',
@@ -325,7 +325,7 @@ describe('ScheduleManagement', () => {
     fireEvent.change(amountInput, { target: { value: '10' } });
 
     const destInput = screen.getByPlaceholderText('G...');
-    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
+    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
 
     const reasonInput = screen.getByPlaceholderText('Recurring payment');
     fireEvent.change(reasonInput, { target: { value: 'Test' } });
@@ -359,7 +359,7 @@ describe('ScheduleManagement', () => {
     fireEvent.change(amountInput, { target: { value: '10' } });
 
     const destInput = screen.getByPlaceholderText('G...');
-    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
+    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
 
     const reasonInput = screen.getByPlaceholderText('Recurring payment');
     fireEvent.change(reasonInput, { target: { value: 'Test' } });
@@ -398,7 +398,7 @@ describe('ScheduleManagement', () => {
     fireEvent.change(amountInput, { target: { value: '10' } });
 
     const destInput = screen.getByPlaceholderText('G...');
-    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
+    fireEvent.change(destInput, { target: { value: 'GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC' } });
 
     const reasonInput = screen.getByPlaceholderText('Recurring payment');
     fireEvent.change(reasonInput, { target: { value: 'Test' } });

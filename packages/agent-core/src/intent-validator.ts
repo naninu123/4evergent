@@ -97,10 +97,18 @@ function validateTrustline(intent: AgentIntent): { valid: boolean; error?: strin
   return { valid: true };
 }
 
+/**
+ * A Stellar contract address is a 56-character StrKey-encoded C... address
+ * with a valid checksum. StrKey.isValidContract checks all three.
+ */
+function isValidStellarContract(address: string): boolean {
+  return typeof address === "string" && StrKey.isValidContract(address);
+}
+
 function validateContractCall(intent: AgentIntent): { valid: boolean; error?: string } {
   if (intent.type !== "contract_call") return { valid: false, error: "not a contract_call" };
-  if (!intent.contractId || intent.contractId.length < 3) {
-    return { valid: false, error: "contractId required" };
+  if (!intent.contractId || !isValidStellarContract(intent.contractId)) {
+    return { valid: false, error: "contractId must be a valid Stellar contract address (C...)" };
   }
   if (!intent.function || intent.function.length < 1) {
     return { valid: false, error: "function required" };

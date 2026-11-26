@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
+import { useAgentNames, resolveAgentName } from '../agentNames';
 import { describeApiError } from '../apiErrors';
 import type { ApprovalRecord } from '../types';
-import { ConfirmationModal, StatusBadge, Skeleton, EmptyState, DetailCard } from '../components';
+import { AgentName, ConfirmationModal, StatusBadge, Skeleton, EmptyState, DetailCard } from '../components';
 
 export default function ApprovalDetail() {
   const { approvalId } = useParams<{ approvalId: string }>();
@@ -14,6 +15,7 @@ export default function ApprovalDetail() {
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const agentNames = useAgentNames();
 
   useEffect(() => {
     if (!approvalId) return;
@@ -37,8 +39,10 @@ export default function ApprovalDetail() {
       const r = await api.approvalDetail(approval.id);
       setApproval(r.approval);
     } catch (e: any) {
-      if (e.status === 409) {
-        setActionError(describeApiError(e, 'Approval state changed; please refresh'));
+      if (e.code === 'AGENT_NOT_ACTIVE') {
+        setActionError(e.message ?? 'Agent is paused or disabled; approvals cannot be executed');
+      } else if (e.status === 409) {
+        setActionError(e.message ?? 'Approval state changed; please refresh');
       } else {
         setActionError(describeApiError(e, 'Approve failed'));
       }
@@ -83,8 +87,8 @@ export default function ApprovalDetail() {
       <div className="page-header">
         <div>
           <h1>Approval <code>{approval.id.slice(0, 8)}</code></h1>
-          <p className="muted">
-            Agent: {approval.agentId} · Activity: {approval.activityId.slice(0, 8)}
+          <p className="muted" title={approval.agentId}>
+            Agent: {resolveAgentName(approval.agentId, agentNames)} · Activity: {approval.activityId.slice(0, 8)}
           </p>
         </div>
         <Link to="/approvals" className="btn btn-ghost btn-sm">Back to Approvals</Link>
@@ -92,7 +96,7 @@ export default function ApprovalDetail() {
 
       <div className="detail-grid">
         <DetailCard title="Status"><StatusBadge status={isExpired ? 'expired' : approval.status} /></DetailCard>
-        <DetailCard title="Agent"><code>{approval.agentId}</code></DetailCard>
+        <DetailCard title="Agent"><AgentName agentId={approval.agentId} agentNames={agentNames} showId /></DetailCard>
         <DetailCard title="Activity"><code>{approval.activityId.slice(0, 8)}</code></DetailCard>
         <DetailCard title="Intent Type">{approval.intent.type}</DetailCard>
         <DetailCard title="Amount">{approval.intent.amount || '-'}</DetailCard>

@@ -76,7 +76,7 @@ a.getAccount('<YOUR_PUBLIC_KEY>').then(acc => {
 ### 6. Run tests (deterministic, no secrets required)
 
 ```bash
-pnpm test  # 290 tests PASS
+pnpm test
 ```
 
 ### 7. Run simulation (no submission)
@@ -205,7 +205,7 @@ Always run cargo from `contracts/` so the pinned toolchain and `Cargo.lock` appl
 ```bash
 cd contracts
 cargo test --locked
-cargo +1.81.0 test --locked                     # 15 unit tests expected
+cargo +1.81.0 test --locked
 stellar contract build                          # wasm artifact + optimized hash printed
 ```
 
@@ -261,15 +261,18 @@ sha256 equalled `83656ffddd08a22e1977b6cf129af4d6515be7e8494d843ded1aa1c0ef3f844
 
 ### Worker intervals
 
-The background workers poll on fixed intervals that can be tuned with environment variables (milliseconds, positive numbers only; an invalid value stops startup with a `FATAL` error):
+The API server runs three background worker loops whose polling intervals can be tuned via environment variables (in milliseconds, positive numbers only; a non-numeric, zero, or negative value stops startup with a `FATAL` error):
 
-| Variable | Worker | Default |
-| --- | --- | --- |
-| `RECONCILIATION_INTERVAL_MS` | Transaction status reconciliation | `30000` |
-| `EXECUTION_QUEUE_INTERVAL_MS` | Execution queue | `10000` |
-| `SCHEDULER_INTERVAL_MS` | Schedule polling | `60000` |
+| Variable | Worker | Default | Contacts Horizon | How to disable |
+| --- | --- | --- | --- | --- |
+| `RECONCILIATION_INTERVAL_MS` | Transaction status reconciliation — polls Horizon for submitted transactions and marks them confirmed/failed | `30000` (30s) | **Yes** (every tick with pending `submitted` records) | Always enabled in `server.ts` (`reconciliation.enabled = true`); no env toggle |
+| `EXECUTION_QUEUE_INTERVAL_MS` | Execution queue — claims queued/retryable executions and runs pre-check, simulation, signing, and submission | `10000` (10s) | **Yes** (when processing due executions) | Always enabled in `server.ts` (`executionQueue.enabled = true`); no env toggle |
+| `SCHEDULER_INTERVAL_MS` | Schedule polling — evaluates active cron schedules and triggers due runs | `60000` (60s) | Indirectly (only when a due schedule triggers pipeline execution) | Disabled by default; set `SCHEDULER_ENABLED=1` to enable (or unset/`0` to disable) |
 
-A faster reconciliation loop is handy for a testnet demo; a slower one reduces Horizon load. The startup log lines (`[reconciler] started, interval: ...`) show the effective value.
+**Operational tuning trade-offs:**
+- **Horizon load vs. latency:** Both the **reconciliation** worker and the **execution queue** contact Horizon. Lowering `RECONCILIATION_INTERVAL_MS` or `EXECUTION_QUEUE_INTERVAL_MS` shortens confirmation and pickup latency (useful in interactive Testnet demos) but increases outbound Horizon request volume.
+- **High-frequency scheduler polling (e.g. 1 second):** Setting `SCHEDULER_INTERVAL_MS=1000` polls the schedule store every second. It will not double-fire a schedule (because `runSchedule()` atomically claims the run via the `lastStartedAt` in-progress compare-and-swap marker before execution and advances `nextRunAt` after the callback completes), but since cron expressions have one-minute resolution, sub-minute polling only reduces trigger jitter at the cost of extra SQLite reads.
+- The startup log lines (`[reconciler] started, interval: ...`, `[execution-queue] started, interval: ...`, `[scheduler] started, interval: ...`) report the effective values at boot.
 
 ## Transaction fees
 

@@ -49,8 +49,8 @@ describe('Overview page', () => {
     expect(screen.getByText('Connecting to API...')).toBeInTheDocument();
   });
 
-  it('renders error state when initial API calls reject', async () => {
-    mockHealth.mockRejectedValue(new Error('API server down'));
+  it('shows the timeout error with a Retry action', async () => {
+    mockHealth.mockRejectedValue(new Error('Request timed out.'));
     mockListAllAgents.mockResolvedValue({ agents: [], total: 0, truncated: false });
     mockListApprovals.mockResolvedValue({ approvals: [] });
     mockListActivity.mockResolvedValue({ activity: [] });
@@ -63,7 +63,8 @@ describe('Overview page', () => {
 
     await waitFor(() => {
       expect(screen.getByText('API Unavailable')).toBeInTheDocument();
-      expect(screen.getByText('API server down')).toBeInTheDocument();
+      expect(screen.getByText('Request timed out.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     });
   });
 
@@ -320,7 +321,7 @@ describe('Overview page', () => {
     });
 
     expect(screen.getByText('activity')).toBeInTheDocument();
-    expect(screen.getByText('agent-12')).toBeInTheDocument();
+    expect(screen.getByText('agent-12345678')).toBeInTheDocument();
     expect(screen.getByText('submitted')).toBeInTheDocument();
   });
 });

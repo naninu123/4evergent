@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createApiServer } from "../src/index.js";
+import { createApiServer, STUCK_EXECUTION_THRESHOLD_MS } from "../src/index.js";
 import { DevAuthProvider } from "@4evergent/shared";
 import type { PolicyRules } from "@4evergent/shared";
 import type { AddressInfo } from "node:net";
@@ -45,7 +45,12 @@ function makeApproval(ownerId: string, id: string, status: ApprovalRecord["statu
   };
 }
 
-function makeExecution(ownerId: string, id: string, status: ExecutionRecord["status"]): ExecutionRecord {
+function makeExecution(
+  ownerId: string,
+  id: string,
+  status: ExecutionRecord["status"],
+  overrides: Partial<ExecutionRecord> = {},
+): ExecutionRecord {
   const now = new Date().toISOString();
   return {
     id,
@@ -67,6 +72,7 @@ function makeExecution(ownerId: string, id: string, status: ExecutionRecord["sta
     errorClass: null,
     createdAt: now,
     updatedAt: now,
+    ...overrides,
   };
 }
 
@@ -171,11 +177,123 @@ test("GET /overview/attention counts statuses for the authenticated owner only",
 
     const response = await request(baseUrl, "/overview/attention");
     assert.equal(response.status, 200);
+    // #359: retrying and stuck are definitional, not status-derived. The
+    // fixture is intentionally unchanged from before the fix, so a regression
+    // that reinstates the old mislabel will turn this test red:
+    //   - queued-a is healthy (never failed) → not retrying
+    //   - executing-a has startedAt = null → not stuck (age unknown)
     assert.deepEqual(response.body, {
       pendingApprovals: 1,
       failedExecutions: 1,
       deadLetterExecutions: 1,
+      retryingExecutions: 0,
+      stuckExecutions: 0,
+    });
+  } finally {
+    await close();
+  }
+});
+
+test("#359: healthy queued executions do NOT count as retrying or stuck", async () => {
+  // Acceptance: with only healthy queued executions, retryingExecutions is 0
+  // and the Needs Attention section does not list them.
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    for (let i = 0; i < 5; i++) {
+      await executionStore.record(makeExecution("owner-a", `queued-${i}`, "queued"));
+    }
+    const response = await request(baseUrl, "/overview/attention");
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, {
+      pendingApprovals: 0,
+      failedExecutions: 0,
+      deadLetterExecutions: 0,
+      retryingExecutions: 0,
+      stuckExecutions: 0,
+    });
+  } finally {
+    await close();
+  }
+});
+
+test("#359: mixed attention fixture — retrying and stuck use the documented definitions", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    const justYoung = new Date(now - 1_000).toISOString();
+    const justOld = new Date(now - STUCK_EXECUTION_THRESHOLD_MS - 1_000).toISOString();
+
+    // healthy queued — neither retrying nor stuck
+    await executionStore.record(makeExecution("owner-a", "queued-1", "queued"));
+
+    // failed + scheduled retry + transient → retrying
+    await executionStore.record(makeExecution("owner-a", "failed-retry-transient", "failed", {
+      nextRetryAt: nowIso, errorClass: "transient", attempt: 1,
+    }));
+
+    // failed + scheduled retry + permanent → NOT retrying (won't actually retry)
+    await executionStore.record(makeExecution("owner-a", "failed-retry-permanent", "failed", {
+      nextRetryAt: nowIso, errorClass: "permanent", attempt: 1,
+    }));
+
+    // failed + transient but NO scheduled retry → NOT retrying
+    await executionStore.record(makeExecution("owner-a", "failed-no-schedule", "failed", {
+      nextRetryAt: null, errorClass: "transient", attempt: 1,
+    }));
+
+    // failed + scheduled retry but null errorClass → NOT retrying
+    await executionStore.record(makeExecution("owner-a", "failed-no-class", "failed", {
+      nextRetryAt: nowIso, errorClass: null, attempt: 1,
+    }));
+
+    // young executing → NOT stuck
+    await executionStore.record(makeExecution("owner-a", "executing-young", "executing", {
+      startedAt: justYoung,
+    }));
+
+    // old executing → stuck
+    await executionStore.record(makeExecution("owner-a", "executing-old", "executing", {
+      startedAt: justOld,
+    }));
+
+    // executing with null startedAt → age unknown, NOT stuck
+    await executionStore.record(makeExecution("owner-a", "executing-null", "executing"));
+
+    // plain failed — failedExecutions only, not retrying
+    await executionStore.record(makeExecution("owner-a", "failed-plain", "failed"));
+
+    // dead_letter — deadLetterExecutions only
+    await executionStore.record(makeExecution("owner-a", "dead-letter-1", "dead_letter"));
+
+    // Other owner's records — must not leak into owner-a's counts.
+    await executionStore.record(makeExecution("owner-b", "failed-retry-other", "failed", {
+      nextRetryAt: nowIso, errorClass: "transient", attempt: 1,
+    }));
+    await executionStore.record(makeExecution("owner-b", "executing-old-other", "executing", {
+      startedAt: justOld,
+    }));
+
+    const response = await request(baseUrl, "/overview/attention");
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, {
+      pendingApprovals: 0,
+      // failed for owner-a: retry-transient, retry-permanent, no-schedule,
+      // no-class, plain → 5. (failed-retry-other is owner-b, excluded.)
+      failedExecutions: 5,
+      deadLetterExecutions: 1,
+      // Only failed-retry-transient (failed + nextRetryAt + transient).
       retryingExecutions: 1,
+      // Only executing-old. executing-young is 1s old (well inside the
+      // threshold); executing-null has no startedAt (age unknown). The strict
+      // `<` (exactly-at-cutoff-is-not-stuck) contract is NOT asserted here:
+      // the fixture's `now` and the handler's `Date.now()` are separate calls
+      // separated by the HTTP round-trip, so a startedAt built from the
+      // fixture's cutoff is already strictly older than the handler's cutoff
+      // by the time the request is processed. That makes any "exactly at the
+      // boundary" fixture nondeterministic regardless of OS. The strict-<
+      // contract is documented on countAttentionByOwner and would be pinned
+      // by a store unit test with an injected clock if needed.
       stuckExecutions: 1,
     });
   } finally {
@@ -189,7 +307,6 @@ test("GET /overview/attention returns the exact pendingApprovals count above 200
     for (let index = 0; index < 205; index++) {
       await approvalStore.record(makeApproval("owner-a", `pending-${index}`));
     }
-    // Non-pending rows and another owner's rows must not affect the count.
     for (let index = 0; index < 3; index++) {
       await approvalStore.record(makeApproval("owner-a", `approved-${index}`, "approved"));
     }
@@ -199,7 +316,6 @@ test("GET /overview/attention returns the exact pendingApprovals count above 200
 
     const response = await request(baseUrl, "/overview/attention");
     assert.equal(response.status, 200);
-    // Counted in the store, not derived from a capped list: no silent truncation at 200.
     assert.equal(response.body.pendingApprovals, 205);
   } finally {
     await close();

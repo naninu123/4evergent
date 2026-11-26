@@ -3,11 +3,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { log, generateRequestId, runRequestIdContext } from "./logging.js";
 import type {
+  ActivityStatus,
   AgentIntent,
   AuthorizationStatus,
   PolicyDecision,
+  ScheduleStatus,
   SimulationResult,
 } from "@4evergent/shared";
+import { toStroops, fromStroops } from "@4evergent/shared";
 import { API_ERRORS, type ApiErrorCode } from "./error-codes.js";
 import { IntentValidator } from "@4evergent/agent-core";
 import { PolicyEngine, DEFAULT_RULES, validatePolicyRules, normalizePolicyRules, parseStrictAmount } from "@4evergent/policy";
@@ -17,11 +20,12 @@ import type { Signer } from "@4evergent/stellar";
 import { AgentScheduler } from "./scheduler.js";
 import { ScheduleExecutionService } from "./schedule-execution.js";
 import { ExecutionQueue } from "./execution-queue.js";
+import type { PreCheckFn } from "./execution-queue.js";
 import { ExecutionRecoveryService } from "./execution-recovery.js";
 import { ScheduleRecoveryService } from "./schedule-recovery.js";
 import { TransactionStatusReconciler, ApprovalRecoveryService, DEFAULT_SUBMITTED_MAX_AGE_MS } from "@4evergent/stellar";
 import { AccountSequenceCoordinator } from "./account-sequence-coordinator.js";
-import type { ExecutionRecord, ExecutionStatus, ScheduleRecord } from "@4evergent/database";
+import type { ExecutionRecord, ScheduleRecord } from "@4evergent/database";
 import type { ScheduleExecutionResult } from "./schedule-execution.js";
 import {
   InMemoryActivityStore,
@@ -39,6 +43,7 @@ import {
   SQLitePolicyConfigStore,
   assertNoSecrets,
   validateApprovalTransition,
+  closeSharedConnection,
   ResourceAuthorizationService,
   classifyPipelineOutcome,
   classifyError,
@@ -56,9 +61,11 @@ import {
   clampOffset,
   getSharedConnection,
   getSchemaVersion,
+  resolveIdempotencyWindowMs,
 } from "@4evergent/database";
 import type { PolicyRules, Agent, RequestContext, AuthorizationService, AuthProvider, AuthenticatedPrincipal } from "@4evergent/shared";
 import { createAuthModule, type PrincipalResolution } from "./auth.js";
+import { SlidingWindowRateLimiter } from "./rate-limit.js";
 import { sweepRetainedData } from "./data-retention.js";
 
 const require = createRequire(import.meta.url);
@@ -66,11 +73,40 @@ export const API_VERSION: string = (require("../package.json") as { version: str
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 
+/**
+ * #359: age threshold above which an `executing` execution counts as
+ * "stuck" on the Overview Needs Attention table. A younger in-flight
+ * execution is healthy, not stuck. The predicate is strictly
+ * `startedAt < (now - STUCK_EXECUTION_THRESHOLD_MS)`, so a startedAt
+ * exactly at the cutoff is NOT yet stuck.
+ *
+ * Exported so tests can build fixtures at the exact boundary without
+ * duplicating the numeric literal (drift between test and prod would
+ * recreate the very bug this constant exists to prevent).
+ */
+export const STUCK_EXECUTION_THRESHOLD_MS = 10 * 60_000;
+
+/**
+ * #261: defaults for the per-owner rate limit on the authenticated,
+ * money-moving endpoints (intent submission, approve, reject). Same shape
+ * as the auth credential-endpoint limit, but a higher budget: these
+ * endpoints serve legitimate automation, so the default allows a burst of
+ * 60 requests per owner per minute. Override with the `rateLimit` server
+ * option (`API_RATE_LIMIT_*` env vars in server.ts).
+ */
+export const DEFAULT_API_RATE_LIMIT_MAX = 60;
+export const DEFAULT_API_RATE_LIMIT_WINDOW_SECONDS = 60;
+export const DEFAULT_API_RATE_LIMIT_MAX_KEYS = 10_000;
+
+function positiveNumber(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 interface IntentResponse {
   activityId: string;
   agentId: string;
   status: string;
-  policyDecision: PolicyDecision;
+  policyDecision: PolicyDecision | null;
   authorizationStatus: AuthorizationStatus;
   simulationResult: SimulationResult | null;
   txHash: string | null;
@@ -87,6 +123,20 @@ interface ApprovalResponse {
 }
 
 const agents = new Map<string, Agent>();
+
+// Validation caps for agent metadata (#84). The capability bounds mirror the
+// on-chain agent-registry contract (contracts/agent-registry/src/lib.rs:
+// MAX_CAPABILITIES, MAX_CAPABILITY_LEN); displayName/description match the
+// POST /agents handler.
+const MAX_AGENT_DISPLAY_NAME_LEN = 100;
+const MAX_AGENT_DESCRIPTION_LEN = 500;
+const MAX_AGENT_CAPABILITY_COUNT = 32;
+const MAX_AGENT_CAPABILITY_LEN = 32;
+const MUTABLE_AGENT_FIELDS: ReadonlySet<string> = new Set([
+  "displayName",
+  "description",
+  "capabilities",
+]);
 
 export { ScheduleRecoveryService, type ScheduleRecoveryResult, type ScheduleRecoveryOptions } from "./schedule-recovery.js";
 
@@ -105,6 +155,18 @@ const APPROVAL_STATUSES = [
   "failed",
 ] as const satisfies readonly ApprovalStatus[];
 
+const SCHEDULE_STATUSES = ["active", "paused", "disabled"] as const satisfies readonly ScheduleStatus[];
+
+const ACTIVITY_STATUSES = [
+  "pending",
+  "rejected",
+  "requires_approval",
+  "approved",
+  "signed",
+  "submitted",
+  "failed",
+] as const satisfies readonly ActivityStatus[];
+
 function parseStatusFilter<T extends string>(
   raw: string | null,
   valid: readonly T[]
@@ -122,6 +184,7 @@ function parseStatusFilter<T extends string>(
 export interface ServerOptions {
   port: number;
   horizonUrl: string;
+  sorobanRpcUrl?: string;
   signer: Signer;
   policyRules?: Partial<PolicyRules>;
   activityStore?: ActivityStore;
@@ -162,6 +225,28 @@ export interface ServerOptions {
   };
   /** User authentication module (sessions: email / Google / Stellar wallet). */
   authModule?: ReturnType<typeof createAuthModule>;
+  /**
+   * #261: per-owner rate limiting for the authenticated intent and
+   * approval-action endpoints (POST /agents/:id/intents, approve, reject).
+   * Same `{ maxAttempts, windowSeconds, maxKeys }` shape as the auth
+   * module's credential-endpoint limit; each endpoint gets its own limiter
+   * instance so one endpoint's traffic cannot lock an owner out of another.
+   * Defaults: 60 attempts / 60s / 10000 keys (see DEFAULT_API_RATE_LIMIT_*).
+   */
+  rateLimit?: {
+    /** Attempts allowed per window, per owner. Default 60. */
+    maxAttempts?: number;
+    /** Window length in seconds. Default 60. */
+    windowSeconds?: number;
+    /** Hard cap on tracked owners. Default 10000. */
+    maxKeys?: number;
+  };
+  /**
+   * #109: Idempotency-Key replay window in ms (default 24 hours). Applies to
+   * the activity store this server creates; an injected `activityStore`
+   * keeps its own window. Also bounds the retention sweep's key release.
+   */
+  idempotencyKeyWindowMs?: number;
   /** Periodic cleanup of expired browser sessions and old daily-spending reservations. */
   retention?: {
     enabled?: boolean;
@@ -192,7 +277,9 @@ export interface ServerOptions {
 export async function createApiServer(options: ServerOptions) {
   const store: ActivityStore =
     options.activityStore ??
-    (options.dbPath ? new SQLiteActivityStore(options.dbPath) : new InMemoryActivityStore());
+    (options.dbPath
+      ? new SQLiteActivityStore(options.dbPath, { idempotencyWindowMs: options.idempotencyKeyWindowMs })
+      : new InMemoryActivityStore({ idempotencyWindowMs: options.idempotencyKeyWindowMs }));
   const approvals: ApprovalStore =
     options.approvalStore ??
     (options.dbPath ? new SQLiteApprovalStore(options.dbPath) : new InMemoryApprovalStore());
@@ -222,6 +309,39 @@ export async function createApiServer(options: ServerOptions) {
   // the bearer AuthProvider remains the machine/API-key fallback.
   const authProvider = options.authProvider;
   const authModule = options.authModule ?? null;
+
+  // #261: per-owner rate limiting for the authenticated, money-moving
+  // endpoints. One limiter instance per endpoint (same pattern as the auth
+  // module's per-endpoint limiters) so intent traffic cannot lock an owner
+  // out of approve/reject, or vice versa. Keyed by ownerId, never global
+  // across owners. The gate runs before body parsing so floods are shed
+  // early, like the auth credential gate.
+  const apiRateLimitConfig = {
+    maxAttempts: positiveNumber(options.rateLimit?.maxAttempts, DEFAULT_API_RATE_LIMIT_MAX),
+    windowMs: positiveNumber(options.rateLimit?.windowSeconds, DEFAULT_API_RATE_LIMIT_WINDOW_SECONDS) * 1000,
+    maxKeys: positiveNumber(options.rateLimit?.maxKeys, DEFAULT_API_RATE_LIMIT_MAX_KEYS),
+  };
+  const intentLimiter = new SlidingWindowRateLimiter(apiRateLimitConfig);
+  const approveLimiter = new SlidingWindowRateLimiter(apiRateLimitConfig);
+  const rejectLimiter = new SlidingWindowRateLimiter(apiRateLimitConfig);
+
+  /**
+   * Check the per-owner limit for one endpoint. Returns true when the
+   * request may proceed (and records the attempt), or false after writing
+   * a 429 with a Retry-After header and the standard `{ code, error }`
+   * envelope when the limit is exceeded.
+   */
+  function rateLimitGate(limiter: SlidingWindowRateLimiter, ctx: RequestContext, res: any): boolean {
+    const key = `owner:${ctx.ownerId}`;
+    const decision = limiter.check(key);
+    if (decision.limited) {
+      res.writeHead(429, { "Content-Type": "application/json", "Retry-After": String(decision.retryAfterSeconds) });
+      res.end(JSON.stringify({ code: "RATE_LIMITED", error: API_ERRORS.RATE_LIMITED.message }));
+      return false;
+    }
+    limiter.record(key);
+    return true;
+  }
   const als = new AsyncLocalStorage<RequestContext>();
 
   async function authenticateRequest(req: any, method: string): Promise<PrincipalResolution> {
@@ -259,12 +379,18 @@ export async function createApiServer(options: ServerOptions) {
 
   const pipeline = new TransactionPipeline({
     horizonUrl: options.horizonUrl,
+    sorobanRpcUrl: options.sorobanRpcUrl,
     networkPassphrase: TESTNET_PASSPHRASE,
     signer: options.signer,
     activityStore: store,
     approvalStore: approvals,
     policyRules: options.policyRules,
     policyResolver: getRules,
+    agentResolver: async (agentId: string) => {
+      const dbAgent = await agentStore.get(agentId);
+      if (dbAgent) return dbAgent;
+      return agents.get(agentId);
+    },
   });
 
   // Phase 28J: PolicyEngine in API uses the SAME resolver
@@ -428,14 +554,21 @@ export async function createApiServer(options: ServerOptions) {
     (options.dbPath ? new SQLiteExecutionStore(options.dbPath) : new InMemoryExecutionStore());
 
   // --- Execution recovery setup ---
-  const recoveryPreCheck = async (txHash: string) => {
-    const status = await adapter.getTransactionStatus(txHash);
-    if (status === "confirmed" || status === "failed") return "found" as const;
-    if (status === "not_found") return "not_found" as const;
-    return "network_error" as const;
-  };
+  // #379: ONE shared pre-check mapping, used by BOTH the execution queue
+  // (which covers the manual retry path) and the execution recovery service —
+  // no more duplicated three-line collapses. It carries the FULL on-chain
+  // transaction status through instead of collapsing `confirmed` and `failed`
+  // into a single "found" verdict. getTransactionStatus already distinguishes
+  // the cases (confirmed / failed / not_found / network_error), so the mapping
+  // is a direct passthrough and the call sites branch on the real status:
+  //   confirmed → never re-submit (move to submitted for reconciliation)
+  //   failed    → definitively dead, safe to retry with a NEW transaction
+  //   not_found → never landed, safe to retry
+  //   network_error → ambiguous, do not blind retry
+  const preCheck: PreCheckFn = (txHash: string) =>
+    adapter.getTransactionStatus(txHash);
   const recoveryService = new ExecutionRecoveryService(executionStore, {
-    preCheck: recoveryPreCheck,
+    preCheck,
   });
   let executionQueue: ExecutionQueue | null = null;
   let reconciler: import("@4evergent/stellar").TransactionStatusReconciler | null = null;
@@ -495,7 +628,9 @@ export async function createApiServer(options: ServerOptions) {
         maxAgeMs: options.reconciliation.maxAgeMs,
         // #276: release the daily-spending reservation of a retired
         // execution, when the record proves one was made (#353).
+        // #363: sync on-chain failure to linked activity and approval.
         activityStore: store,
+        approvalStore: approvals,
       });
     reconciler.start();
     console.log("[reconciler] started, interval:", options.reconciliation.intervalMs ?? 30_000, "ms");
@@ -519,6 +654,37 @@ export async function createApiServer(options: ServerOptions) {
       record: ExecutionRecord,
       context?: import("./execution-queue.js").ExecutionContext
     ) => {
+      // Incident-response boundary: Check agent status before acquiring lock / submitting.
+      // An execution queued (or retried) while an agent was active must NOT execute
+      // or submit to Horizon if the agent has since been paused or disabled.
+      const agent = (await agentStore.get(record.agentId)) ?? agents.get(record.agentId);
+      if (agent && agent.status !== "active") {
+        const agentStatus = agent.status;
+        const message = `agent is ${agentStatus}; queued execution rejected`;
+        if (record.approvalId) {
+          await approvals.update(record.approvalId, { status: "failed", error: message });
+          const app = await approvals.get(record.approvalId);
+          if (app) {
+            await releaseDecisionReservation(app.agentId, app.policyDecision);
+          }
+        }
+        if (record.activityId) {
+          const act = await store.get(record.activityId);
+          if (act) {
+            await store.update(record.activityId, { status: "failed", error: message });
+          }
+        }
+        return {
+          record,
+          success: false,
+          status: "rejected",
+          error: message,
+          errorClass: "permanent" as const,
+          txHash: undefined,
+          submittedHash: null,
+          activityId: record.activityId ?? undefined,
+        };
+      }
       // Phase 25: Wrap sequence-sensitive execution in account-scoped lock.
       //
       // WHY: Two concurrent executions using the SAME Stellar source account
@@ -550,6 +716,30 @@ export async function createApiServer(options: ServerOptions) {
           // keep using execute().
           let outcome: Awaited<ReturnType<typeof pipeline.executeApproved>>;
           if (record.approvalId) {
+            const approval = await approvals.get(record.approvalId);
+            if (approval && (approval.status === "expired" || (approval.expiresAt && new Date(approval.expiresAt) < new Date()))) {
+              return {
+                record,
+                success: false,
+                status: "failed",
+                error: "approval expired without decision",
+                errorClass: "permanent",
+                activityId: approval.activityId ?? record.activityId ?? undefined,
+                approvalId: record.approvalId,
+                policyDecision: approval.policyDecision,
+              };
+            }
+            if (approval && approval.status === "pending_approval") {
+              return {
+                record,
+                success: false,
+                status: "requires_approval",
+                error: approval.policyDecision?.reason ?? "requires approval",
+                activityId: approval.activityId ?? record.activityId ?? undefined,
+                approvalId: record.approvalId,
+                policyDecision: approval.policyDecision,
+              };
+            }
             outcome = await pipeline.executeApproved(record.approvalId, undefined, {
               signal: context?.signal,
               onBeforeSubmit: () => {
@@ -557,7 +747,29 @@ export async function createApiServer(options: ServerOptions) {
               },
             });
           } else {
-            const sourceAccount = await getSourceAccount();
+            // #351: if an approval is already pending for this activity, do not duplicate
+            if (record.activityId) {
+              const pendingApprovals = await approvals.listByAgent(record.agentId, 50, 0, "pending_approval");
+              const existingApproval = pendingApprovals.find((a) => a.activityId === record.activityId);
+              if (existingApproval) {
+                return {
+                  record,
+                  success: false,
+                  status: "requires_approval",
+                  error: existingApproval.policyDecision?.reason ?? "requires approval",
+                  activityId: record.activityId,
+                  approvalId: existingApproval.id,
+                  policyDecision: existingApproval.policyDecision,
+                };
+              }
+            }
+
+            const baseSourceAccount = await getSourceAccount();
+            const sourceAccount = {
+              ...baseSourceAccount,
+              agentId: record.agentId,
+              ownerId: record.ownerId,
+            };
             if (context?.signal?.aborted) {
               const err = new Error("Execution was cancelled");
               err.name = "AbortError";
@@ -577,6 +789,7 @@ export async function createApiServer(options: ServerOptions) {
           if (txHash) {
             await context?.onSubmitted?.(txHash);
           }
+          const approvalId = (outcome as { approvalId?: string }).approvalId ?? record.approvalId ?? undefined;
           return {
             record,
             success: outcome.status === "submitted",
@@ -586,6 +799,8 @@ export async function createApiServer(options: ServerOptions) {
             txHash,
             submittedHash: txHash ?? null,
             activityId: (outcome as { activityId?: string }).activityId ?? record.activityId ?? undefined,
+            approvalId,
+            policyDecision: outcome.policyDecision ?? undefined,
           };
         } catch (err: unknown) {
           if (context?.signal?.aborted) {
@@ -628,13 +843,9 @@ export async function createApiServer(options: ServerOptions) {
       });
     };
 
-    const preCheck = async (txHash: string) => {
-      const status = await adapter.getTransactionStatus(txHash);
-      if (status === "confirmed" || status === "failed") return "found" as const;
-      if (status === "not_found") return "not_found" as const;
-      return "network_error" as const;
-    };
-
+    // #379: reuse the shared pre-check mapping (defined above with the
+    // recovery service) — one mapping for the queue, the retry path, and the
+    // recovery service, carrying the full on-chain status through.
     executionQueue =
       options.executionQueue.instance ??
       new ExecutionQueue(executionStore, pipelineExecutor, getSourceAccount, {
@@ -690,6 +901,8 @@ export async function createApiServer(options: ServerOptions) {
         };
       },
       pipelineExecutor: (input) => pipeline.execute(input) as any,
+      sequenceCoordinator,
+      sequenceAccountId: options.signer.getAccountId(),
     });
 
     const agentStatusStore = {
@@ -726,7 +939,7 @@ export async function createApiServer(options: ServerOptions) {
                 schedule.agentId,
                 schedule.ownerId,
                 schedule.intent,
-                { result: "allow", reason: "schedule enqueued", rule: "scheduler", intent: schedule.intent }
+                null
               );
               activityRecord.id = activityId;
               activityRecord.status = "pending";
@@ -774,12 +987,7 @@ export async function createApiServer(options: ServerOptions) {
             return {
               status: "submitted",
               message: "schedule enqueued for execution",
-              policyDecision: {
-                result: "allow",
-                reason: "schedule enqueued",
-                rule: "scheduler",
-                intent: schedule.intent,
-              },
+              policyDecision: null,
               simulationResult: null,
               txHash: null as unknown as string,
               activityId: undefined,
@@ -819,12 +1027,23 @@ export async function createApiServer(options: ServerOptions) {
           now: Date.now(),
           authSessionDays: sessionDays,
           dailySpendingDays: spendingDays,
+          idempotencyWindowMs: (store as { idempotencyWindowMs?: number }).idempotencyWindowMs
+            ?? resolveIdempotencyWindowMs(options.idempotencyKeyWindowMs),
           batchSize: 500,
           onApprovalExpired: async (approval) => {
             await releaseDecisionReservation(approval.agentId, approval.policyDecision);
+            const linkedExecution = await executionStore.getByApprovalId(approval.id);
+            if (linkedExecution && linkedExecution.status === "requires_approval") {
+              await executionStore.updateIfStatus(linkedExecution.id, "requires_approval", {
+                status: "failed",
+                error: "approval expired without decision",
+                completedAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              });
+            }
           },
         });
-        console.log(`[retention] sweep complete: auth_sessions=${result.authSessionsRemoved}, daily_spending=${result.dailySpendingRemoved}, expired_approvals=${result.expiredApprovalsSwept}`);
+        console.log(`[retention] sweep complete: auth_sessions=${result.authSessionsRemoved}, daily_spending=${result.dailySpendingRemoved}, expired_approvals=${result.expiredApprovalsSwept}, idempotency_keys_released=${result.idempotencyKeysReleased}`);
       } catch (err) {
         console.error("[retention] sweep failed:", err);
       } finally {
@@ -921,6 +1140,7 @@ export async function createApiServer(options: ServerOptions) {
       };
     }
 
+    try {
     // Phase 28U: USER AUTH routes (/auth/*) — handled before the auth gate.
     // These are the login/session endpoints (register, login, challenge,
     // verify, google start/callback, logout, me, config).
@@ -934,8 +1154,8 @@ export async function createApiServer(options: ServerOptions) {
     const requestScopedCtx = principalToContext(resolution.principal);
     ownerId = requestScopedCtx.ownerId;
 
-    return runRequestIdContext(requestId, () => {
-    return als.run(requestScopedCtx, () => {
+    await runRequestIdContext(requestId, async () => {
+    return await als.run(requestScopedCtx, async () => {
       // Health check is public
       if (method === "GET" && url === "/health") {
         const schemaVersion = options.dbPath
@@ -1005,6 +1225,9 @@ export async function createApiServer(options: ServerOptions) {
     if (method === "GET" && /^\/agents\/[^/]+$/.test(url)) {
       return handleGetAgent(requestScopedCtx, req, res);
     }
+    if (method === "PATCH" && /^\/agents\/[^/]+$/.test(url)) {
+      return handleUpdateAgent(requestScopedCtx, req, res);
+    }
     if (method === "GET" && /^\/agents\/[^/]+\/activity(\?.*)?$/.test(url)) {
       return handleAgentActivity(requestScopedCtx, req, res);
     }
@@ -1071,6 +1294,20 @@ export async function createApiServer(options: ServerOptions) {
     apiError(res, "NOT_FOUND");
     }); // End als.run
     }); // End runRequestIdContext
+    } catch (err: unknown) {
+      log("error", "unhandled request error", {
+        requestId,
+        method,
+        path: new URL(url, "http://localhost").pathname,
+        ownerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      if (!res.headersSent && !res.writableEnded) {
+        apiError(res, "INTERNAL_ERROR");
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    }
   });
 
   async function handleListAgents(ctx: RequestContext, req: any, res: any) {
@@ -1217,6 +1454,133 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { agent }, 201);
   }
 
+  /**
+   * PATCH /agents/:id — update the mutable metadata of an agent (#84).
+   *
+   * Accepted fields: displayName, description, capabilities. Everything else
+   * is rejected (400) rather than ignored, so a typo such as `displayname`
+   * cannot silently do nothing. `status` belongs to PATCH /agents/:id/status,
+   * and `stellarAddress` is deliberately immutable: it binds the agent to a
+   * Stellar signer/account, so a signer change must go through the on-chain
+   * registration path instead of a metadata patch.
+   */
+  async function handleUpdateAgent(ctx: RequestContext, req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)$/);
+    const agentId = match?.[1];
+    if (!agentId) return apiError(res, "INVALID_PATH_PARAM");
+
+    // Owner-scoped: a non-owner and a nonexistent agent both get the same 404.
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
+    if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
+
+    let body: unknown;
+    try {
+      const text = await readBody(req);
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      return apiError(res, "INVALID_JSON");
+    }
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return apiError(res, "VALIDATION_ERROR", { message: "body must be a JSON object" });
+    }
+    const b = body as Record<string, unknown>;
+
+    if (Object.prototype.hasOwnProperty.call(b, "status")) {
+      return apiError(res, "VALIDATION_ERROR", {
+        message: "status cannot be updated here; use PATCH /agents/:id/status",
+      });
+    }
+    if (Object.prototype.hasOwnProperty.call(b, "stellarAddress")) {
+      return apiError(res, "VALIDATION_ERROR", {
+        message: "stellarAddress is immutable and cannot be updated",
+      });
+    }
+    const unsupported = Object.keys(b).filter((key) => !MUTABLE_AGENT_FIELDS.has(key));
+    if (unsupported.length > 0) {
+      return apiError(res, "VALIDATION_ERROR", {
+        message: `unsupported field(s): ${unsupported.join(", ")}; accepted fields: displayName, description, capabilities`,
+      });
+    }
+
+    const patch: Partial<Agent> = {};
+
+    if (Object.prototype.hasOwnProperty.call(b, "displayName")) {
+      const displayName = b.displayName;
+      if (typeof displayName !== "string" || displayName.trim().length === 0) {
+        return apiError(res, "VALIDATION_ERROR", { message: "displayName must be a non-empty string" });
+      }
+      if (displayName.trim().length > MAX_AGENT_DISPLAY_NAME_LEN) {
+        return apiError(res, "VALIDATION_ERROR", {
+          message: `displayName must be ${MAX_AGENT_DISPLAY_NAME_LEN} characters or fewer`,
+        });
+      }
+      patch.displayName = displayName.trim();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(b, "description")) {
+      const description = b.description;
+      if (typeof description !== "string") {
+        return apiError(res, "VALIDATION_ERROR", { message: "description must be a string" });
+      }
+      if (description.length > MAX_AGENT_DESCRIPTION_LEN) {
+        return apiError(res, "VALIDATION_ERROR", {
+          message: `description must be ${MAX_AGENT_DESCRIPTION_LEN} characters or fewer`,
+        });
+      }
+      patch.description = description;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(b, "capabilities")) {
+      const rawCapabilities = b.capabilities;
+      if (
+        !Array.isArray(rawCapabilities) ||
+        !rawCapabilities.every((cap): cap is string => typeof cap === "string")
+      ) {
+        return apiError(res, "VALIDATION_ERROR", { message: "capabilities must be an array of strings" });
+      }
+      if (rawCapabilities.length > MAX_AGENT_CAPABILITY_COUNT) {
+        return apiError(res, "VALIDATION_ERROR", {
+          message: `capabilities must be ${MAX_AGENT_CAPABILITY_COUNT} entries or fewer`,
+        });
+      }
+      const trimmedCapabilities: string[] = [];
+      const seen = new Set<string>();
+      for (const capability of rawCapabilities) {
+        const trimmed = capability.trim();
+        if (trimmed.length === 0) {
+          return apiError(res, "VALIDATION_ERROR", { message: "capability entries cannot be empty" });
+        }
+        if (trimmed.length > MAX_AGENT_CAPABILITY_LEN) {
+          return apiError(res, "VALIDATION_ERROR", {
+            message: `capability entries must be ${MAX_AGENT_CAPABILITY_LEN} characters or fewer`,
+          });
+        }
+        if (seen.has(trimmed)) {
+          return apiError(res, "VALIDATION_ERROR", { message: "capabilities must not contain duplicate entries" });
+        }
+        seen.add(trimmed);
+        trimmedCapabilities.push(trimmed);
+      }
+      patch.capabilities = trimmedCapabilities;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return apiError(res, "VALIDATION_ERROR", {
+        message: "at least one of displayName, description, capabilities is required",
+      });
+    }
+
+    const updated = await agentStore.update(agentId, patch);
+    if (!updated) return apiError(res, "AGENT_NOT_FOUND");
+    // The session-scoped map is used by the status and scheduler lookups; keep
+    // it consistent with the store (same as the status handler).
+    if (agents.has(agentId)) {
+      agents.set(agentId, updated);
+    }
+    return json(res, { agent: updated });
+  }
+
   async function handleAgentActivity(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/activity$/);
@@ -1224,9 +1588,14 @@ export async function createApiServer(options: ServerOptions) {
     if (!agentId) return apiError(res, "INVALID_PATH_PARAM");
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
+    const statusFilter = parseStatusFilter(urlObj.searchParams.get("status"), ACTIVITY_STATUSES);
+    if (!statusFilter.ok) return apiError(res, "VALIDATION_ERROR", { message: statusFilter.error });
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
-    const all = await store.listByAgent(agentId, limit + 1, offset);
+    const all =
+      statusFilter.status === undefined
+        ? await store.listByAgent(agentId, limit + 1, offset)
+        : await store.listByStatus(agentId, statusFilter.status, limit + 1, offset);
     const activity = all.slice(0, limit);
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
     return json(res, { agentId, activity, hasMore });
@@ -1268,7 +1637,15 @@ export async function createApiServer(options: ServerOptions) {
     const canAccess = await authorizationService.canAccessAgent(ctx, agentId);
     if (!canAccess) return apiError(res, "AGENT_NOT_FOUND");
 
-    const metadata = await policyConfigStore.getWithMetadata(agentId);
+    let metadata;
+    try {
+      metadata = await policyConfigStore.getWithMetadata(agentId);
+    } catch (error) {
+      if (error instanceof Error && error.name === "CorruptPolicyConfigError") {
+        return apiError(res, "POLICY_UNAVAILABLE");
+      }
+      throw error;
+    }
     if (metadata) {
       return json(res, {
         agentId,
@@ -1351,13 +1728,19 @@ export async function createApiServer(options: ServerOptions) {
     const spending: Record<string, { used: number; limit: string; remaining: number }> = {};
     for (const asset of Object.keys(rules.dailySpendingLimit)) {
       const limitStr = rules.dailySpendingLimit[asset] ?? "0";
-      const limitNum = parseFloat(limitStr);
-      if (isNaN(limitNum)) continue;
-      const used = (await store.getDailySpending(agentId, asset)) ?? 0;
+      // #374: enforce and store in integer stroops; convert stroops back to an
+      // exact decimal number here at the display boundary so the dashboard
+      // never shows float garbage like 0.19999999999999998 (which 1.0 - 0.8
+      // produced under the old REAL/float path). A non-canonical limit is
+      // skipped (no row), matching the old isNaN(parseFloat) behavior.
+      const limitStroops = toStroops(limitStr);
+      if (limitStroops === null) continue;
+      const usedStroops = (await store.getDailySpending(agentId, asset)) ?? 0;
+      const remainingStroops = Math.max(limitStroops - usedStroops, 0);
       spending[asset] = {
-        used,
+        used: Number(fromStroops(usedStroops)),
         limit: limitStr,
-        remaining: Math.max(limitNum - used, 0),
+        remaining: Number(fromStroops(remainingStroops)),
       };
     }
     return json(res, { agentId, spending });
@@ -1371,6 +1754,11 @@ export async function createApiServer(options: ServerOptions) {
     if (!agentId || !activityId) return apiError(res, "INVALID_PATH_PARAM");
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
+    // Issue #385: the activity must belong to the agent named in the path.
+    // Same 404 as a nonexistent id — the response must not reveal whether the
+    // activity exists under a different agent.
+    const canAccess = await authorizationService.canAccessActivity(ctx, activityId, agentId);
+    if (!canAccess) return apiError(res, "ACTIVITY_NOT_FOUND");
     const activity = await store.getForOwner(activityId, ctx.ownerId!);
     if (!activity) return apiError(res, "ACTIVITY_NOT_FOUND");
     return json(res, { activity });
@@ -1421,6 +1809,9 @@ export async function createApiServer(options: ServerOptions) {
         details: { currentStatus: result.currentStatus, requestedStatus: status },
       });
     }
+    if (agents.has(agentId)) {
+      agents.set(agentId, result.agent);
+    }
     return json(res, { id: result.agent.id, status: result.agent.status });
   }
 
@@ -1431,9 +1822,11 @@ export async function createApiServer(options: ServerOptions) {
     if (!agentId) return apiError(res, "INVALID_PATH_PARAM");
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
+    const statusFilter = parseStatusFilter(urlObj.searchParams.get("status"), SCHEDULE_STATUSES);
+    if (!statusFilter.ok) return apiError(res, "VALIDATION_ERROR", { message: statusFilter.error });
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
-    const all = await schedules.listByAgent(agentId, limit + 1, offset);
+    const all = await schedules.listByAgent(agentId, limit + 1, offset, statusFilter.status);
     const page = all.slice(0, limit);
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
     return json(res, { agentId, schedules: page, hasMore });
@@ -1447,10 +1840,13 @@ export async function createApiServer(options: ServerOptions) {
     if (!agentId || !scheduleId) return apiError(res, "INVALID_PATH_PARAM");
     const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
+    // Issue #385: the schedule must belong to the agent named in the path.
+    // Same 404 as a nonexistent id — the response must not reveal whether the
+    // schedule exists under a different agent.
+    const canAccess = await authorizationService.canAccessSchedule(ctx, scheduleId, agentId);
+    if (!canAccess) return apiError(res, "SCHEDULE_NOT_FOUND");
     const schedule = await schedules.get(scheduleId);
-    if (!schedule || schedule.ownerId !== ctx.ownerId!) {
-      return apiError(res, "SCHEDULE_NOT_FOUND");
-    }
+    if (!schedule) return apiError(res, "SCHEDULE_NOT_FOUND");
     return json(res, { schedule });
   }
 
@@ -1486,6 +1882,25 @@ export async function createApiServer(options: ServerOptions) {
       return apiError(res, "VALIDATION_ERROR", { message: exprValidation.error });
     }
 
+    // Issue #368: check agent status and evaluate policy at schedule creation time
+    // without reserving daily spending (creation is not a spend).
+    const agent = (await agentStore.get(agentId)) ?? agents.get(agentId);
+    if (!agent) return apiError(res, "AGENT_NOT_FOUND");
+    if (agent.status !== "active") {
+      return apiError(res, "AGENT_NOT_ACTIVE", {
+        message: `agent is ${agent.status}; cannot create schedule for non-active agent`,
+      });
+    }
+
+    const decision = await policy.evaluate(intent, agentId, { skipReservation: true });
+    if (decision.result === "deny") {
+      return apiError(res, "POLICY_DENIED", {
+        message: `Schedule intent denied by policy (${decision.rule}): ${decision.reason}`,
+        details: { rule: decision.rule, reason: decision.reason },
+        extra: { policyDecision: decision },
+      });
+    }
+
     const now = new Date().toISOString();
     const schedule = await schedules.create({
       id: crypto.randomUUID(),
@@ -1502,6 +1917,18 @@ export async function createApiServer(options: ServerOptions) {
       updatedAt: now,
     });
 
+    if (decision.result === "requires_approval") {
+      return json(
+        res,
+        {
+          schedule,
+          policyDecision: decision,
+          warning: `Each scheduled run will require human approval (${decision.rule}: ${decision.reason})`,
+        },
+        201
+      );
+    }
+
     return json(res, { schedule }, 201);
   }
 
@@ -1511,7 +1938,8 @@ export async function createApiServer(options: ServerOptions) {
     const agentId = match?.[1];
     const scheduleId = match?.[2];
     if (!agentId || !scheduleId) return apiError(res, "INVALID_PATH_PARAM");
-    const canUpdate = await authorizationService.canUpdateSchedule(ctx, scheduleId);
+    // Issue #385: bind the schedule to the agent named in the path.
+    const canUpdate = await authorizationService.canUpdateSchedule(ctx, scheduleId, agentId);
     if (!canUpdate) return apiError(res, "AGENT_NOT_FOUND");
 
     let body: unknown;
@@ -1597,7 +2025,8 @@ export async function createApiServer(options: ServerOptions) {
     const agentId = match?.[1];
     const scheduleId = match?.[2];
     if (!agentId || !scheduleId) return apiError(res, "INVALID_PATH_PARAM");
-    const canDelete = await authorizationService.canDeleteSchedule(ctx, scheduleId);
+    // Issue #385: bind the schedule to the agent named in the path.
+    const canDelete = await authorizationService.canDeleteSchedule(ctx, scheduleId, agentId);
     if (!canDelete) return apiError(res, "AGENT_NOT_FOUND");
     const deleted = await schedules.delete(scheduleId);
     if (!deleted) return apiError(res, "SCHEDULE_NOT_FOUND");
@@ -1613,12 +2042,13 @@ export async function createApiServer(options: ServerOptions) {
     if (!agentId || !scheduleId || !action) return apiError(res, "INVALID_PATH_PARAM");
 
     let allowed: boolean;
+    // Issue #385: bind the schedule to the agent named in the path.
     if (action === "pause") {
-      allowed = await authorizationService.canPauseSchedule(ctx, scheduleId);
+      allowed = await authorizationService.canPauseSchedule(ctx, scheduleId, agentId);
     } else if (action === "resume") {
-      allowed = await authorizationService.canResumeSchedule(ctx, scheduleId);
+      allowed = await authorizationService.canResumeSchedule(ctx, scheduleId, agentId);
     } else {
-      allowed = await authorizationService.canDisableSchedule(ctx, scheduleId);
+      allowed = await authorizationService.canDisableSchedule(ctx, scheduleId, agentId);
     }
     if (!allowed) return apiError(res, "AGENT_NOT_FOUND");
 
@@ -1634,6 +2064,23 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { schedule: updated });
   }
 
+  async function syncExecutionApprovalExpiry(execution: ExecutionRecord): Promise<void> {
+    if (execution.status === "requires_approval" && execution.approvalId) {
+      const approval = await approvals.get(execution.approvalId);
+      if (approval && (approval.status === "expired" || (approval.expiresAt && new Date(approval.expiresAt) < new Date()))) {
+        await executionStore.updateIfStatus(execution.id, "requires_approval", {
+          status: "failed",
+          error: "approval expired without decision",
+          completedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        execution.status = "failed";
+        execution.error = "approval expired without decision";
+        execution.completedAt = new Date().toISOString();
+      }
+    }
+  }
+
   async function handleAgentExecutions(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/executions$/);
@@ -1645,6 +2092,9 @@ export async function createApiServer(options: ServerOptions) {
     const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
     const all = await executionStore.listByAgent(agentId, limit + 1, offset);
     const executions = all.slice(0, limit);
+    for (const e of executions) {
+      await syncExecutionApprovalExpiry(e);
+    }
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
     return json(res, { agentId, executions, hasMore });
   }
@@ -1656,6 +2106,7 @@ export async function createApiServer(options: ServerOptions) {
     if (!executionId) return apiError(res, "INVALID_PATH_PARAM");
     const execution = await executionStore.getForOwner(executionId, ctx.ownerId!);
     if (!execution) return apiError(res, "EXECUTION_NOT_FOUND");
+    await syncExecutionApprovalExpiry(execution);
     return json(res, { execution });
   }
 
@@ -1677,15 +2128,28 @@ export async function createApiServer(options: ServerOptions) {
 
   async function handleGetOverviewAttention(ctx: RequestContext, _req: any, res: any) {
     const ownerId = ctx.ownerId!;
-    const pendingApprovals = await approvals.countByOwner(ownerId, "pending_approval");
-    const execCounts: Record<ExecutionStatus, number> =
-      await executionStore.countByOwner(ownerId);
+    // #359: retrying and stuck are DEFINITIONAL, not status-derived. Before
+    // this fix, `retryingExecutions` was literally `execCounts.queued` and
+    // `stuckExecutions` was `execCounts.executing` — so any healthy queue
+    // entry looked "retrying" and any young in-flight execution looked
+    // "stuck". The predicates now live in the store (`countAttentionByOwner`)
+    // so Overview and the Executions page (inferRetrying in
+    // apps/web/src/pages/Executions.tsx) share exactly one definition.
+    //
+    // pending/failed/dead-letter still come from `countByOwner` below. Their
+    // semantics are unchanged — this fix touches only retrying and stuck.
+    const stuckOlderThan = new Date(Date.now() - STUCK_EXECUTION_THRESHOLD_MS).toISOString();
+    const [pendingApprovals, execCounts, attention] = await Promise.all([
+      approvals.countByOwner(ownerId, "pending_approval"),
+      executionStore.countByOwner(ownerId),
+      executionStore.countAttentionByOwner(ownerId, { stuckOlderThan }),
+    ]);
     return json(res, {
       pendingApprovals,
       failedExecutions: execCounts.failed ?? 0,
       deadLetterExecutions: execCounts.dead_letter ?? 0,
-      retryingExecutions: execCounts.queued ?? 0,
-      stuckExecutions: execCounts.executing ?? 0,
+      retryingExecutions: attention.retrying,
+      stuckExecutions: attention.stuck,
     });
   }
 
@@ -1700,15 +2164,20 @@ export async function createApiServer(options: ServerOptions) {
     const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
     const all = await executionStore.listByOwner(ctx.ownerId!, limit + 1, offset);
     const executions = all.slice(0, limit);
+    for (const e of executions) {
+      await syncExecutionApprovalExpiry(e);
+    }
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
     return json(res, { executions, hasMore });
   }
 
   async function handleListActivity(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
+    const statusFilter = parseStatusFilter(urlObj.searchParams.get("status"), ACTIVITY_STATUSES);
+    if (!statusFilter.ok) return apiError(res, "VALIDATION_ERROR", { message: statusFilter.error });
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const offset = Math.max(0, Number(urlObj.searchParams.get("offset") ?? 0) || 0);
-    const all = await store.listByOwner(ctx.ownerId!, limit + 1, offset);
+    const all = await store.listByOwner(ctx.ownerId!, limit + 1, offset, statusFilter.status);
     const activity = all.slice(0, limit);
     const hasMore = all.length > limit && !isOffsetAtCeiling(offset);
     return json(res, { activity, hasMore });
@@ -1741,6 +2210,17 @@ export async function createApiServer(options: ServerOptions) {
     if (result.status === "invalid_state") return apiError(res, "INVALID_EXECUTION_STATE", { message: `cannot retry execution in status '${execution.status}'` });
     if (result.status === "max_retries_reached") return apiError(res, "MAX_RETRIES_REACHED", { message: `max retry attempts (${maxRetries}) reached` });
     if (result.status === "conflict") return apiError(res, "EXECUTION_CONFLICT");
+    // #379: pre-check carries the full on-chain status now. A confirmed
+    // transaction must never be re-submitted — retry() moves the record to
+    // "submitted" so the reconciler confirms it. An ambiguous network state
+    // must not trigger a blind re-submission either. Neither outcome is a
+    // "queued for retry" event, so they get distinct responses here.
+    if (result.status === "submitted") return apiError(res, "INVALID_EXECUTION_STATE", {
+      message: "execution transaction was confirmed on-chain; re-submission is not allowed",
+    });
+    if (result.status === "ambiguous_submission") return apiError(res, "EXECUTION_CONFLICT", {
+      message: "transaction status is ambiguous (network error); retry once Horizon is reachable",
+    });
 
     return json(res, { execution: result.execution, message: "execution queued for retry" });
   }
@@ -1783,6 +2263,8 @@ export async function createApiServer(options: ServerOptions) {
   }
 
   async function handleIntent(ctx: RequestContext, req: any, res: any) {
+    // #261: per-owner rate limit, checked before body parsing.
+    if (!rateLimitGate(intentLimiter, ctx, res)) return;
     const agentId = extractAgentId(req.url);
     if (!agentId) return apiError(res, "INVALID_PATH_PARAM");
 
@@ -1957,6 +2439,8 @@ export async function createApiServer(options: ServerOptions) {
   }
 
   async function handleApprove(ctx: RequestContext, req: any, res: any) {
+    // #261: per-owner rate limit, checked before body parsing.
+    if (!rateLimitGate(approveLimiter, ctx, res)) return;
     const approvalId = extractApprovalId(req.url);
     if (!approvalId) return apiError(res, "INVALID_PATH_PARAM");
 
@@ -1998,6 +2482,23 @@ export async function createApiServer(options: ServerOptions) {
       return approvalError(res, "APPROVAL_INVALID_STATE", { approvalId, activityId: approval.activityId, status: approval.status, message: `cannot approve: ${transitionError}` });
     }
 
+    // Incident-response boundary: approving an intent for a non-active agent is rejected.
+    // Paused: pending approvals remain in `pending_approval` until TTL expiry, but cannot
+    // be approved (`agent is paused; cannot approve intent`). If resumed to active, approval is permitted.
+    // Disabled: terminal state. Approve is rejected (`agent is disabled; cannot approve intent`).
+    const agent = (await agentStore.get(approval.agentId)) ?? agents.get(approval.agentId);
+    if (!agent) {
+      return approvalError(res, "AGENT_NOT_FOUND", { approvalId, activityId: approval.activityId, status: approval.status, message: "agent not found" });
+    }
+    if (agent.status !== "active") {
+      return approvalError(res, "AGENT_NOT_ACTIVE", {
+        approvalId,
+        activityId: approval.activityId,
+        status: approval.status,
+        message: `agent is ${agent.status}; cannot approve intent`,
+      });
+    }
+
     // Atomic claim: pending_approval → approved in one conditional step.
     // A concurrent approve/reject that lands first wins; this request then
     // gets null and returns 409 instead of enqueueing a second execution.
@@ -2014,29 +2515,49 @@ export async function createApiServer(options: ServerOptions) {
     if (options.deferExecution) {
       // execution deferred intentionally — no action taken here
     } else if (executionQueue) {
-      const now = new Date().toISOString();
-      const executionRecord: ExecutionRecord = {
-        id: crypto.randomUUID(),
-        ownerId: approval.ownerId,
-        agentId: approval.agentId,
-        approvalId,
-        activityId: approval.activityId,
-        intent: approval.intent,
-        status: "queued",
-        policyDecision: approval.policyDecision,
-        simulationResult: null,
-        txHash: null,
-        submittedHash: null,
-        error: null,
-        attempt: 0,
-        nextRetryAt: null,
-        startedAt: null,
-        completedAt: null,
-        errorClass: null,
-        createdAt: now,
-        updatedAt: now,
-      };
-      void executionQueue.enqueue(executionRecord);
+      // #351: if an execution record already exists in requires_approval for this approval,
+      // transition it to queued rather than creating a duplicate record.
+      const existing = await executionStore.getByApprovalId(approvalId);
+      if (existing && existing.status === "requires_approval") {
+        await executionStore.updateIfStatus(existing.id, "requires_approval", {
+          status: "queued",
+          approvalId,
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        const now = new Date().toISOString();
+        const executionRecord: ExecutionRecord = {
+          id: crypto.randomUUID(),
+          ownerId: approval.ownerId,
+          agentId: approval.agentId,
+          approvalId,
+          activityId: approval.activityId,
+          intent: approval.intent,
+          status: "queued",
+          policyDecision: approval.policyDecision,
+          simulationResult: null,
+          txHash: null,
+          submittedHash: null,
+          error: null,
+          attempt: 0,
+          nextRetryAt: null,
+          startedAt: null,
+          completedAt: null,
+          errorClass: null,
+          createdAt: now,
+          updatedAt: now,
+        };
+        try {
+          await executionQueue.enqueue(executionRecord);
+        } catch (err: unknown) {
+          log("error", "failed to enqueue approved execution", {
+            approvalId,
+            activityId: approval.activityId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return apiError(res, "INTERNAL_ERROR");
+        }
+      }
     } else {
       // Fallback: Phase 8 fire-and-forget behavior
       // Phase 26A: Must also use sequence coordinator
@@ -2053,6 +2574,8 @@ export async function createApiServer(options: ServerOptions) {
   }
 
   async function handleReject(ctx: RequestContext, req: any, res: any) {
+    // #261: per-owner rate limit, checked before body parsing.
+    if (!rateLimitGate(rejectLimiter, ctx, res)) return;
     const approvalId = extractApprovalId(req.url);
     if (!approvalId) return apiError(res, "INVALID_PATH_PARAM");
 
@@ -2100,6 +2623,16 @@ export async function createApiServer(options: ServerOptions) {
       return approvalError(res, "APPROVAL_CONFLICT", { approvalId, activityId: approval.activityId, status: current?.status ?? approval.status, message: `approval already decided (now ${current?.status ?? approval.status}); refresh before retrying` });
     }
     await store.update(approval.activityId, { status: "rejected", authorizationStatus: "denied_by_approver", error: "approval rejected by human" });
+    // #351: if a linked execution exists in requires_approval, mark it failed
+    const linkedExecution = await executionStore.getByApprovalId(approvalId);
+    if (linkedExecution && linkedExecution.status === "requires_approval") {
+      await executionStore.updateIfStatus(linkedExecution.id, "requires_approval", {
+        status: "failed",
+        error: "approval rejected by human",
+        completedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
     // #353: rejected approval will never execute — release the reservation
     // made when the intent was created.
     await releaseDecisionReservation(approval.agentId, approval.policyDecision);
@@ -2140,7 +2673,7 @@ export async function createApiServer(options: ServerOptions) {
     // fails closed when HOST is non-loopback and API_KEYS is unset.
     listen: (port: number, host: string = "127.0.0.1") =>
       new Promise<void>((resolve) => server.listen(port, host, resolve)),
-    close: (options?: { drainTimeoutMs?: number }) =>
+    close: (closeOptions?: { drainTimeoutMs?: number }) =>
       new Promise<void>((resolve, reject) => {
         // 1. Stop accepting new requests and prevent workers from claiming new work.
         if (scheduler) {
@@ -2185,7 +2718,24 @@ export async function createApiServer(options: ServerOptions) {
           resolve();
         };
 
-        const drainTimeout = options?.drainTimeoutMs;
+        const closeDatabase = () => {
+          try {
+            store.close?.();
+            approvals.close?.();
+            schedules.close?.();
+            agentStore.close?.();
+            policyConfigStore.close?.();
+            executionStore.close?.();
+            authModule?.close?.();
+            if (options.dbPath) {
+              closeSharedConnection(options.dbPath, true);
+            }
+          } catch (err) {
+            console.error("[database] error closing database:", err);
+          }
+        };
+
+        const drainTimeout = closeOptions?.drainTimeoutMs;
         if (drainTimeout !== undefined && drainTimeout > 0) {
           drainTimer = setTimeout(() => {
             if (completed) return;
@@ -2195,6 +2745,7 @@ export async function createApiServer(options: ServerOptions) {
             // 3. Force-close remaining connections and terminate outstanding work after timeout expires.
             server.closeAllConnections?.();
             executionQueue?.abortInFlight();
+            closeDatabase();
             const err = new Error(`Shutdown timeout of ${drainTimeout}ms exceeded — forcing exit`);
             err.name = "ShutdownTimeoutError";
             reject(err);
@@ -2209,10 +2760,12 @@ export async function createApiServer(options: ServerOptions) {
 
         Promise.all([httpClose, queueDrain])
           .then(() => {
+            closeDatabase();
             finish();
           })
           .catch((err) => {
             if (drainTimer) clearTimeout(drainTimer);
+            closeDatabase();
             reject(err);
           });
       }),
@@ -2404,8 +2957,27 @@ function parseIntent(body: unknown): AgentIntent {
         reason: b.reason,
       };
     }
-    case "contract_call":
-      throw new Error(`intent type '${b.type}' is not yet supported by the transaction pipeline`);
+    case "contract_call": {
+      if (typeof b.contractId !== "string" || b.contractId.trim().length === 0) {
+        throw new Error("contract_call.contractId is required");
+      }
+      if (typeof b.function !== "string" || b.function.trim().length === 0) {
+        throw new Error("contract_call.function is required");
+      }
+      if (b.args !== undefined && !Array.isArray(b.args)) {
+        throw new Error("contract_call.args must be an array");
+      }
+      if (typeof b.reason !== "string" || b.reason.trim().length === 0) {
+        throw new Error("contract_call.reason is required");
+      }
+      return {
+        type: "contract_call",
+        contractId: b.contractId,
+        function: b.function,
+        args: Array.isArray(b.args) ? b.args : [],
+        reason: b.reason,
+      };
+    }
     case "account_settings": {
       if (typeof b.setting !== "string" || b.setting.trim().length === 0) {
         throw new Error("account_settings.setting is required");

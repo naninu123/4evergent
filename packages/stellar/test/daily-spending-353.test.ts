@@ -15,6 +15,7 @@ import {
 } from "@4evergent/database";
 import { PolicyEngine } from "@4evergent/policy";
 import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
+import { toStroops, fromStroops } from "@4evergent/shared";
 import { StellarAdapter } from "@4evergent/agent-core";
 import { TransactionPipeline } from "../src/pipeline.js";
 import type { Signer } from "../src/signer.js";
@@ -92,8 +93,11 @@ function makeStores(backend: "InMemory" | "SQLite"): {
   };
 }
 
+// #374: the store holds integer stroops; convert back to a decimal XLM number
+// so the assertions keep their readable "300" form while verifying exact
+// round-trip storage.
 async function reserved(store: ActivityStore, agentId = "agent-1"): Promise<number> {
-  return (await store.getDailySpending(agentId, "XLM")) ?? 0;
+  return Number(fromStroops((await store.getDailySpending(agentId, "XLM")) ?? 0));
 }
 
 function mockInternals(
@@ -440,5 +444,72 @@ for (const backend of BACKENDS) {
     } finally {
       cleanup();
     }
+  });
+
+  test(`#373 [${backend}] executeApproved after UTC midnight charges the execution day and releases submission day`, async () => {
+    await withOfflineAccount(async () => {
+      const { activityStore, approvalStore, cleanup } = makeStores(backend);
+      try {
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const today = new Date();
+
+        // Simulate an approval created yesterday that reserved 300 XLM on yesterday's UTC row
+        await activityStore.reserveDailySpending("agent-1", "XLM", "300", "500", yesterday);
+        assert.equal(await activityStore.getDailySpending("agent-1", "XLM", yesterday), toStroops("300"));
+        assert.equal(await activityStore.getDailySpending("agent-1", "XLM", today) ?? 0, 0);
+
+        const decision: PolicyDecision = {
+          result: "requires_approval",
+          reason: "Requires human approval",
+          rule: "approvalThreshold",
+          intent: intent,
+          reservedDailySpending: { asset: "XLM", amount: "300" },
+        };
+        const activity = createActivity("agent-1", "owner-1", intent, decision);
+        activity.createdAt = yesterday.toISOString();
+        activity.updatedAt = yesterday.toISOString();
+        await activityStore.record(activity);
+
+        const approval = createApproval(activity.id, "agent-1", "owner-1", intent, decision, null);
+        approval.status = "approved";
+        approval.requestedAt = yesterday.toISOString();
+        approval.createdAt = yesterday.toISOString();
+        await approvalStore.record(approval);
+
+        const pipeline = new TransactionPipeline({
+          horizonUrl: HORIZON_URL,
+          networkPassphrase: PASSPHRASE,
+          signer: new TestSigner(),
+          activityStore,
+          approvalStore,
+          policyRules: POLICY_RULES,
+        });
+        mockInternals(pipeline);
+
+        // Execute today (after UTC midnight): should release yesterday's 300 and reserve 300 on today
+        const result = await pipeline.executeApproved(approval.id, "reviewer-1");
+        assert.equal(result.status, "submitted");
+        assert.equal(await activityStore.getDailySpending("agent-1", "XLM", yesterday) ?? 0, 0, "submission day reservation must be released");
+        assert.equal(await activityStore.getDailySpending("agent-1", "XLM", today), toStroops("300"), "execution day must be charged 300 XLM");
+
+        // A second cross-midnight approval of 300 XLM against the 500 XLM daily limit on today must be denied
+        await activityStore.reserveDailySpending("agent-1", "XLM", "300", "500", yesterday);
+        const activity2 = createActivity("agent-1", "owner-1", intent, decision);
+        activity2.createdAt = yesterday.toISOString();
+        await activityStore.record(activity2);
+        const approval2 = createApproval(activity2.id, "agent-1", "owner-1", intent, decision, null);
+        approval2.status = "approved";
+        approval2.requestedAt = yesterday.toISOString();
+        approval2.createdAt = yesterday.toISOString();
+        await approvalStore.record(approval2);
+
+        const result2 = await pipeline.executeApproved(approval2.id, "reviewer-1");
+        assert.equal(result2.status, "rejected");
+        assert.match(result2.message, /exceeds daily limit/);
+        assert.equal(await activityStore.getDailySpending("agent-1", "XLM", today), toStroops("300"), "today's spend must remain 300 XLM after denied second execution");
+      } finally {
+        cleanup();
+      }
+    });
   });
 }

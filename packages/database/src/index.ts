@@ -6,7 +6,20 @@ import type {
   SimulationResult,
   ScheduleStatus,
 } from "@4evergent/shared";
+import { toStroops } from "@4evergent/shared";
 import { clampOffset, clampLimit } from "./pagination.js";
+import {
+  idempotencyCutoff,
+  resolveIdempotencyWindowMs,
+  type ActivityStoreOptions,
+} from "./idempotency-window.js";
+
+export {
+  DEFAULT_IDEMPOTENCY_WINDOW_MS,
+  idempotencyCutoff,
+  resolveIdempotencyWindowMs,
+  type ActivityStoreOptions,
+} from "./idempotency-window.js";
 
 /**
  * ActivityStore — persistence interface for the transaction activity log.
@@ -19,14 +32,23 @@ import { clampOffset, clampLimit } from "./pagination.js";
 export interface ActivityStore {
   record(record: ActivityRecord): Promise<void>;
   get(id: string): Promise<ActivityRecord | null>;
-  listByAgent(agentId: string, limit?: number, offset?: number): Promise<ActivityRecord[]>;
+  /** List activity for an agent. `status` filters at the store level so that
+   *  `offset`/`limit` page over the FILTERED set, not the unfiltered one. */
+  listByAgent(agentId: string, limit?: number, offset?: number, status?: string): Promise<ActivityRecord[]>;
   listByStatus(agentId: string, status: string, limit?: number, offset?: number): Promise<ActivityRecord[]>;
   listAll(limit?: number, offset?: number): Promise<ActivityRecord[]>;
-  listByOwner(ownerId: string, limit?: number, offset?: number): Promise<ActivityRecord[]>;
+  /** List activity for an owner. `status` filters at the store level (see listByAgent). */
+  listByOwner(ownerId: string, limit?: number, offset?: number, status?: string): Promise<ActivityRecord[]>;
   getForOwner(id: string, ownerId: string): Promise<ActivityRecord | null>;
   update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null>;
   getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null>;
   recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }>;
+  /**
+   * #109: release the Idempotency-Key of at most `limit` activities created
+   * before `cutoff` (ISO-8601). Only the key is cleared; the activity record
+   * (the audit trail) is never deleted. Returns the number of keys released.
+   */
+  releaseExpiredIdempotencyKeys?(cutoff: string, limit?: number): Promise<number>;
   /** Atomically reserve daily spending. Returns true if reservation succeeded, false if limit would be exceeded. */
   reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now?: Date): Promise<boolean>;
   /**
@@ -37,10 +59,13 @@ export interface ActivityStore {
    * would free another intent's reservation.
    */
   releaseDailySpending(agentId: string, asset: string, amount: string, now?: Date): Promise<void>;
-  /** Get current day's total spent for an agent. */
+  /** Get current day's reserved total for an agent, in INTEGER STROOPS (#374),
+   *  or null when nothing is reserved. Convert to a decimal at the boundary
+   *  (`fromStroops`); the enforcement path compares these integers directly. */
   getDailySpending(agentId: string, asset: string, now?: Date): Promise<number | null>;
   /** Remove at most `limit` rows with a UTC day earlier than cutoffDay. */
   sweepDailySpending(cutoffDay: string, limit?: number): Promise<number>;
+  close?(): void;
 }
 
 /**
@@ -87,6 +112,7 @@ export interface ApprovalStore {
    * Returns the count of transitioned records.
    */
   sweepExpired(now?: string, limit?: number, onSwept?: (record: ApprovalRecord) => void | Promise<void>): Promise<number>;
+  close?(): void;
 }
 
 export type ApprovalStatus =
@@ -130,10 +156,19 @@ export interface ApprovalRecord {
  */
 export class InMemoryActivityStore implements ActivityStore {
   private records = new Map<string, ActivityRecord>();
+  /** #374: values are INTEGER stroops (1 XLM = 10^7 stroops), not decimal XLM. */
   private dailySpending = new Map<string, number>();
   private idempotencyLock: Promise<unknown> = Promise.resolve();
   /** Serializes daily-spending check+commit per store instance (atomicity). */
   private dailySpendingLock: Promise<unknown> = Promise.resolve();
+  /** #109: Idempotency-Key replay window. */
+  readonly idempotencyWindowMs: number;
+  private readonly now: () => number;
+
+  constructor(options: ActivityStoreOptions = {}) {
+    this.idempotencyWindowMs = resolveIdempotencyWindowMs(options.idempotencyWindowMs);
+    this.now = options.now ?? Date.now;
+  }
 
   async record(record: ActivityRecord): Promise<void> {
     this.records.set(record.id, record);
@@ -143,9 +178,9 @@ export class InMemoryActivityStore implements ActivityStore {
     return this.records.get(id) ?? null;
   }
 
-  async listByAgent(agentId: string, limit = 50, offset = 0): Promise<ActivityRecord[]> {
+  async listByAgent(agentId: string, limit = 50, offset = 0, status?: string): Promise<ActivityRecord[]> {
     return [...this.records.values()]
-      .filter((r) => r.agentId === agentId)
+      .filter((r) => r.agentId === agentId && (status === undefined || r.status === status))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(clampOffset(offset), clampOffset(offset) + clampLimit(limit));
   }
@@ -163,9 +198,9 @@ export class InMemoryActivityStore implements ActivityStore {
       .slice(clampOffset(offset), clampOffset(offset) + clampLimit(limit));
   }
 
-  async listByOwner(ownerId: string, limit = 50, offset = 0): Promise<ActivityRecord[]> {
+  async listByOwner(ownerId: string, limit = 50, offset = 0, status?: string): Promise<ActivityRecord[]> {
     return [...this.records.values()]
-      .filter((r) => r.ownerId === ownerId)
+      .filter((r) => r.ownerId === ownerId && (status === undefined || r.status === status))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(clampOffset(offset), clampOffset(offset) + clampLimit(limit));
   }
@@ -175,13 +210,40 @@ export class InMemoryActivityStore implements ActivityStore {
     return rec?.ownerId === ownerId ? rec : null;
   }
 
+  /**
+   * #109: only a key bound to an activity created inside the replay window
+   * is returned. An older binding no longer suppresses a new request.
+   */
   async getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null> {
+    const cutoff = idempotencyCutoff(this.now(), this.idempotencyWindowMs);
     for (const rec of this.records.values()) {
-      if (rec.ownerId === ownerId && rec.agentId === agentId && rec.idempotencyKey === key) {
+      if (rec.ownerId === ownerId && rec.agentId === agentId && rec.idempotencyKey === key && rec.createdAt >= cutoff) {
         return rec;
       }
     }
     return null;
+  }
+
+  async releaseExpiredIdempotencyKeys(cutoff: string, limit = 500): Promise<number> {
+    let released = 0;
+    for (const rec of this.records.values()) {
+      if (released >= limit) break;
+      if (rec.idempotencyKey && rec.createdAt < cutoff) {
+        rec.idempotencyKey = null;
+        released++;
+      }
+    }
+    return released;
+  }
+
+  /** Clear the key of an expired binding so the key can be bound again (#109). */
+  private releaseExpiredBinding(ownerId: string, agentId: string, key: string): void {
+    const cutoff = idempotencyCutoff(this.now(), this.idempotencyWindowMs);
+    for (const rec of this.records.values()) {
+      if (rec.ownerId === ownerId && rec.agentId === agentId && rec.idempotencyKey === key && rec.createdAt < cutoff) {
+        rec.idempotencyKey = null;
+      }
+    }
   }
 
   /**
@@ -195,6 +257,7 @@ export class InMemoryActivityStore implements ActivityStore {
     const result = this.idempotencyLock.then(async () => {
       const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
       if (existing) return { record: existing, created: false };
+      this.releaseExpiredBinding(record.ownerId, record.agentId, key);
       record.idempotencyKey = key;
       this.records.set(record.id, record);
       return { record, created: true };
@@ -205,9 +268,13 @@ export class InMemoryActivityStore implements ActivityStore {
   }
 
   async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string, now = new Date()): Promise<boolean> {
-    const amountNum = parseFloat(amount);
-    const limitNum = parseFloat(limit);
-    if (isNaN(amountNum) || isNaN(limitNum)) return false;
+    // #374: compare integer stroops, not REAL XLM. Float addition drifts the
+    // ledger and falsely denies exact-limit intents; integer stroops compare
+    // exactly to the stroop. A non-canonical amount/limit (null from
+    // toStroops) is rejected, matching the strict parser (#264).
+    const amountStroops = toStroops(amount);
+    const limitStroops = toStroops(limit);
+    if (amountStroops === null || limitStroops === null) return false;
 
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
       .toISOString()
@@ -221,14 +288,19 @@ export class InMemoryActivityStore implements ActivityStore {
     // achieves the same via a conditional UPDATE.
     const result = this.dailySpendingLock.then(() => {
       const current = this.dailySpending.get(mapKey) ?? 0;
-      if (current + amountNum > limitNum) return false;
-      this.dailySpending.set(mapKey, current + amountNum);
+      if (current + amountStroops > limitStroops) return false;
+      this.dailySpending.set(mapKey, current + amountStroops);
       return true;
     });
     this.dailySpendingLock = result.catch(() => undefined);
     return result;
   }
 
+  /**
+   * #374: returns the current UTC day's reserved total in INTEGER STROOPS,
+   * or null when nothing is reserved. Convert to a decimal at the boundary;
+   * the enforcement path compares these integers directly.
+   */
   async getDailySpending(agentId: string, asset: string, now = new Date()): Promise<number | null> {
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
       .toISOString().slice(0, 10);
@@ -237,8 +309,9 @@ export class InMemoryActivityStore implements ActivityStore {
   }
 
   async releaseDailySpending(agentId: string, asset: string, amount: string, now = new Date()): Promise<void> {
-    const amountNum = parseFloat(amount);
-    if (isNaN(amountNum) || amountNum <= 0) return;
+    // #374: release integer stroops, matching the reservation unit.
+    const amountStroops = toStroops(amount);
+    if (amountStroops === null || amountStroops <= 0) return;
 
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
       .toISOString()
@@ -253,7 +326,7 @@ export class InMemoryActivityStore implements ActivityStore {
     // intent's reservation beyond zeroing this key.
     const result = this.dailySpendingLock.then(() => {
       const current = this.dailySpending.get(mapKey) ?? 0;
-      const next = current - amountNum;
+      const next = current - amountStroops;
       if (next <= 0) this.dailySpending.delete(mapKey);
       else this.dailySpending.set(mapKey, next);
     });
@@ -282,6 +355,8 @@ export class InMemoryActivityStore implements ActivityStore {
     this.records.set(id, updated);
     return updated;
   }
+
+  close(): void {}
 }
 
 function isApprovalRecordExpired(r: ApprovalRecord, now: string): boolean {
@@ -420,6 +495,8 @@ export class InMemoryApprovalStore implements ApprovalStore {
     }
     return count;
   }
+
+  close(): void {}
 }
 
 /**
@@ -446,7 +523,7 @@ export function createActivity(
   agentId: string,
   ownerId: string,
   intent: AgentIntent,
-  policyDecision: PolicyDecision,
+  policyDecision?: PolicyDecision | null,
   idempotencyKey?: string | null
 ): ActivityRecord {
   const now = new Date().toISOString();
@@ -456,7 +533,7 @@ export function createActivity(
     ownerId,
     idempotencyKey,
     intent,
-    policyDecision,
+    policyDecision: policyDecision ?? null,
     authorizationStatus: null,
     simulationResult: null,
     txHash: null,
@@ -557,7 +634,7 @@ export { getAllowedPreviousAgentStatuses } from "./agent-types.js";
 export type { AgentStore, AgentStatusTransitionResult, CreateAgentInput } from "./agent-types.js";
 
 // Policy configuration stores (Phase 28A)
-export { SQLitePolicyConfigStore } from "./policy-config-store.js";
+export { CorruptPolicyConfigError, SQLitePolicyConfigStore } from "./policy-config-store.js";
 export { InMemoryPolicyConfigStore } from "./in-memory-policy-config-store.js";
 export type { PolicyConfigStore } from "./policy-config-store.js";
 
@@ -582,11 +659,14 @@ export type { AuthorizationContext } from "./authorization.js";
 
 // Shared SQLite connection
 export {
+  EXPECTED_SCHEMA_VERSION,
+  runSchemaMigrations,
   getSharedConnection,
   getSchemaVersion,
   setSchemaVersion,
   closeSharedConnection,
   closeAllSharedConnections,
+  getSharedConnectionRefCount,
 } from "./shared-connection.js";
 
 // Pagination bounds (shared by every list* store method)

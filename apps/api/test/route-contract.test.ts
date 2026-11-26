@@ -122,6 +122,21 @@ const ROUTES: RouteContract[] = [
     sample: (ids) => ({ path: `/agents/${ids.agentId}` }),
   },
   {
+    method: "PATCH",
+    path: "/agents/:id",
+    auth: "protected",
+    status: 200,
+    keys: ["agent"],
+    sample: (ids) => ({
+      path: `/agents/${ids.agentId}`,
+      init: {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: "contract update" }),
+      },
+    }),
+  },
+  {
     method: "GET",
     path: "/agents/:id/policy",
     auth: "protected",

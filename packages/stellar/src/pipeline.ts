@@ -5,16 +5,20 @@ import type { Signer } from "./signer.js";
 import { PolicyEngine } from "@4evergent/policy";
 import { IntentValidator } from "@4evergent/agent-core";
 import { StellarAdapter } from "@4evergent/agent-core";
-import type { AgentIntent, AccountSettingsIntent, PolicyDecision, PolicyRules, ActivityRecord } from "@4evergent/shared";
+import type { AgentIntent, AccountSettingsIntent, ContractCallIntent, PolicyDecision, PolicyRules, ActivityRecord, AgentStatus } from "@4evergent/shared";
+import type { rpc } from "@stellar/stellar-sdk";
 import {
   createActivity,
   createApproval,
   type ActivityStore,
   type ApprovalStore,
+  type AgentStore,
 } from "@4evergent/database";
 
 export interface PipelineOptions {
   horizonUrl: string;
+  sorobanRpcUrl?: string;
+  sorobanServer?: rpc.Server;
   networkPassphrase: string;
   signer: Signer;
   activityStore?: ActivityStore;
@@ -26,6 +30,9 @@ export interface PipelineOptions {
   baseFeeStroops?: string;
   /** Shared policy resolver. When provided, pipeline resolves per-agent rules at execution time. */
   policyResolver?: (agentId: string) => Promise<PolicyRules>;
+  /** Optional agent resolver or agent store to check agent status before executing. */
+  agentResolver?: (agentId: string) => Promise<{ status: AgentStatus } | null | undefined>;
+  agentStore?: AgentStore;
 }
 
 export interface PipelineExecuteInput {
@@ -70,12 +77,17 @@ export class TransactionPipeline {
   private approvalTtlSeconds: number;
   private horizonUrl: string;
   private policyResolver?: (agentId: string) => Promise<PolicyRules>;
+  private agentResolver?: (agentId: string) => Promise<{ status: AgentStatus } | null | undefined>;
 
   constructor(options: PipelineOptions) {
     this.builder = new StellarTransactionBuilder(
       options.baseFeeStroops !== undefined ? { baseFeeStroops: options.baseFeeStroops } : {}
     );
-    this.simulator = new StellarSimulator(options.horizonUrl);
+    this.simulator = new StellarSimulator(
+      options.horizonUrl,
+      undefined,
+      options.sorobanServer ?? options.sorobanRpcUrl
+    );
     this.submitter = new StellarSubmitter(options.horizonUrl);
     this.signer = options.signer;
     this.horizonUrl = options.horizonUrl;
@@ -83,6 +95,11 @@ export class TransactionPipeline {
     this.approvalStore = options.approvalStore;
     this.approvalTtlSeconds = options.approvalTtlSeconds ?? 86400;
     this.policyResolver = options.policyResolver;
+    if (options.agentResolver) {
+      this.agentResolver = options.agentResolver;
+    } else if (options.agentStore) {
+      this.agentResolver = (agentId: string) => options.agentStore!.get(agentId);
+    }
     // PolicyEngine uses getRules callback for per-agent resolution; falls back to defaultRules
     this.policy = new PolicyEngine(options.policyRules, options.activityStore as any, options.policyResolver);
   }
@@ -111,6 +128,23 @@ export class TransactionPipeline {
 
     const agentId = (sourceAccount as any)?.agentId ?? (sourceAccount as any)?.accountId?.() ?? "unknown";
     const ownerId = (sourceAccount as any)?.ownerId ?? "unknown";
+
+    if (this.agentResolver) {
+      const agent = await this.agentResolver(agentId);
+      if (agent && agent.status !== "active") {
+        const agentStatus = agent.status;
+        if (input.policyDecision) {
+          await this.releaseReservation(agentId, input.policyDecision);
+        }
+        return {
+          status: "rejected",
+          message: `Agent is ${agentStatus}; cannot execute intent`,
+          policyDecision: { result: "deny", reason: `agent is ${agentStatus}`, rule: "agent_status", intent },
+          simulationResult: null,
+          activityId,
+        };
+      }
+    }
     // #353: single evaluation per submission. A caller-supplied decision is
     // used as-is (its evaluation already reserved once); otherwise evaluate
     // once here. Never both.
@@ -195,6 +229,19 @@ export class TransactionPipeline {
             approvalId,
           };
         }
+        // #351: deduplicate on existing pending approval for this activity (e.g. schedule re-run)
+        const existingApprovalId = await this.findApprovalIdForActivity(agentId, persisted.activityId);
+        if (existingApprovalId) {
+          await this.releaseReservation(agentId, decision);
+          return {
+            status: "requires_approval",
+            message: decision.reason,
+            policyDecision: decision,
+            simulationResult: null,
+            activityId: persisted.activityId,
+            approvalId: existingApprovalId,
+          };
+        }
         const expiresAt = new Date(Date.now() + this.approvalTtlSeconds * 1000).toISOString();
         const approval = createApproval(persisted.activityId, agentId, ownerId, intent, decision, expiresAt);
         await this.approvalStore.record(approval);
@@ -219,7 +266,9 @@ export class TransactionPipeline {
 
     let tx;
     try {
-      if (intent.type === "trustline") {
+      if (intent.type === "contract_call") {
+        tx = await this.builder.buildContractCall(sourceAccount, intent as ContractCallIntent, this.signer.getNetworkPassphrase());
+      } else if (intent.type === "trustline") {
         tx = await this.builder.buildTrustline(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
       } else if (intent.type === "account_settings") {
         tx = await this.builder.buildAccountSettings(sourceAccount, intent as AccountSettingsIntent, this.signer.getNetworkPassphrase());
@@ -265,6 +314,10 @@ export class TransactionPipeline {
         simulationResult: simResult,
         activityId: persisted.activityId,
       };
+    }
+
+    if ((simResult as any).assembledTransaction) {
+      tx = (simResult as any).assembledTransaction;
     }
 
     checkAbort();
@@ -421,6 +474,31 @@ export class TransactionPipeline {
       };
     }
 
+    // Incident-response boundary: verify agent is active before execution.
+    // An agent paused or disabled after approval must not have its approved intent executed.
+    if (this.agentResolver) {
+      const agent = await this.agentResolver(approval.agentId);
+      if (agent && agent.status !== "active") {
+        const agentStatus = agent.status;
+        const reason = `Agent is ${agentStatus}; approved intent cannot be executed`;
+        await this.approvalStore.update(approvalId, { status: "failed", error: reason });
+        if (approval.activityId) {
+          const existing = await this.activityStore.get(approval.activityId);
+          if (existing) {
+            await this.activityStore.update(approval.activityId, { status: "failed", error: reason });
+          }
+        }
+        await this.releaseApprovalReservation(approval);
+        return {
+          status: "rejected",
+          message: reason,
+          policyDecision: { result: "deny", reason: `agent is ${agentStatus}`, rule: "agent_status", intent: approval.intent },
+          simulationResult: null,
+          activityId: approval.activityId,
+        };
+      }
+    }
+
     // CRITICAL: Re-evaluate CURRENT policy at execution time.
     // Approval does NOT grant a bypass — if policy was tightened since approval,
     // the intent must be denied.
@@ -437,7 +515,32 @@ export class TransactionPipeline {
     // approval the operator may already have acted on and risks a duplicate
     // submission. The deny/allowlist reason is stored in approval.error and
     // the linked activity error so it surfaces in the API response.
-    const currentDecision = await this.policy.evaluate(approval.intent, approval.agentId, { skipReservation: true, skipApprovalThreshold: true });
+    // #373: When an approval is executed on a later UTC day than it was created,
+    // the submission day's reservation must be released and the execution day's
+    // daily limit must be atomically checked and reserved.
+    const execNow = new Date();
+    const executionDay = new Date(Date.UTC(execNow.getUTCFullYear(), execNow.getUTCMonth(), execNow.getUTCDate()))
+      .toISOString()
+      .slice(0, 10);
+    const submissionTimestamp = approval.requestedAt || approval.createdAt;
+    const submissionDate = submissionTimestamp ? new Date(submissionTimestamp) : execNow;
+    const submissionDay = new Date(Date.UTC(submissionDate.getUTCFullYear(), submissionDate.getUTCMonth(), submissionDate.getUTCDate()))
+      .toISOString()
+      .slice(0, 10);
+    const crossedMidnight = submissionDay !== executionDay;
+
+    if (crossedMidnight) {
+      await this.releaseApprovalReservation(approval, submissionDate);
+    }
+
+    const currentDecision = await this.policy.evaluate(approval.intent, approval.agentId, {
+      skipReservation: !crossedMidnight,
+      skipApprovalThreshold: true,
+    });
+    if (crossedMidnight && currentDecision.reservedDailySpending) {
+      approval.policyDecision = currentDecision;
+      approval.requestedAt = execNow.toISOString();
+    }
     if (currentDecision.result !== "allow") {
       const reason = `Policy re-evaluation did not allow execution: ${currentDecision.reason} (rule: ${currentDecision.rule})`;
       await this.approvalStore.update(approvalId, { status: "failed", error: reason });
@@ -447,9 +550,11 @@ export class TransactionPipeline {
           await this.activityStore.update(approval.activityId, { status: "failed", error: reason });
         }
       }
-      // #353: failed approval will never execute — release the reservation
-      // made when the intent was created.
-      await this.releaseApprovalReservation(approval);
+      // #353 / #373: failed approval will never execute — release any active
+      // reservation (on the same day if not crossed, or if currentDecision reserved).
+      if (!crossedMidnight || currentDecision.reservedDailySpending) {
+        await this.releaseApprovalReservation(approval);
+      }
       return {
         status: "rejected",
         message: reason,
@@ -476,6 +581,7 @@ export class TransactionPipeline {
       };
     } catch (e: any) {
       await this.approvalStore.update(approvalId, { status: "failed", error: e.message });
+      await this.updateLinkedActivity(approval.activityId, { status: "failed", error: e.message });
       // #353: source account unloadable — execution cannot proceed, release.
       await this.releaseApprovalReservation(approval);
       return {
@@ -489,7 +595,9 @@ export class TransactionPipeline {
 
     let tx;
     try {
-      if (intent.type === "account_settings") {
+      if (intent.type === "contract_call") {
+        tx = await this.builder.buildContractCall(sourceAccount, intent as ContractCallIntent, this.signer.getNetworkPassphrase());
+      } else if (intent.type === "account_settings") {
         tx = await this.builder.buildAccountSettings(sourceAccount, intent as AccountSettingsIntent, this.signer.getNetworkPassphrase());
       } else {
         tx = await this.builder.buildPayment(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
@@ -499,6 +607,7 @@ export class TransactionPipeline {
         throw e;
       }
       await this.approvalStore.update(approvalId, { status: "failed", error: e.message });
+      await this.updateLinkedActivity(approval.activityId, { status: "failed", error: e.message });
       // #353: construction failed — release the creation-time reservation.
       await this.releaseApprovalReservation(approval);
       return {
@@ -513,16 +622,27 @@ export class TransactionPipeline {
     checkAbort();
     const simResult = await this.simulator.simulate(tx);
     if (!simResult.success) {
-      await this.approvalStore.update(approvalId, { status: "failed", error: simResult.error ?? "Simulation failed" });
+      const simError = simResult.error ?? "Simulation failed";
+      await this.approvalStore.update(approvalId, { status: "failed", error: simError });
+      await this.updateLinkedActivity(approval.activityId, {
+        status: "failed",
+        authorizationStatus: "denied_by_simulation",
+        error: simError,
+        simulationResult: simResult,
+      });
       // #353: simulation failed — release the creation-time reservation.
       await this.releaseApprovalReservation(approval);
       return {
         status: "simulation_failed",
-        message: simResult.error ?? "Simulation failed",
+        message: simError,
         policyDecision: { result: "deny", reason: "simulation", rule: "approval", intent },
         simulationResult: simResult,
         activityId: approval.activityId,
       };
+    }
+
+    if ((simResult as any).assembledTransaction) {
+      tx = (simResult as any).assembledTransaction;
     }
 
     checkAbort();
@@ -534,6 +654,7 @@ export class TransactionPipeline {
         throw e;
       }
       await this.approvalStore.update(approvalId, { status: "failed", error: e.message });
+      await this.updateLinkedActivity(approval.activityId, { status: "failed", error: e.message });
       // #353: signing failed — release the creation-time reservation.
       await this.releaseApprovalReservation(approval);
       return {
@@ -588,6 +709,12 @@ export class TransactionPipeline {
         throw e;
       }
       await this.approvalStore.update(approvalId, { status: "failed", error: e.message, txHash: preSubmitHash });
+      await this.updateLinkedActivity(approval.activityId, {
+        status: "failed",
+        error: e.message,
+        txHash: preSubmitHash,
+        simulationResult: simResult,
+      });
       // #353: submission failed — release the creation-time reservation.
       await this.releaseApprovalReservation(approval);
       return {
@@ -602,6 +729,26 @@ export class TransactionPipeline {
   }
 
   /**
+   * Best-effort update of the linked activity record for an approved execution (#291).
+   * Never throws on a missing activity record or store error so it cannot alter
+   * the returned PipelineOutcome.
+   */
+  private async updateLinkedActivity(
+    activityId: string | undefined,
+    patch: Partial<ActivityRecord>,
+  ): Promise<void> {
+    if (!activityId || !this.activityStore) return;
+    try {
+      const existing = await this.activityStore.get(activityId);
+      if (existing) {
+        await this.activityStore.update(activityId, patch);
+      }
+    } catch {
+      // Best-effort bookkeeping — must never alter the returned outcome.
+    }
+  }
+
+  /**
    * Release the daily-spending reservation recorded on a decision (#353).
    * No-op when the decision reserved nothing (deny, skipReservation
    * re-check, pre-#353 decision) or the store cannot release. A release
@@ -611,22 +758,29 @@ export class TransactionPipeline {
    * an unknown state (the transaction may have landed), so the reservation
    * is conservatively kept.
    */
-  private async releaseReservation(agentId: string, decision: PolicyDecision | null | undefined): Promise<void> {
+  private async releaseReservation(agentId: string, decision: PolicyDecision | null | undefined, atDate?: Date): Promise<void> {
     const reserved = decision?.reservedDailySpending;
     if (!reserved || !this.activityStore?.releaseDailySpending) return;
     try {
-      await this.activityStore.releaseDailySpending(agentId, reserved.asset, reserved.amount);
+      await this.activityStore.releaseDailySpending(agentId, reserved.asset, reserved.amount, atDate);
     } catch {
       // Best-effort bookkeeping — see above.
     }
   }
 
   /** Release the reservation made when the approval's intent was created. */
-  private async releaseApprovalReservation(approval: {
-    agentId: string;
-    policyDecision: PolicyDecision;
-  }): Promise<void> {
-    await this.releaseReservation(approval.agentId, approval.policyDecision);
+  private async releaseApprovalReservation(
+    approval: {
+      agentId: string;
+      policyDecision: PolicyDecision;
+      requestedAt?: string;
+      createdAt?: string;
+    },
+    atDate?: Date
+  ): Promise<void> {
+    const ts = approval.requestedAt || approval.createdAt;
+    const effectiveDate = atDate ?? (ts ? new Date(ts) : undefined);
+    await this.releaseReservation(approval.agentId, approval.policyDecision, effectiveDate);
   }
 
   /**
@@ -637,12 +791,18 @@ export class TransactionPipeline {
    */
   private async outcomeFromRecord(winner: ActivityRecord): Promise<PipelineOutcome> {
     const fallbackSim = { success: true, fee: "100", operations: 1, warnings: [] };
+    const decision: PolicyDecision = winner.policyDecision ?? {
+      result: "allow",
+      reason: "replayed",
+      rule: "idempotency",
+      intent: winner.intent,
+    };
     switch (winner.status) {
       case "submitted":
         return {
           status: "submitted",
           message: `Transaction submitted: ${winner.txHash ?? "unknown"}`,
-          policyDecision: winner.policyDecision,
+          policyDecision: decision,
           simulationResult: (winner.simulationResult ?? fallbackSim) as SimulationLike,
           txHash: winner.txHash ?? "",
           activityId: winner.id,
@@ -652,8 +812,8 @@ export class TransactionPipeline {
         const approvalId = await this.findApprovalIdForActivity(winner.agentId, winner.id);
         return {
           status: "requires_approval",
-          message: winner.policyDecision.reason,
-          policyDecision: winner.policyDecision,
+          message: decision.reason,
+          policyDecision: decision,
           simulationResult: null,
           activityId: winner.id,
           approvalId,
@@ -664,7 +824,7 @@ export class TransactionPipeline {
           return {
             status: "simulation_failed",
             message: winner.error ?? "Simulation failed",
-            policyDecision: winner.policyDecision,
+            policyDecision: decision,
             simulationResult: (winner.simulationResult ?? fallbackSim) as SimulationLike,
             activityId: winner.id,
           };
@@ -672,7 +832,7 @@ export class TransactionPipeline {
         return {
           status: "rejected",
           message: winner.error ?? "Execution failed",
-          policyDecision: winner.policyDecision,
+          policyDecision: decision,
           simulationResult: winner.simulationResult as SimulationLike | null,
           txHash: winner.txHash,
           activityId: winner.id,
@@ -680,8 +840,8 @@ export class TransactionPipeline {
       default:
         return {
           status: "rejected",
-          message: winner.error ?? winner.policyDecision.reason,
-          policyDecision: winner.policyDecision,
+          message: winner.error ?? decision.reason,
+          policyDecision: decision,
           simulationResult: winner.simulationResult as SimulationLike | null,
           txHash: winner.txHash,
           activityId: winner.id,
@@ -722,6 +882,7 @@ export class TransactionPipeline {
     if (existingActivityId) {
       await this.activityStore.update(existingActivityId, {
         status: record.status,
+        policyDecision: record.policyDecision,
         authorizationStatus: record.authorizationStatus,
         error: record.error,
         txHash: record.txHash,

@@ -177,7 +177,7 @@ pnpm --filter @4evergent/api dev
 pnpm --filter @4evergent/web dev
 ```
 
-The dashboard connects to `http://localhost:3000`. Set `VITE_API_BASE` env var to point to a different API URL. The local development dashboard shows agent activity and lets operators review approvals and submit XLM payment intents. Rejecting an approval or deleting a recurring schedule opens a confirmation dialog. Choose Cancel or press Escape to keep the record. All policy enforcement, signing, and submission remain server-side.
+The dashboard connects to `http://localhost:3000`. Set `VITE_API_BASE` env var to point to a different API URL. Dashboard requests time out after 10 seconds by default. Set `VITE_API_TIMEOUT_MS` to a positive integer in milliseconds to change the deadline. The local development dashboard shows agent activity and lets operators review approvals and submit XLM payment intents. Rejecting an approval or deleting a recurring schedule opens a confirmation dialog. Choose Cancel or press Escape to keep the record. All policy enforcement, signing, and submission remain server-side.
 
 Each package has its own `package.json` with `build`, `dev`, `test`, and `typecheck` scripts.
 
@@ -227,7 +227,7 @@ curl -X POST http://localhost:3000/agents/<agent-id>/schedules/<schedule-id>/res
 curl -X POST http://localhost:3000/agents/<agent-id>/schedules/<schedule-id>/disable
 ```
 
-Schedules are stored in SQLite (when `dbPath` is configured) or in-memory. The scheduler polls every 60 seconds by default. Failed schedules do not stop the scheduler. The scheduler, execution queue and reconciliation worker intervals are configurable via `SCHEDULER_INTERVAL_MS`, `EXECUTION_QUEUE_INTERVAL_MS` (default 10s) and `RECONCILIATION_INTERVAL_MS` (default 30s); see [docs/testnet.md](docs/testnet.md#worker-intervals).
+Schedules are stored in SQLite (when `dbPath` is configured) or in-memory. The scheduler polls every 60 seconds by default. Failed schedules do not stop the scheduler. The scheduler (`SCHEDULER_INTERVAL_MS`, default 60s; opt-in via `SCHEDULER_ENABLED=1`), execution queue (`EXECUTION_QUEUE_INTERVAL_MS`, default 10s; always enabled in `server.ts`), and reconciliation worker (`RECONCILIATION_INTERVAL_MS`, default 30s; always enabled in `server.ts`) intervals are configurable via environment variables — note that the reconciler and execution queue contact Horizon when work is pending, so lowering their intervals increases external Horizon load; see `.env.example` ("Background workers") and [docs/testnet.md](docs/testnet.md#worker-intervals).
 
 ### Missed runs
 
@@ -266,7 +266,7 @@ export FOREGENT_API_KEY=your-api-key
 4evergent health
 4evergent agent list
 4evergent agent pause <id>
-4evergent approval list
+4evergent approval list --status pending_approval --limit 10
 4evergent approval approve <id>
 4evergent execution list
 4evergent policy get <agent-id>

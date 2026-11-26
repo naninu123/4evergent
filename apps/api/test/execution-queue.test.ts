@@ -804,7 +804,7 @@ test("ExecutionQueue: fail() pre-check consults the current attempt's hash, not 
         consultedHashes.push(txHash);
         // The OLD hash was found on-chain (previous attempt); the CURRENT
         // attempt's hash was never submitted.
-        return txHash === "old-hash" ? "found" : "not_found";
+        return txHash === "old-hash" ? "confirmed" : "not_found";
       },
     }
   );

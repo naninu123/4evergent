@@ -1,4 +1,5 @@
 import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
+import { toStroops, fromStroops } from "@4evergent/shared";
 import { type PolicyRules } from "./types.js";
 import { normalizePolicyRules } from "./validation.js";
 import { parseStrictAmount } from "./amount.js";
@@ -47,7 +48,7 @@ export interface EvaluateOptions {
 export class PolicyEngine {
   private defaultRules: PolicyRules;
   private activityStore?: {
-    listByAgent: (agentId: string, limit?: number) => Promise<ActivityRecord[]>;
+    listByAgent: (agentId: string, limit?: number, offset?: number) => Promise<ActivityRecord[]>;
     reserveDailySpending?: (agentId: string, asset: string, amount: string, limit: string) => Promise<boolean>;
     releaseDailySpending?: (agentId: string, asset: string, amount: string) => Promise<void>;
     /** Reservation-table total for the current UTC day (single source of "spent", #353). */
@@ -58,7 +59,7 @@ export class PolicyEngine {
   constructor(
     rules?: Partial<PolicyRules>,
     activityStore?: {
-      listByAgent: (agentId: string, limit?: number) => Promise<ActivityRecord[]>;
+      listByAgent: (agentId: string, limit?: number, offset?: number) => Promise<ActivityRecord[]>;
       reserveDailySpending?: (agentId: string, asset: string, amount: string, limit: string) => Promise<boolean>;
       releaseDailySpending?: (agentId: string, asset: string, amount: string) => Promise<void>;
       getDailySpending?: (agentId: string, asset: string, now?: Date) => Promise<number | null>;
@@ -184,16 +185,27 @@ export class PolicyEngine {
     // 6. Daily spending limit (requires persisted activity data)
     // This is the ONLY step that reserves: one evaluate() = at most one
     // reservation, and only for intents that passed every deny check above.
+    //
+    // #374: integer stroops everywhere on this path — no float arithmetic,
+    // so an exact-limit intent (0.1 + 0.2 == 0.3) is allowed and stored totals
+    // never drift. getReservedTotal/getDailySpent return stroops; the limit
+    // is parsed once to stroops and compared as an integer. Enforcement and
+    // the approval-time re-check therefore agree at the boundary because they
+    // use the same integer arithmetic over the same source of truth.
     if (amountStr !== null && this.activityStore) {
       const dailyLimit = rules.dailySpendingLimit[asset] ?? rules.dailySpendingLimit["native"];
       if (dailyLimit) {
+        // amountStr already passed the strict parser at step 0, so it is a
+        // canonical decimal and toStroops is non-null; derive once.
+        const amountStroops = toStroops(amountStr);
+        // A malformed limit can only come from rules that bypassed
+        // validatePolicyRules; toStroops returns null and we fall back to
+        // "unenforceable" (skip the check), exactly as the old parseFloat-NaN
+        // path behaved. The reserve path below still denies via the store.
+        const limitStroops = toStroops(dailyLimit);
         if (options?.skipReservation) {
           // Skip reservation but still check the limit (read-only).
           // Used by executeApproved to verify tightened policy without double-reserving.
-          // A malformed limit can only come from rules that bypassed
-          // validatePolicyRules; fall back to NaN so the comparison is
-          // false, exactly as the old parseFloat path behaved.
-          const limitNum = parseStrictAmount(dailyLimit) ?? Number.NaN;
           // #353: read the reservation table (the same source the spending
           // endpoint reports), NOT the submitted-activity sum. The table
           // already includes this intent's own reservation from creation
@@ -202,22 +214,23 @@ export class PolicyEngine {
           // below the reserved total, deny.
           const reservedTotal = await this.getReservedTotal(asset, agentId);
           if (reservedTotal !== null) {
-            if (reservedTotal > limitNum) {
+            if (limitStroops !== null && reservedTotal > limitStroops) {
               return decide(
                 "deny",
-                `Amount ${amountStr} ${asset} exceeds daily limit: reserved ${reservedTotal.toFixed(7)}, limit ${limitNum}`,
+                `Amount ${amountStr} ${asset} exceeds daily limit: reserved ${fromStroops(reservedTotal)}, limit ${fromStroops(limitStroops)}`,
                 "dailySpendingLimit"
               );
             }
           } else {
             // Store cannot report reservations (e.g. a minimal test double):
-            // fall back to the pre-#353 submitted-activity check.
+            // fall back to the pre-#353 submitted-activity check, summed in
+            // stroops (#374) so the two paths agree at the boundary.
             const spent = await this.getDailySpent(asset, agentId);
-            const remaining = limitNum - spent;
-            if ((amountNum as number) > remaining) {
+            const remaining = limitStroops === null ? Number.NaN : limitStroops - spent;
+            if (limitStroops !== null && amountStroops !== null && amountStroops > remaining) {
               return decide(
                 "deny",
-                `Amount ${amountStr} ${asset} exceeds daily limit: spent ${spent.toFixed(7)}, limit ${limitNum}, remaining ${remaining.toFixed(7)}`,
+                `Amount ${amountStr} ${asset} exceeds daily limit: spent ${fromStroops(spent)}, limit ${fromStroops(limitStroops)}, remaining ${fromStroops(Math.max(remaining, 0))}`,
                 "dailySpendingLimit"
               );
             }
@@ -236,13 +249,12 @@ export class PolicyEngine {
           reserved = { asset, amount: amountStr };
         } else {
           const spent = await this.getDailySpent(asset, agentId);
-          // See the skipReservation branch above for the NaN fallback.
-          const limitNum = parseStrictAmount(dailyLimit) ?? Number.NaN;
-          const remaining = limitNum - spent;
-          if ((amountNum as number) > remaining) {
+          // See the skipReservation branch above for the null/unenforceable fallback.
+          const remaining = limitStroops === null ? Number.NaN : limitStroops - spent;
+          if (limitStroops !== null && amountStroops !== null && amountStroops > remaining) {
             return decide(
               "deny",
-              `Amount ${amountStr} ${asset} exceeds daily limit: spent ${spent.toFixed(7)}, limit ${limitNum}, remaining ${remaining.toFixed(7)}`,
+              `Amount ${amountStr} ${asset} exceeds daily limit: spent ${fromStroops(spent)}, limit ${fromStroops(limitStroops)}, remaining ${fromStroops(Math.max(remaining, 0))}`,
               "dailySpendingLimit"
             );
           }
@@ -290,45 +302,71 @@ export class PolicyEngine {
 
   /**
    * Reservation-table total for (agent, asset) today (#353) — the same
-   * source the spending endpoint reports. Returns null when the store
-   * cannot report reservations, so callers can fall back to the activity
-   * sum. Only "submitted" activities counted by getDailySpent are NOT used
-   * here: pending approvals hold real reservations and must count.
+   * source the spending endpoint reports. Returns INTEGER STROOPS (#374).
+   * Returns null when the store cannot report reservations, so callers can
+   * fall back to the activity sum. Only "submitted" activities counted by
+   * getDailySpent are NOT used here: pending approvals hold real reservations
+   * and must count.
    */
   private async getReservedTotal(asset: string, agentId: string): Promise<number | null> {
     if (!this.activityStore?.getDailySpending) return null;
     const total = await this.activityStore.getDailySpending(agentId, asset);
-    return total ?? 0;
+    return total ?? null;
   }
 
   /**
    * Calculates the total amount of `asset` spent by the agent today
-   * (UTC day boundary), based on submitted activities.
+   * (UTC day boundary), based on submitted activities, in INTEGER STROOPS
+   * (#374). Summing stroops (not parseFloat decimals) keeps this fallback in
+   * exact agreement with the reservation table at the boundary.
    *
    * Only activities with status "submitted" are counted. Pending, rejected,
    * and failed activities do NOT count toward the daily limit.
    */
-  private async getDailySpent(asset: string, agentId: string): Promise<number> {
+  async getDailySpent(asset: string, agentId: string): Promise<number> {
     if (!this.activityStore) return 0;
 
     const now = new Date();
     const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const startOfDayIso = startOfDay.toISOString();
 
-    const activities = await this.activityStore.listByAgent(agentId, 200);
-
+    const PAGE_SIZE = 200;
+    let offset = 0;
     let total = 0;
-    for (const activity of activities) {
-      if (activity.status !== "submitted") continue;
-      if (activity.createdAt < startOfDayIso) continue;
-      const activityAsset = extractAsset(activity.intent);
-      if (activityAsset !== asset) continue;
-      const amount = extractAmount(activity.intent);
-      if (amount !== null) {
-        // Malformed stored amounts contribute 0 rather than the
-        // parseFloat-truncated value, so the gate and the ledger agree.
-        total += parseStrictAmount(amount) ?? 0;
+    let previousFirstId: string | null = null;
+
+    while (true) {
+      const activities = await this.activityStore.listByAgent(agentId, PAGE_SIZE, offset);
+      if (!activities || activities.length === 0) break;
+
+      // Guard against minimal test doubles that ignore offset and return the same slice
+      if (offset > 0 && activities[0]?.id === previousFirstId) {
+        break;
       }
+      previousFirstId = activities[0]?.id ?? null;
+
+      let reachedEarlierDay = false;
+      for (const activity of activities) {
+        if (activity.createdAt < startOfDayIso) {
+          reachedEarlierDay = true;
+          break;
+        }
+        if (activity.status !== "submitted") continue;
+        const activityAsset = extractAsset(activity.intent);
+        if (activityAsset !== asset) continue;
+        const amount = extractAmount(activity.intent);
+        if (amount !== null) {
+          // Malformed stored amounts contribute 0 rather than the
+          // parseFloat-truncated value, so the gate and the ledger agree.
+          total += toStroops(amount) ?? 0;
+        }
+      }
+
+      if (reachedEarlierDay || activities.length < PAGE_SIZE) {
+        break;
+      }
+
+      offset += activities.length;
     }
 
     return total;

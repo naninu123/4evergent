@@ -100,6 +100,65 @@ test("InMemory: listByOwner returns only that owner's schedules", async () => {
   assert.equal(listA[0]!.id, "s1");
 });
 
+test("InMemory: listByAgent with status returns only matching schedules", async () => {
+  const store = new InMemoryScheduleStore();
+  await store.create(makeSchedule({ id: "s1", agentId: "agent-a", status: "paused" }));
+  await store.create(makeSchedule({ id: "s2", agentId: "agent-a", status: "paused" }));
+  await store.create(makeSchedule({ id: "s3", agentId: "agent-a", status: "active" }));
+  await store.create(makeSchedule({ id: "s4", agentId: "agent-b", status: "paused" }));
+
+  const paused = await store.listByAgent("agent-a", 50, 0, "paused");
+  assert.equal(paused.length, 2);
+  assert.ok(paused.every((s) => s.agentId === "agent-a" && s.status === "paused"));
+
+  const all = await store.listByAgent("agent-a");
+  assert.equal(all.length, 3, "no status must return every schedule for the agent");
+
+  const disabled = await store.listByAgent("agent-a", 50, 0, "disabled");
+  assert.equal(disabled.length, 0);
+});
+
+test("InMemory: listByAgent with status pages the filtered set", async () => {
+  const store = new InMemoryScheduleStore();
+  await store.create(makeSchedule({ id: "s1", agentId: "agent-a", status: "paused" }));
+  await store.create(makeSchedule({ id: "s2", agentId: "agent-a", status: "paused" }));
+  await store.create(makeSchedule({ id: "s3", agentId: "agent-a", status: "active" }));
+
+  const page1 = await store.listByAgent("agent-a", 1, 0, "paused");
+  const page2 = await store.listByAgent("agent-a", 1, 1, "paused");
+  assert.equal(page1.length, 1);
+  assert.equal(page2.length, 1);
+  assert.notEqual(page1[0]!.id, page2[0]!.id, "limit/offset must page over the filtered set");
+});
+
+test("SQLite: listByAgent with status returns only matching schedules", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "4evergent-sched-"));
+  const path = join(dir, "test.db");
+  try {
+    const store = new SQLiteScheduleStore(path);
+    await store.create(makeSchedule({ id: "s1", agentId: "agent-a", status: "paused" }));
+    await store.create(makeSchedule({ id: "s2", agentId: "agent-a", status: "paused" }));
+    await store.create(makeSchedule({ id: "s3", agentId: "agent-a", status: "active" }));
+    await store.create(makeSchedule({ id: "s4", agentId: "agent-b", status: "paused" }));
+
+    const paused = await store.listByAgent("agent-a", 50, 0, "paused");
+    assert.equal(paused.length, 2);
+    assert.ok(paused.every((s) => s.agentId === "agent-a" && s.status === "paused"));
+
+    const all = await store.listByAgent("agent-a");
+    assert.equal(all.length, 3, "no status must return every schedule for the agent");
+
+    const page1 = await store.listByAgent("agent-a", 1, 0, "paused");
+    const page2 = await store.listByAgent("agent-a", 1, 1, "paused");
+    assert.equal(page1.length, 1);
+    assert.equal(page2.length, 1);
+    assert.notEqual(page1[0]!.id, page2[0]!.id, "limit/offset must page over the filtered set");
+    store.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("InMemory: listDue returns only active schedules with nextRunAt <= before", async () => {
   const store = new InMemoryScheduleStore();
   const now = new Date();

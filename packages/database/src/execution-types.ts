@@ -18,7 +18,8 @@ export type ExecutionStatus =
   | "confirmed"
   | "failed"
   | "dead_letter"
-  | "cancelled";
+  | "cancelled"
+  | "requires_approval";
 
 export interface ExecutionRecord {
   id: string;
@@ -55,9 +56,37 @@ export interface ExecutionRecord {
   updatedAt: string;
 }
 
+/**
+ * Execution counts requiring operator attention, scoped to one owner.
+ *
+ * Definitions match the UI (apps/web/src/pages/Executions.tsx inferRetrying
+ * and ExecutionList.tsx) so Overview and Executions can no longer disagree
+ * about the same data:
+ *
+ * - retrying: status === 'failed'
+ *             AND nextRetryAt !== null
+ *             AND errorClass === 'transient'
+ *   A queued execution is not retrying (it has never failed). A failed
+ *   execution without a scheduled retry is not retrying. A failed
+ *   execution with nextRetryAt set but a non-transient errorClass is not
+ *   retrying.
+ *
+ * - stuck:    status === 'executing'
+ *             AND startedAt !== null
+ *             AND startedAt <  stuckOlderThan   (strict <)
+ *   A row exactly at the cutoff is not yet stuck. Executing rows with a
+ *   null startedAt are excluded because age is unknown — counting them
+ *   would reintroduce the original #359 bug.
+ */
+export interface ExecutionAttentionCounts {
+  retrying: number;
+  stuck: number;
+}
+
 export interface ExecutionStore {
   record(record: ExecutionRecord): Promise<void>;
   get(id: string): Promise<ExecutionRecord | null>;
+  getByApprovalId(approvalId: string): Promise<ExecutionRecord | null>;
   getForOwner(id: string, ownerId: string): Promise<ExecutionRecord | null>;
   listDue(before: string, limit?: number): Promise<ExecutionRecord[]>;
   listByOwner(ownerId: string, limit?: number, offset?: number): Promise<ExecutionRecord[]>;
@@ -66,7 +95,21 @@ export interface ExecutionStore {
   listSubmitted(limit?: number): Promise<ExecutionRecord[]>;
   /** Count executions grouped by status for an owner. */
   countByOwner(ownerId: string): Promise<Record<ExecutionStatus, number>>;
+  /**
+   * #359: Count executions requiring operator attention, scoped to one owner.
+   *
+   * `stuckOlderThan` is the ISO cutoff supplied by the caller (usually
+   * `new Date(Date.now() - STUCK_EXECUTION_THRESHOLD_MS).toISOString()`);
+   * an `executing` record whose `startedAt` is strictly older than this
+   * timestamp counts as stuck. See ExecutionAttentionCounts for the exact
+   * retrying and stuck predicates.
+   */
+  countAttentionByOwner(
+    ownerId: string,
+    opts: { stuckOlderThan: string },
+  ): Promise<ExecutionAttentionCounts>;
   update(id: string, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null>;
   updateIfStatus(id: string, expectedStatus: ExecutionStatus, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null>;
   delete(id: string): Promise<boolean>;
+  close?(): void;
 }

@@ -46,19 +46,25 @@ export interface RequestContext {
 
 export interface AuthorizationService {
   canAccessAgent(ctx: RequestContext, agentId: string): Promise<boolean>;
-  canAccessActivity(ctx: RequestContext, activityId: string): Promise<boolean>;
+  /**
+   * When `agentId` is provided, access is only granted if the activity belongs
+   * to that agent (issue #385): a nested resource must never be served under
+   * an agent path it does not belong to.
+   */
+  canAccessActivity(ctx: RequestContext, activityId: string, agentId?: string): Promise<boolean>;
   canAccessApproval(ctx: RequestContext, approvalId: string): Promise<boolean>;
   canSubmitIntent(ctx: RequestContext, agentId: string): Promise<boolean>;
   canApprove(ctx: RequestContext, approvalId: string): Promise<boolean>;
   canReject(ctx: RequestContext, approvalId: string): Promise<boolean>;
   canChangeAgentStatus(ctx: RequestContext, agentId: string): Promise<boolean>;
-  canAccessSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
+  /** See `canAccessActivity` — the optional `agentId` binds the schedule to the path agent (issue #385). */
+  canAccessSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean>;
   canCreateSchedule(ctx: RequestContext, agentId: string): Promise<boolean>;
-  canUpdateSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
-  canDeleteSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
-  canPauseSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
-  canResumeSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
-  canDisableSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
+  canUpdateSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean>;
+  canDeleteSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean>;
+  canPauseSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean>;
+  canResumeSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean>;
+  canDisableSchedule(ctx: RequestContext, scheduleId: string, agentId?: string): Promise<boolean>;
 }
 
 export type IntentType = "payment" | "trustline" | "contract_call" | "account_settings";
@@ -156,7 +162,7 @@ export interface ActivityRecord {
   /** Opaque client Idempotency-Key, scoped by owner+agent. Null when header omitted. */
   idempotencyKey?: string | null;
   intent: AgentIntent;
-  policyDecision: PolicyDecision;
+  policyDecision: PolicyDecision | null;
   authorizationStatus: AuthorizationStatus | null;
   simulationResult: SimulationResult | null;
   txHash: string | null;

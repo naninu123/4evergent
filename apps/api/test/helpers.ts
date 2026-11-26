@@ -60,6 +60,12 @@ export interface TestServerOptions {
   schedulerEnabled?: boolean;
   /** Register a custom agent record instead of the default test agent. */
   agent?: TestAgent;
+  /** Per-owner rate limit for intent submission and approve/reject (#261). */
+  rateLimit?: {
+    maxAttempts?: number;
+    windowSeconds?: number;
+    maxKeys?: number;
+  };
 }
 
 /** Shape of the agent record `server.registerAgent` accepts. */
@@ -148,6 +154,7 @@ export async function startServer(
     executionQueue: opts.schedulerEnabled
       ? { enabled: true, intervalMs: opts.intervalMs ?? 100 }
       : undefined,
+    rateLimit: opts.rateLimit,
   });
 
   if (opts.registerAgent !== false) {

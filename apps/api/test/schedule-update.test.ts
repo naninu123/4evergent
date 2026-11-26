@@ -5,7 +5,7 @@ import { AgentScheduler } from "../src/scheduler.js";
 import { InMemoryScheduleStore } from "@4evergent/database";
 import type { ScheduleRecord } from "@4evergent/database";
 import crypto from "node:crypto";
-import { startServer, apiFetch } from "./helpers.js";
+import { startServer, apiFetch, DEFAULT_TEST_AGENT } from "./helpers.js";
 
 function makeSchedule(overrides: Partial<ScheduleRecord> = {}): ScheduleRecord {
   const now = new Date().toISOString();
@@ -131,24 +131,46 @@ test("PATCH /agents/:id/schedules/:id — cross-owner update returns 404 and doe
   }
 });
 
-// ===== TEST 5: AGENT ID IN URL DOES NOT RESTRICT OWNER'S ACCESS =====
-// The authorization model is schedule-owner-based: if you own the schedule,
-// the agentId in the URL path does not restrict access. This documents the
-// actual contract — the handler checks schedule.ownerId, not agent ownership.
-test("PATCH /agents/:id/schedules/:id — owner can update own schedule regardless of URL agentId", async () => {
+// ===== TEST 5: CROSS-AGENT BINDING — issue #385 =====
+// The schedule belongs to "test-agent"; PATCHing it under a different agent's
+// path (even one owned by the same owner) must return 404 and leave the
+// schedule untouched. A nested resource must never be served or mutated under
+// an agent path it does not belong to.
+test("PATCH /agents/:id/schedules/:id — schedule under another agent's path returns 404 and does not mutate", async () => {
   const store = new InMemoryScheduleStore();
   const schedule = makeSchedule({ agentId: "test-agent", ownerId: "test" });
   await store.create(schedule);
 
-  const { baseUrl, close, scheduleStore } = await startServer({ scheduleStore: store, policyRules: { maxTxAmount: { XLM: "1000" } }, deferExecution: true });
+  const { baseUrl, close, server, scheduleStore } = await startServer({ scheduleStore: store, policyRules: { maxTxAmount: { XLM: "1000" } }, deferExecution: true });
+  // Second agent owned by the same owner — the mismatch is agent-level, not owner-level.
+  server.registerAgent({ ...DEFAULT_TEST_AGENT, id: "agent-two", ownerId: "test" });
 
   try {
-    // URL uses "some-other-agent" (not registered), but the schedule is owned by "test"
-    const res = await patchSchedule(baseUrl, "some-other-agent", schedule.id, { scheduleExpression: "*/5 * * * *" });
-    assert.equal(res.status, 200);
+    const res = await patchSchedule(baseUrl, "agent-two", schedule.id, { scheduleExpression: "*/5 * * * *" });
+    assert.equal(res.status, 404);
 
+    // Schedule must be untouched
     const after = await scheduleStore.get(schedule.id);
-    assert.equal(after?.scheduleExpression, "*/5 * * * *");
+    assert.equal(after?.scheduleExpression, "0 * * * *");
+    assert.equal(after?.agentId, "test-agent");
+  } finally {
+    await close();
+  }
+});
+
+// ===== TEST 5b: UNREGISTERED PATH AGENT — issue #385 =====
+// Same 404 as a nonexistent schedule — the response must not reveal whether
+// the resource exists under a different agent.
+test("PATCH /agents/:id/schedules/:id — unregistered agent path returns 404", async () => {
+  const store = new InMemoryScheduleStore();
+  const schedule = makeSchedule({ agentId: "test-agent", ownerId: "test" });
+  await store.create(schedule);
+
+  const { baseUrl, close } = await startServer({ scheduleStore: store, policyRules: { maxTxAmount: { XLM: "1000" } }, deferExecution: true });
+
+  try {
+    const res = await patchSchedule(baseUrl, "some-other-agent", schedule.id, { scheduleExpression: "*/5 * * * *" });
+    assert.equal(res.status, 404);
   } finally {
     await close();
   }

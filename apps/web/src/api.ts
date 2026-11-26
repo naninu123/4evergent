@@ -38,13 +38,31 @@ async function request<T>(path: string, init?: RequestInit & { skipAuthClear?: b
   const token = getStoredToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    credentials: 'include',
-    keepalive: false,
-    ...fetchInit,
-    headers,
-  });
-  const body = res.status !== 204 ? await res.json().catch(() => null) : null;
+  const configuredMs = Number(import.meta.env.VITE_API_TIMEOUT_MS);
+  const timeoutMs = Number.isInteger(configuredMs) && configuredMs > 0 && configuredMs <= 2 ** 31 - 1
+    ? configuredMs : 10_000;
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const signal = fetchInit.signal ? AbortSignal.any([fetchInit.signal, deadline]) : deadline;
+  let res: Response;
+  let body;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      credentials: 'include',
+      keepalive: false,
+      ...fetchInit,
+      headers,
+      signal,
+    });
+    body = res.status !== 204 ? await res.json().catch(() => {
+      signal.throwIfAborted();
+      return null;
+    }) : null;
+  } catch (error) {
+    if (deadline.aborted && signal.reason === deadline.reason) {
+      throw new ApiError(0, 'Request timed out.', 'TIMEOUT');
+    }
+    throw error;
+  }
   if (!res.ok) {
     const message = body?.error ?? `API error ${res.status}`;
     // Probes (e.g. /auth/me during session bootstrap) must not wipe a stored

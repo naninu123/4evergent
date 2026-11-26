@@ -76,7 +76,7 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 
 **Status:** Accepted
 **Context:** Phase 3 needs durable activity and approval storage without introducing an external database dependency.
-**Decision:** `SQLiteActivityStore` and `SQLiteApprovalStore` in `packages/database/src/sqlite-store.ts` use Node.js built-in `node:sqlite` (`DatabaseSync`). Schema is versioned in `_meta` (version 1). The default API server auto-selects SQLite when `dbPath` is provided; otherwise falls back to in-memory stores. No external `better-sqlite3` or server process.
+**Decision:** `SQLiteActivityStore` and `SQLiteApprovalStore` in `packages/database/src/sqlite-store.ts` use Node.js built-in `node:sqlite` (`DatabaseSync`). Schema is versioned in `_meta` (version 5), the single expected-version constant exported by `packages/database/src/shared-connection.ts`; startup refuses older or newer versions until an explicit migration is added. The default API server auto-selects SQLite when `dbPath` is provided; otherwise falls back to in-memory stores. No external `better-sqlite3` or server process.
 **Consequences:** Single dependency (Node.js stdlib), file-backed persistence with cross-restart durability tested via reopen simulation. `initSchema()` idempotent. Partial unique index `idx_approvals_activity_one` enforces one PENDING_APPROVAL per activity.
 
 ## ADR-012: Persistent Execution Queue for Retry & Dead-Letter
@@ -125,7 +125,7 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 
 **Context:** Expired authentication sessions and historical daily-spending reservations accumulated indefinitely. The former exposed stale tokens in storage; the latter had no readers once its UTC day passed. Cleanup must not starve request traffic.
 
-**Decision:** Sweep sessions 30 days after `expires_at` and daily-spending rows older than 90 UTC days, once per day. Each indexed delete is limited to 500 rows per table and runs as a short autocommit statement. Operators can set the two retention-day environment variables, change the interval, disable the worker, or set either day window to zero to retain that table forever. The idempotency table remains outside this policy and belongs to #109.
+**Decision:** Sweep sessions 30 days after `expires_at` and daily-spending rows older than 90 UTC days, once per day. Each indexed delete is limited to 500 rows per table and runs as a short autocommit statement. Operators can set the two retention-day environment variables, change the interval, disable the worker, or set either day window to zero to retain that table forever. Idempotency keys are released by the same sweep under ADR-023 (#109); no activity row is deleted.
 
 **Consequences:** Transient storage is bounded over repeated sweeps without a schema migration or a long-held write transaction. A large backlog drains in batches. Recent expired sessions and the current spending day remain available; setting a zero window explicitly keeps all rows.
 
@@ -242,3 +242,24 @@ When `AUTH_TRUST_PROXY=1` is enabled, the trusted reverse proxy MUST be configur
 - Bounded recovery guarantees all interrupted records are reconciled across multiple pages.
 - The scheduler never starts if recovery fails or has unrecovered records.
 - Transaction finality is not conflated with process crash recovery.
+
+## ADR-023: Idempotency-Key replay window and key release
+
+**Status:** Accepted
+
+**Context:** `POST /agents/:id/intents` accepts an `Idempotency-Key` so a repeated request cannot produce a second financial execution. The key had no lifetime: the in-memory store remembered it for the process lifetime and the SQLite store forever, so the two backends disagreed, an operator could not tell a client how long retries are safe, and the activities table kept a permanent unique-index entry per keyed request (#109).
+
+**Decision:**
+- A key suppresses a repeated request for a replay window measured from the creation (`createdAt`) of the activity it is bound to. Default: 24 hours (`DEFAULT_IDEMPOTENCY_WINDOW_MS`), configurable with `IDEMPOTENCY_KEY_WINDOW_SECONDS` or the `idempotencyKeyWindowMs` server option. A missing, zero, negative or non-numeric value falls back to the default, so the guarantee cannot be configured away by mistake.
+- Both `InMemoryActivityStore` and `SQLiteActivityStore` take the window as a constructor option and apply the same rule. `getByIdempotencyKey` only returns a binding inside the window (a lookup predicate), so every caller (the API handler, the pipeline's duplicate check and `recordIdempotent`) sees the same answer.
+- Expired bindings are released, not deleted: the activity row stays and only its `idempotency_key` is cleared. This happens in two places: `recordIdempotent` clears an expired binding of the same `(owner, agent, key)` just before inserting the new activity (needed because the SQLite unique index still holds the old key), and the retention worker (ADR-014) calls `releaseExpiredIdempotencyKeys(cutoff, 500)` on each sweep so the index does not grow forever.
+- Scope stays exactly `(owner_id, agent_id, idempotency_key)`. Key format and the 256-character limit are unchanged.
+
+**Why 24 hours:** before this change keys never expired, so any finite window shortens the guarantee for someone. 24 hours covers every realistic automatic retry (timeouts, restarts, queued retries from a client that was offline) with a wide margin and matches the common convention for payment APIs. Operators who need longer can raise it; nothing allows shortening it below what they set.
+
+**Consequences:**
+- Both backends now agree on how long a key is honoured, and the documented window is the contract clients can rely on.
+- After the window a repeated key executes again. That is intended: the window is a statement about retries, not a permanent ledger of every key ever used.
+- Clearing the key on release means the activity log no longer shows which key an expired activity was submitted with. The decision trail (intent, policy decision, authorization, simulation, tx hash, status) is untouched; the key is a client-chosen retry token, already treated as sensitive in logs.
+- The window is anchored to the activity's creation, so a request that stays `pending` past the window (not expected with the default) would no longer block a retry with the same key; the per-key lock and the execution queue's own claim remain the guard for in-flight work.
+
