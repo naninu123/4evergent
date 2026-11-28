@@ -690,4 +690,24 @@ describe('AgentDetail Regression', () => {
       expect(nameElements.length).toBe(1);
     });
   });
+
+  test('shows friendly actionable message on network failure', async () => {
+    mockGetAgent.mockRejectedValue(new TypeError('Failed to fetch'));
+    render(<MemoryRouter initialEntries={['/agents/agent-1']}><Routes><Route path="/agents/:agentId" element={<AgentDetail />} /></Routes></MemoryRouter>);
+
+    await waitFor(() => {
+      expect(screen.getByText('Could not reach the API — check your connection and that the API is running.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Failed to fetch')).not.toBeInTheDocument();
+  });
+
+  test('shows friendly message naming status on bare 500 API error', async () => {
+    mockGetAgent.mockRejectedValue(new Error('API error 500'));
+    render(<MemoryRouter initialEntries={['/agents/agent-1']}><Routes><Route path="/agents/:agentId" element={<AgentDetail />} /></Routes></MemoryRouter>);
+
+    await waitFor(() => {
+      expect(screen.getByText(/HTTP 500/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText('API error 500')).not.toBeInTheDocument();
+  });
 });

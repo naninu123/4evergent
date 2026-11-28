@@ -44,7 +44,7 @@ export default function ApprovalDetail() {
       } else if (e.status === 409) {
         setActionError(e.message ?? 'Approval state changed; please refresh');
       } else {
-        setActionError(e.message ?? 'Approve failed');
+        setActionError(describeApiError(e, 'Approve failed'));
       }
     } finally {
       setActionLoading(null);
@@ -62,9 +62,9 @@ export default function ApprovalDetail() {
       setApproval(r.approval);
     } catch (e: any) {
       if (e.status === 409) {
-        setActionError(e.message ?? 'Approval state changed; please refresh');
+        setActionError(describeApiError(e, 'Approval state changed; please refresh'));
       } else {
-        setActionError(e.message ?? 'Reject failed');
+        setActionError(describeApiError(e, 'Reject failed'));
       }
     } finally {
       setActionLoading(null);

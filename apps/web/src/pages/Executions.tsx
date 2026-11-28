@@ -87,7 +87,7 @@ export default function Executions({ onExecutionClick }: { onExecutionClick?: (i
       setNextOffset(r.executions.length);
       setQueue(q);
     } catch (e: any) {
-      setError(e.message ?? 'Failed to load executions');
+      setError(describeApiError(e, 'Failed to load executions'));
     } finally {
       setLoading(false);
     }

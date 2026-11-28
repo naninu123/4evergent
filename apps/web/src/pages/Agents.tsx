@@ -1,6 +1,7 @@
 import { useEffect, useRef , useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { describeApiError } from '../apiErrors';
 import type { AgentRecord } from '../types';
 import { StatusBadge, Skeleton, EmptyState } from '../components';
 
@@ -28,7 +29,7 @@ export default function Agents() {
         setTotalAgents(a.total);
         setAgentsTruncated(a.truncated);
       })
-      .catch((e: any) => setError(e.message));
+      .catch((e: any) => setError(describeApiError(e, 'Failed to load agents')));
   };
 
   useEffect(() => { load(); }, []);
@@ -84,7 +85,7 @@ export default function Agents() {
       setTotalAgents((prev) => (prev === null ? prev : prev + 1));
       navigate(`/agents/${res.agent.id}`);
     } catch (e: any) {
-      setCreateError(e.message);
+      setCreateError(describeApiError(e, 'Failed to create agent'));
     } finally {
       setCreating(false);
     }

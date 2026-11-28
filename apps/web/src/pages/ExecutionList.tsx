@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../api';
+import { describeApiError } from '../apiErrors';
 import type { ExecutionRecord, ExecutionStatus } from '../types';
 import { PaginationFooter, Skeleton } from '../components';
 

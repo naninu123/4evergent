@@ -49,10 +49,10 @@ export default function Overview() {
           const att = await api.getOverviewAttention();
           if (!cancelled) setAttention(att);
         } catch (e: any) {
-          if (!cancelled) setAttentionError(e.message ?? 'Failed to load operational status');
+          if (!cancelled) setAttentionError(describeApiError(e, 'Failed to load operational status'));
         }
       } catch (e: any) {
-        if (!cancelled) setError(e.message ?? 'Failed to fetch');
+        if (!cancelled) setError(describeApiError(e, 'Failed to load overview'));
       } finally {
         if (!cancelled) setLoading(false);
       }

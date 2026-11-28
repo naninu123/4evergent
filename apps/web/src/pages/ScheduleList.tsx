@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../api';
+import { describeApiError } from '../apiErrors';
 import type { ScheduleRecord } from '../types';
 import { PaginationFooter, Skeleton } from '../components';
 
@@ -28,8 +29,9 @@ export function ScheduleList({ agentId: propAgentId, onError }: ScheduleListProp
       setHasMore(r.hasMore);
       setNextOffset(offset + r.schedules.length);
     } catch (e: any) {
-      setError(e.message);
-      onError?.(e.message);
+      const msg = describeApiError(e, 'Failed to load schedules');
+      setError(msg);
+      onError?.(msg);
     }
   }, [agentId, onError]);
 
@@ -61,7 +63,7 @@ export function ScheduleList({ agentId: propAgentId, onError }: ScheduleListProp
       else await api.disableSchedule(agentId, scheduleId);
       loadPage(0, true);
     } catch (e: any) {
-      onError?.(e.message);
+      onError?.(describeApiError(e, 'Failed to update schedule'));
     }
   };
 

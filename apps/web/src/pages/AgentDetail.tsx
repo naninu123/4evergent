@@ -153,7 +153,7 @@ function PolicySummary({ agentId }: { agentId: string }) {
         const res = await api.getPolicy(agentId);
         if (!cancelled) setPolicy(res.policy);
       } catch (e: any) {
-        if (!cancelled) setError(e.message ?? 'Failed to load policy summary');
+        if (!cancelled) setError(describeApiError(e, 'Failed to load policy summary'));
       }
     })();
     return () => { cancelled = true; };
@@ -225,7 +225,7 @@ function PolicySettings({ agentId }: { agentId: string }) {
         setVersion(res.version);
         setUpdatedAt(res.updatedAt);
       } catch (e: any) {
-        if (!cancelled) setError(e.message ?? 'Failed to load policy');
+        if (!cancelled) setError(describeApiError(e, 'Failed to load policy'));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -311,7 +311,7 @@ function PolicySettings({ agentId }: { agentId: string }) {
       setUpdatedAt(new Date().toISOString());
       setSuccess(`Policy updated (version ${res.version})`);
     } catch (e: any) {
-      setError(e.message ?? 'Failed to save policy');
+      setError(describeApiError(e, 'Failed to save policy'));
     } finally {
       setSaving(false);
     }
@@ -514,7 +514,7 @@ export default function AgentDetail() {
         const res = await api.getAgentSpending(agentId);
         setSpending(res.spending);
       } catch (e: any) {
-        setSpendingError(e.message ?? 'Failed to load spending');
+        setSpendingError(describeApiError(e, 'Failed to load spending'));
       }
     })();
   }, [agentId]);
@@ -533,7 +533,7 @@ export default function AgentDetail() {
         setAgent(a);
         setActivity(act.activity);
       } catch (e: any) {
-        if (!cancelled) setError(e.message);
+        if (!cancelled) setError(describeApiError(e, 'Failed to load agent'));
       } finally {
         if (!cancelled) setLoading(false);
       }

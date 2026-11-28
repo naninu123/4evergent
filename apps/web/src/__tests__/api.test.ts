@@ -347,6 +347,37 @@ describe('describeApiError', () => {
   it('uses the server message for unknown codes', () => {
     expect(describeApiError(new ApiError(400, 'bad thing', 'VALIDATION_ERROR'), 'fallback')).toBe('bad thing');
   });
+
+  it('maps fetch TypeError network failures to an actionable message and logs the raw error', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const err = new TypeError('Failed to fetch');
+    const msg = describeApiError(err, 'fallback');
+    expect(msg).toBe('Could not reach the API — check your connection and that the API is running.');
+    expect(msg).not.toContain('Failed to fetch');
+    expect(spy).toHaveBeenCalledWith('[api] Network error:', err);
+    spy.mockRestore();
+  });
+
+  it('maps bare API error <status> messages to a friendly message naming the status and logs the raw error', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const err502 = new ApiError(502, 'API error 502');
+    const msg502 = describeApiError(err502, 'fallback');
+    expect(msg502).toContain('502');
+    expect(msg502).not.toContain('API error ');
+    expect(spy).toHaveBeenCalledWith('[api] HTTP error:', err502);
+
+    const err500 = new ApiError(500, 'API error 500');
+    const msg500 = describeApiError(err500, 'fallback');
+    expect(msg500).toContain('500');
+    expect(msg500).not.toContain('API error ');
+    spy.mockRestore();
+  });
+
+  it('falls back when error has no message', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(describeApiError({}, 'fallback')).toBe('fallback');
+    spy.mockRestore();
+  });
 });
 
 describe('intent submission Idempotency-Key header', () => {
