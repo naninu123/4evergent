@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../api';
 import { buildAgentNameMap } from '../agentNames';
 import { describeApiError } from '../apiErrors';
+import { useApiResource } from '../hooks/useApiResource';
 import type { AgentRecord, ActivityRecord, PolicyRules } from '../types';
 import { ScheduleManagement } from './ScheduleManagement';
 import { ExecutionList } from './ExecutionList';
@@ -499,14 +500,19 @@ function PolicySettings({ agentId }: { agentId: string }) {
 
 export default function AgentDetail() {
   const agentId = useParams<{ agentId: string }>().agentId ?? '';
-  const [agent, setAgent] = useState<AgentRecord | null>(null);
-  const [activity, setActivity] = useState<ActivityRecord[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [reloadKey, setReloadKey] = useState(0);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [spending, setSpending] = useState<SpendingData | null>(null);
   const [spendingError, setSpendingError] = useState<string | null>(null);
+
+  const fetcher = useCallback(async () => {
+    const [a, act] = await Promise.all([
+      api.getAgent(agentId),
+      api.agentActivity(agentId, 20),
+    ]);
+    return { agent: a, activity: act.activity };
+  }, [agentId]);
+
+  const { data, error, loading, reload } = useApiResource<{ agent: AgentRecord; activity: ActivityRecord[] }>(fetcher, [agentId]);
 
   useEffect(() => {
     (async () => {
@@ -519,37 +525,13 @@ export default function AgentDetail() {
     })();
   }, [agentId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    (async () => {
-      try {
-        const [a, act] = await Promise.all([
-          api.getAgent(agentId),
-          api.agentActivity(agentId, 20),
-        ]);
-        if (cancelled) return;
-        setAgent(a);
-        setActivity(act.activity);
-      } catch (e: any) {
-        if (!cancelled) setError(e.message);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [agentId, reloadKey]);
-
-  const retry = () => setReloadKey((k) => k + 1);
-
   if (loading) {
     return <Skeleton label="Loading agent..." />;
   }
   if (error) {
-    return <EmptyState title="Failed to load agent" message={error} error={true} actionLabel="Retry" onAction={retry} />;
+    return <EmptyState title="Failed to load agent" message={error} error={true} actionLabel="Retry" onAction={reload} />;
   }
-  if (!agent) {
+  if (!data) {
     return (
       <div className="empty-state">
         <h2>Agent not found</h2>
@@ -558,8 +540,11 @@ export default function AgentDetail() {
     );
   }
 
-  const handleStatusChange = (newStatus: string) => {
-    setAgent((prev) => prev ? { ...prev, status: newStatus as typeof prev.status } : prev);
+  const { agent, activity } = data;
+
+  const handleStatusChange = (_newStatus: string) => {
+    // After status change, reload the agent data
+    reload();
   };
   const agentNames = buildAgentNameMap([agent]);
 
@@ -584,9 +569,7 @@ export default function AgentDetail() {
       </div>
       <div className="block">
         <h2>Recent Activity</h2>
-        {activity === null ? (
-          <Skeleton label="Loading activity..." />
-        ) : activity.length === 0 ? (
+        {activity.length === 0 ? (
           <div className="empty-state">
             <p>This agent has no activity yet.</p>
           </div>
