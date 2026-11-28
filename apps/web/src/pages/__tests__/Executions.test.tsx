@@ -5,9 +5,12 @@ import { MemoryRouter } from 'react-router-dom';
 import Executions from '../Executions';
 
 // Mock API — hoisted so vi.fn references are available in the mock factory
-const { mockListAllExecutions, mockGetQueueStatus, mockGetAgent, mockListAgentExecutions, mockListActivity, mockListAgents, mockListAllAgents } = vi.hoisted(() => ({
+const { mockListAllExecutions, mockGetQueueStatus, mockGetOverviewAttention, mockGetAgent, mockListAgentExecutions, mockListActivity, mockListAgents, mockListAllAgents } = vi.hoisted(() => ({
   mockListAllExecutions: vi.fn(),
   mockGetQueueStatus: vi.fn(),
+  // #383: Executions page now fetches overview/attention for the server-side
+  // retrying count; every test must resolve it.
+  mockGetOverviewAttention: vi.fn(),
   mockGetAgent: vi.fn(),
   mockListAgentExecutions: vi.fn(),
   mockListActivity: vi.fn(),
@@ -15,10 +18,19 @@ const { mockListAllExecutions, mockGetQueueStatus, mockGetAgent, mockListAgentEx
   mockListAllAgents: vi.fn(),
 }));
 
+const DEFAULT_ATTENTION = {
+  pendingApprovals: 0,
+  failedExecutions: 0,
+  deadLetterExecutions: 0,
+  retryingExecutions: 0,
+  stuckExecutions: 0,
+};
+
 vi.mock('../../api', () => ({
   api: {
     listAllExecutions: mockListAllExecutions,
     getQueueStatus: mockGetQueueStatus,
+    getOverviewAttention: mockGetOverviewAttention,
     getAgent: mockGetAgent,
     listAgentExecutions: mockListAgentExecutions,
     listActivity: mockListActivity,
@@ -30,11 +42,15 @@ vi.mock('../../api', () => ({
 describe('Executions page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: resolve with zero counts so tests that don't care about the
+    // retrying count don't need to set it up explicitly (#383).
+    mockGetOverviewAttention.mockResolvedValue(DEFAULT_ATTENTION);
   });
 
   it('renders loading state', () => {
     mockListAllExecutions.mockReturnValue(new Promise(() => {}));
     mockGetQueueStatus.mockReturnValue(new Promise(() => {}));
+    mockGetOverviewAttention.mockReturnValue(new Promise(() => {}));
     render(<MemoryRouter><Executions /></MemoryRouter>);
     expect(screen.getByText('Loading executions...')).toBeInTheDocument();
   });
